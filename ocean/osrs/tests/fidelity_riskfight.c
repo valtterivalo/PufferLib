@@ -50,7 +50,55 @@ typedef struct {
     int act_first, act_count;
 } RecTick;
 /* pid[tick - lo]: the PID holder (0 us, 1 him) the echo timing of Fact 4 implies (nearest evidence tick), -1 without evidence in the fight. */
-typedef struct { const Tape* tape; RecTick* at; int8_t* pid; } Rec;
+typedef struct { const Tape* tape; RecTick* at; int8_t* pid; uint8_t* meal; } Rec;
+
+/* His meal kinds. The eat animation is the same for hard food (attack delay 3), karambwan (2) and a potion (0). Between two recorded swings s0, s1 of speed sp the
+ * delay D = s1 - s0 - sp is the sum of the delays of the meals eaten in between, so the kinds are the lock-feasible combination of the eat ticks that sums to D
+ * (a tick may carry a combo: H, K, P, HK, HP, PK, HPK as bits 1, 2, 4). Intervals no combination explains stay unknown (mask 0: the harness's default pick). */
+static int meal_delay(int mask) { return (mask & 1 ? 3 : 0) + (mask & 2 ? 2 : 0); }
+static int meal_feasible(int mask, int t, const int last[3]) {
+    if (mask & 1 && (t < last[0] + 3 || t < last[1] + 3 || t < last[2] + 3)) return 0;
+    if (mask & 2 && t < last[1] + 3) return 0;
+    if (mask & 4 && (t < last[2] + 3 || t < last[1] + 3)) return 0;
+    return 1;
+}
+static int meal_assign(const int* ticks, int n, int i, int want, int last[3], uint8_t* out) {
+    static const int combos[7] = {1, 2, 4, 3, 5, 6, 7};
+    if (i == n) return want == 0;
+    for (int c = 0; c < 7; c++) {
+        int mask = combos[c];
+        if (meal_delay(mask) > want || !meal_feasible(mask, ticks[i], last)) continue;
+        int saved[3] = {last[0], last[1], last[2]};
+        for (int b = 0; b < 3; b++) if (mask >> b & 1) last[b] = ticks[i];
+        out[i] = (uint8_t)mask;
+        if (meal_assign(ticks, n, i + 1, want - meal_delay(mask), last, out)) return 1;
+        memcpy(last, saved, sizeof(saved));
+    }
+    return 0;
+}
+static void meal_infer(Rec* rec, const Tape* tape) {
+    int n = tape->hi - tape->lo + 1;
+    rec->meal = calloc((size_t)n, 1);
+    if (!rec->meal) abort();
+    int last[3] = {-100, -100, -100}, previous_swing = -1;
+    int eats[16], eat_count = 0;
+    for (int t = tape->lo; t <= tape->hi; t++) {
+        const RecTick* rt = &rec->at[t - tape->lo];
+        if (rt->eat && eat_count < 16) eats[eat_count++] = t;
+        if (!rt->swing[1] || rt->spec_swing[1] > 0 && 0) continue;
+        int speed = tape_tick(tape, t)->swing_him_speed;
+        if (previous_swing >= 0 && eat_count > 0 && speed > 0 && t - previous_swing - speed >= 0 && eat_count <= 4) {
+            uint8_t picked[16] = {0};
+            int trial[3] = {last[0], last[1], last[2]};
+            if (meal_assign(eats, eat_count, 0, t - previous_swing - speed, trial, picked)) {
+                for (int i = 0; i < eat_count; i++) rec->meal[eats[i] - tape->lo] = picked[i];
+                memcpy(last, trial, sizeof(last));
+            }
+        }
+        previous_swing = t;
+        eat_count = 0;
+    }
+}
 
 static void rec_hit_add(RecHits* h, int amount, char klass) {
     if (h->n == MAXH) { fprintf(stderr, "more than %d recorded landings on one tick\n", MAXH); abort(); }
@@ -87,6 +135,7 @@ static void rec_build(Rec* rec, const Tape* tape) {
         if (h->klass == 'A' || h->klass == 'B') rec_hit_add(&r->attack[defender], h->amount, h->klass);
         else rec_hit_add(&r->echo[defender], h->amount, h->klass);
     }
+    meal_infer(rec, tape);
     /* PID from echoes: an echo on S of a hit taken by R = 1 - S lands on the tick of that hit iff R was processed before S (Fact 4). */
     {
         rec->pid = malloc((size_t)n);
@@ -154,6 +203,7 @@ typedef struct {
     int div_first[DIV_KINDS], div_ticks[DIV_KINDS], div_last_tick[DIV_KINDS];
     char div_text[DIV_KINDS][200];
     int unknown_weapon_noted[8], unknown_weapon_count;
+    long ch_ok[16], ch_n[16];
 } Run;
 
 static void run_alloc(Run* r, const Tape* tape, const Rec* rec, int t0) {
@@ -179,6 +229,7 @@ static void run_reset(Run* r) {
     memset(r->used, 0, (size_t)r->steps * 2 * sizeof(int));
     memset(r->extra, 0, (size_t)r->steps * 2 * sizeof(int));
     r->hit_count = 0; r->steps_done = 0; r->outcome = 0; r->unknown_weapon_count = 0;
+    memset(r->ch_ok, 0, sizeof(r->ch_ok)); memset(r->ch_n, 0, sizeof(r->ch_n));
     for (int i = 0; i < DIV_KINDS; i++) { r->div_first[i] = -1; r->div_ticks[i] = 0; r->div_last_tick[i] = -1; r->div_text[i][0] = 0; }
 }
 
@@ -311,6 +362,12 @@ static void build_commands(Run* r, int x, RiskfightState* s, Cmds cmds[2]) {
 static int cmp_int(const void* a, const void* b) { return *(const int*)a - *(const int*)b; }
 
 /* Compare one finished step with the recording (exact mode reports the divergences; free mode only feeds the statistics). */
+enum { CH_HP_US, CH_HIS_BAND, CH_SWING_US, CH_SWING_HIM, CH_CONSUME_US, CH_CONSUME_HIM, CH_LAND_US, CH_LAND_HIM, CH_ECHO_US, CH_ECHO_HIM, CH_VENG_US, CH_VENG_HIM,
+    CH_SPEC_US, CH_SPEC_HIM, CH_COUNT };
+static const char* const CH_NAME[CH_COUNT] = {"our hit points", "his hit points in bar band", "our swing ticks", "his swing ticks", "our consumption ticks", "his consumption ticks",
+    "attack landings on us (count)", "attack landings on him (count)", "echoes on us", "echoes on him", "our Vengeance state", "his Vengeance state", "our spec energy", "his spec energy"};
+static void chan(Run* r, int c, int ok) { r->ch_n[c]++; r->ch_ok[c] += ok; }
+
 static void compare_step(Run* r, int k, int x, RiskfightState* s, int hits_before, int consumed_before[2]) {
     const Tape* tape = r->tape;
     const TapeTick* row = tape_tick(tape, x);
@@ -322,6 +379,13 @@ static void compare_step(Run* r, int k, int x, RiskfightState* s, int hits_befor
         for (int i = hits_before; i < r->hit_count; i++) printf(" [k%d %d>%d %d]", r->hits[i].kind, r->hits[i].attacker, r->hits[i].target, r->hits[i].damage);
         printf(" swing %d%d | rec hits:", r->swing[0][k], r->swing[1][k]);
         for (int d = 0; d < 2; d++) { for (int i = 0; i < rt->attack[d].n; i++) printf(" %c%d@%d", rt->attack[d].klass[i], rt->attack[d].amount[i], d); for (int i = 0; i < rt->echo[d].n; i++) printf(" %c%d@%d", rt->echo[d].klass[i], rt->echo[d].amount[i], d); }
+        printf(" | tm us %d/%d him %d/%d spd %d/%d wpn %d/%d food %d/%d", s->env.players[0].attack_timer, s->env.players[0].has_attack_timer, s->env.players[1].attack_timer,
+            s->env.players[1].has_attack_timer, get_slot_gear_bonuses(&s->env.players[0])->attack_speed, get_slot_gear_bonuses(&s->env.players[1])->attack_speed,
+            ITEM_DATABASE[s->env.players[0].equipped[GEAR_SLOT_WEAPON]].item_id, ITEM_DATABASE[s->env.players[1].equipped[GEAR_SLOT_WEAPON]].item_id,
+            s->env.players[0].food_timer, s->env.players[1].food_timer);
+        printf(" veng us %d/%d him %d/%d spec us %d/%d him %d/%d", s->env.players[0].veng_active, row->veng_us, s->env.players[1].veng_active, row->veng_him,
+            s->env.players[0].special_energy, row->spec_us, s->env.players[1].special_energy, row->spec_him);
+        printf(" vcd %d mag %d", s->env.players[0].veng_cooldown, s->env.players[0].current_magic);
         printf("\n");
     }
     if (hp0 != row->hp) note_div(r, DIV_HP_US, x, "our hit points sim %d recording %d", hp0, row->hp);
@@ -332,6 +396,7 @@ static void compare_step(Run* r, int k, int x, RiskfightState* s, int hits_befor
         if (h->kind == OSRS_HIT_DIRECT) sim_attack[h->target]++;
         else if ((h->kind == OSRS_HIT_RECOIL || h->kind == OSRS_HIT_VENGEANCE) && echo_sim_n[h->target] < MAXH) echo_sim[h->target][echo_sim_n[h->target]++] = h->damage;
     }
+    int echo_ok[2] = {1, 1};
     for (int d = 0; d < 2; d++) {
         if (sim_attack[d] != rec_attack[d])
             note_div(r, DIV_LAND, x, "attack landings on %s: sim %d, recording %d", d ? "him" : "us", sim_attack[d], rec_attack[d]);
@@ -341,6 +406,7 @@ static void compare_step(Run* r, int k, int x, RiskfightState* s, int hits_befor
         qsort(echo_rec[d], (size_t)n, sizeof(int), cmp_int);
         int same = echo_sim_n[d] == n;
         for (int i = 0; same && i < n; i++) same = echo_sim[d][i] == echo_rec[d][i];
+        echo_ok[d] = same;
         if (!same) {
             char sim_s[64] = "", rec_s[64] = "";
             for (int i = 0; i < echo_sim_n[d]; i++) snprintf(sim_s + strlen(sim_s), sizeof(sim_s) - strlen(sim_s), "%d ", echo_sim[d][i]);
@@ -372,6 +438,23 @@ static void compare_step(Run* r, int k, int x, RiskfightState* s, int hits_befor
         OsrsHealthBarRange band = osrs_health_bar_range(row->bar_now_ratio, row->bar_now_scale, 99, 121);
         if (band.kind == OSRS_HEALTH_BAR_KNOWN && (hp1 < band.lower || hp1 > band.upper))
             note_div(r, DIV_HIS_BAND, x, "his hit points sim %d outside the bar band %d-%d (bar %d/%d)", hp1, band.lower, band.upper, row->bar_now_ratio, row->bar_now_scale);
+    }
+    chan(r, CH_HP_US, hp0 == row->hp);
+    chan(r, CH_SWING_US, (rt->swing[0] > 0) == r->swing[0][k]);
+    chan(r, CH_SWING_HIM, (rt->swing[1] > 0) == r->swing[1][k]);
+    chan(r, CH_CONSUME_US, our_expect == (s->consume_ticks[0] > consumed_before[0]));
+    chan(r, CH_CONSUME_HIM, his_ate_rec == (s->consume_ticks[1] > consumed_before[1]));
+    chan(r, CH_LAND_US, sim_attack[0] == rec_attack[0]);
+    chan(r, CH_LAND_HIM, sim_attack[1] == rec_attack[1]);
+    chan(r, CH_ECHO_US, echo_ok[0]);
+    chan(r, CH_ECHO_HIM, echo_ok[1]);
+    chan(r, CH_VENG_US, s->env.players[0].veng_active == row->veng_us);
+    chan(r, CH_VENG_HIM, s->env.players[1].veng_active == row->veng_him);
+    chan(r, CH_SPEC_US, s->env.players[0].special_energy == row->spec_us);
+    chan(r, CH_SPEC_HIM, s->env.players[1].special_energy == row->spec_him);
+    if (row->bar_now_ratio >= 0 && row->bar_now_scale > 1) {
+        OsrsHealthBarRange band = osrs_health_bar_range(row->bar_now_ratio, row->bar_now_scale, 99, 121);
+        if (band.kind == OSRS_HEALTH_BAR_KNOWN) chan(r, CH_HIS_BAND, hp1 >= band.lower && hp1 <= band.upper);
     }
 }
 
@@ -504,6 +587,12 @@ static int run_fight(Run* r, uint32_t seed, int exact, RiskfightState* state, Ri
         else state->env.pid_holder = snap.pid_holder;
         us->prayer = overhead_of(row->overhead);
         us->offensive_prayer = row->piety ? OFFENSIVE_PRAYER_PIETY : OFFENSIVE_PRAYER_NONE;
+        if (exact == 2) {
+            const TapeTick* prev = tape_tick(tape, x - 1);
+            us->current_hitpoints = prev->hp;
+            us->veng_active = prev->veng_us; us->veng_cooldown = prev->veng_cooldown_us; us->special_energy = prev->spec_us;
+            him_p->veng_active = prev->veng_him; him_p->veng_cooldown = prev->veng_cooldown_him; him_p->special_energy = prev->spec_him;
+        }
         build_commands(r, x, state, cmds);
         HumanCommandQueue queues[2] = {{.items = cmds[0].items, .count = cmds[0].count}, {.items = cmds[1].items, .count = cmds[1].count}};
         int hits_before = r->hit_count;
@@ -545,6 +634,7 @@ typedef struct {
     double outcome_agree; long outcome_n; double outcome_rec[OUTCOMES], outcome_sim[OUTCOMES];
     double swing_rec[2], swing_hit[2], swing_sim_extra[2];
     long ex_fights, ex_clean[DIV_KINDS], ex_clean_all, ex_ticks, ex_div_ticks[DIV_KINDS], ex_seed_runs, ex_seed_clean;
+    long ch_ok[16], ch_n[16], tch_ok[16], tch_n[16];
     long ex_first_hist[DIV_KINDS];
 } Agg;
 
@@ -694,7 +784,7 @@ int main(int argc, char** argv) {
         if (!seeded) {
             skipped++;
             if (tsv) fprintf(tsv, "%s\t%s\t%d\t-\t%d\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\tskipped: tape cannot be seeded\t-\t-\t-\t-\t-\t-\t-\n", base, tape.name, tape.unknown_count, t0);
-            run_free(&run); free(rec.at); free(rec.pid); tape_free(&tape);
+            run_free(&run); free(rec.at); free(rec.pid); free(rec.meal); tape_free(&tape);
             continue;
         }
         for (int d = 0; d < 2; d++) { sim_land[d] /= seeded; sim_pos[d] /= seeded; sim_swing[d] /= seeded; for (int a = 0; a < 2; a++) sim_echo[d][a] /= seeded; }
@@ -729,9 +819,14 @@ int main(int argc, char** argv) {
                     }
                 }
                 agg[0].ex_ticks += run.steps_done;
+                for (int c = 0; c < CH_COUNT; c++) { agg[0].ch_ok[c] += run.ch_ok[c]; agg[0].ch_n[c] += run.ch_n[c]; if (clean) { agg[1].ch_ok[c] += run.ch_ok[c]; agg[1].ch_n[c] += run.ch_n[c]; } }
                 if (clean) agg[1].ex_ticks += run.steps_done;
             }
         }
+        /* Teacher-forced pass (seed 0): each step starts from the recorded state of the previous tick, so a channel's error is that tick's mechanics alone. */
+        run.trace_active = 0;
+        if (run_fight(&run, osrs_lowbias32(tape_salt + 0x51ED270Bu), 2, &state, &ctx))
+            for (int c = 0; c < CH_COUNT; c++) { agg[0].tch_ok[c] += run.ch_ok[c]; agg[0].tch_n[c] += run.ch_n[c]; if (clean) { agg[1].tch_ok[c] += run.ch_ok[c]; agg[1].tch_n[c] += run.ch_n[c]; } }
         if (dfile) for (int kd = 0; kd < DIV_KINDS; kd++)
             if (seed0_first[kd] >= 0) fprintf(dfile, "%s\t%s\t%d\t%d\t%s\n", base, DIV_NAME[kd], seed0_first[kd], seed0_ticks[kd], seed0_text[kd]);
 
@@ -787,7 +882,7 @@ int main(int argc, char** argv) {
                 first_div >= 0 ? DIV_NAME[first_kind] : "-", first_div >= 0 ? first_text : "-");
         }
         free(rec_d[0].v); free(rec_d[1].v); free(sim_d[0].v); free(sim_d[1].v);
-        run_free(&run); free(rec.at); free(rec.pid); tape_free(&tape);
+        run_free(&run); free(rec.at); free(rec.pid); free(rec.meal); tape_free(&tape);
     }
     if (tsv) fclose(tsv);
     if (dfile) fclose(dfile);
@@ -835,6 +930,9 @@ int main(int argc, char** argv) {
         for (int kd = 0; kd < DIV_KINDS; kd++)
             printf("| exact mode, %s: fights without divergence / diverging ticks of %ld | - | %ld of %ld / %ld |\n", DIV_NAME[kd], g->ex_ticks,
                 kd == DIV_CMD ? 0 : g->ex_clean[kd], g->ex_fights, g->ex_div_ticks[kd]);
+        for (int c = 0; c < CH_COUNT; c++)
+            printf("| exact-mode channel, %s: ticks agreeing, free run / teacher-forced (n ticks %ld) | - | %.2f%% / %.2f%% |\n", CH_NAME[c], g->ch_n[c],
+                g->ch_n[c] ? 100.0 * (double)g->ch_ok[c] / (double)g->ch_n[c] : NAN, g->tch_n[c] ? 100.0 * (double)g->tch_ok[c] / (double)g->tch_n[c] : NAN);
     }
     return 0;
 }
