@@ -1,17 +1,22 @@
-/* The RL decision engine as a process, same transport as the lookahead server (ENGINE_WIRE.md): one request per game tick on stdin, one response line on stdout.
+/* The RL decision engine as a process, the `rl` policy of ENGINE_WIRE.md "Swappable decision policy": same transport and response shape as the lookahead server.
  *
  *   cc -std=c11 -O2 -I. -o gs_rl_server ocean/osrs/tests/gs_rl_server.c -lm
  *   gs_rl_server CHECKPOINT HIDDEN LAYERS [sample|argmax]      run from a directory where ocean/osrs/data/*.cmap resolve
  *   gs_rl_server CHECKPOINT HIDDEN LAYERS argmax bench N       per-tick latency over N warm requests, no READY
  *
- * Request `RT id tick` ... `END` = the lookahead `LA` request (same tags: B K F O Q W G SHIELD ARMOR PS RA P R; R and Q are ignored) plus, optionally:
- *   FIGHT start_tick                       a new fight: clears the visible-opponent history, the consume estimates and the recurrent state
+ * READY <warm_micros> continue;no new clicks;rl POLICY rl:<checkpoint file> OBS
+ * Request: `LA id tick [OBS]` ... `END`, the lookahead request (tags B K F O Q W G SHIELD ARMOR PS RA P R; R and Q are ignored) plus the tags
+ *   FIGHT start_tick        a line before the first request of a fight: clears the visible-opponent history, the consume estimates and the recurrent state
  *   V swing_raw swing_style hit_landed hit_damage veng_cast consuming bar_ratio bar_scale veng_text
- *       what the client showed of him on this tick: weapon raw id of his swing (-1 none) and its AttackStyle number, a hitsplat on him and its damage,
- *       the Vengeance cast graphic, a meal/potion animation, his health bar ratio (-1 hidden) over its scale, the "Taste vengeance" overhead text.
- * The server owns the fight state: every tick of a fight must be sent, including ticks on which nothing is clicked. A tick gap above 2 or a tick that
- * does not advance starts a new fight.
- * Response: `RA id server_micros n` followed by n records `due kind arg timing` (GsWireKind), or `UNAVAILABLE id reason [raw]` as the lookahead server does. */
+ *       what the client showed of him on this tick. swing_raw: raw id of his weapon when his attack animation started this tick, else -1; swing_style: that
+ *       attack's AttackStyle number (0 none, 1 melee, 2 ranged, 3 magic; 0 when swing_raw is -1); hit_landed: 1 when any hitsplat appeared on him this tick
+ *       (damage or block, any source); hit_damage: the damage of those hitsplats added up; veng_cast: his Vengeance cast graphic this tick; consuming: a meal or
+ *       potion animation of his this tick; bar_ratio/bar_scale: his health bar as displayed now (-1 -1 when hidden); veng_text: "Taste vengeance!" over his
+ *       head this tick.
+ * Every tick of a fight must reach the server with the full request body: the server owns the history ring, the consume estimates and the recurrent state.
+ * A tick gap above 2 or a tick that does not advance starts a new fight. On a decision tick the response is `R id micros 2 <3 x "feasible kill death value worlds">
+ * A n <n x "due kind arg timing">` (best_index 2 = replace the remainder with these clicks, due = tick + 1); on an `OBS` tick it is `O id`. UNAVAILABLE as in the
+ * lookahead server. Movement, orb, prayer, style and armour-swap heads are masked off (riskfight_deployable). */
 #define main gs_lookahead_server_main
 #include "gs_lookahead_server.c"
 #undef main
@@ -163,19 +168,21 @@ static double rt_decide(Request* q, const RtSeen* seen, int new_fight, int fight
     return (la_seconds() - started) * 1e6;
 }
 
-static int rt_parse(FILE* in, Request* q, RtSeen* seen, int* new_fight, int* fight_start) {
+static int rt_parse(FILE* in, Request* q, RtSeen* seen, int* new_fight, int* fight_start, int* obs_only) {
     static char text[1 << 16];
     size_t used = 0;
     char line[4096];
     *seen = (RtSeen){-1, 0, 0, 0, 0, 0, -1, -1, 0};
     *new_fight = 0;
+    *obs_only = 0;
     int header = 0;
     while (fgets(line, sizeof(line), in)) {
         assert(strchr(line, '\n') != NULL);
-        if (!strncmp(line, "RT ", 3)) {
+        if (!strncmp(line, "LA ", 3)) {
             assert(!header);
             header = 1;
-            used += (size_t)snprintf(text + used, sizeof(text) - used, "LA %s", line + 3);
+            *obs_only = strstr(line, " OBS") != NULL;
+            used += (size_t)snprintf(text + used, sizeof(text) - used, "%s", line);
         } else if (!strncmp(line, "FIGHT ", 6)) {
             *new_fight = 1;
             assert(sscanf(line + 6, "%d", fight_start) == 1);
@@ -183,7 +190,7 @@ static int rt_parse(FILE* in, Request* q, RtSeen* seen, int* new_fight, int* fig
             assert(sscanf(line + 2, "%d %d %d %d %d %d %d %d %d", &seen->swing_raw, &seen->swing_style, &seen->hit_landed, &seen->hit_damage, &seen->veng_cast,
                 &seen->consuming, &seen->bar_ratio, &seen->bar_scale, &seen->veng_text) == 9);
         } else {
-            assert(header && "request must start with RT");
+            assert(header && "request must start with LA");
             used += (size_t)snprintf(text + used, sizeof(text) - used, "%s", line);
         }
         assert(used < sizeof(text) - sizeof(line));
@@ -198,8 +205,9 @@ static int rt_parse(FILE* in, Request* q, RtSeen* seen, int* new_fight, int* fig
     return 0;
 }
 
-static void rt_respond(FILE* out, const Request* q, double micros, const RtRecord* records, int count) {
-    fprintf(out, "RA %d %.0f %d", q->id, micros, count);
+static void rt_respond(FILE* out, const Request* q, double micros, const RtRecord* records, int count, int obs_only) {
+    if (obs_only) { fprintf(out, "O %d\n", q->id); return; }
+    fprintf(out, "R %d %.0f 2 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 A %d", q->id, micros, count);
     for (int i = 0; i < count; i++) fprintf(out, " %d %d %d %d", q->tick + 1, records[i].kind, records[i].arg, 0);
     fprintf(out, "\n");
 }
@@ -246,12 +254,12 @@ int main(int argc, char** argv) {
             bench[bench_n * 999 / 1000], bench[bench_n - 1]);
         return 0;
     }
-    printf("READY %.0f continue;no new clicks POLICY rl:%s\n", worst, name);
+    printf("READY %.0f continue;no new clicks;rl POLICY rl:%s OBS\n", worst, name);
     fflush(stdout);
     static Request q;
     RtSeen seen;
-    int new_fight, fight_start;
-    while (rt_parse(stdin, &q, &seen, &new_fight, &fight_start)) {
+    int new_fight, fight_start, obs_only;
+    while (rt_parse(stdin, &q, &seen, &new_fight, &fight_start, &obs_only)) {
         const char* unavailable = server_unavailable(&q);
         if (unavailable) {
             printf("UNAVAILABLE %d %s\n", q.id, unavailable);
@@ -261,7 +269,7 @@ int main(int argc, char** argv) {
         RtRecord records[GS_WIRE_MAX_RECORDS];
         int count;
         double micros = rt_decide(&q, &seen, new_fight, fight_start, records, &count);
-        rt_respond(stdout, &q, micros, records, count);
+        rt_respond(stdout, &q, micros, records, count, obs_only);
         fflush(stdout);
     }
     return 0;
