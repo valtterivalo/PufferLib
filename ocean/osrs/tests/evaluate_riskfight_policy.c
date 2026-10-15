@@ -262,6 +262,13 @@ static void eval_trace(int argc, char** argv) {
  * production loader, then warmed for SC_WARM ticks with both sides auto-attacking so the plugin-side observer infers timers, PID, bar and gear
  * from sim events exactly as in a rollout. The decision point is the end of the warm-up. ---- */
 enum { SC_TICK0 = 100 };
+/* EVAL_UPKEEP=prayer|stats|magic: scenarios in which our upkeep is at stake (and the deployed policy is compared with and without the drink macros):
+ *   prayer  Protect Melee and Piety on with 10..18 prayer points, the points run dry within the episode;
+ *   stats   attack, strength and magic brewed down below base (80..96, 70..88), defence brew-boosted, Vengeance down;
+ *   magic   only magic brewed down (84..90) with attack and strength boosted, Vengeance down and not castable for it.
+ * Our bag then also holds two prayer potions, a super restore and a super combat. */
+typedef enum { SC_UPKEEP_NONE, SC_UPKEEP_PRAYER, SC_UPKEEP_STATS, SC_UPKEEP_MAGIC } ScUpkeep;
+static ScUpkeep g_upkeep_mode;
 typedef struct { RiskfightSnapshot snap; int warm; } Scenario;
 static uint32_t sc_draw(uint32_t* r, uint32_t low, uint32_t high) { return low + la_next(r) % (high - low + 1); }
 static RiskfightLoadout sc_loadout(uint32_t* r, int ours) {
@@ -278,6 +285,12 @@ static RiskfightLoadout sc_loadout(uint32_t* r, int ours) {
     for (int i = 0; i < hard; i++) l.inventory[slot++] = riskfight_supply_code(OSRS_CONSUMABLE_ANGLERFISH, 0);
     for (int i = 0; i < fast; i++) l.inventory[slot++] = riskfight_supply_code(OSRS_CONSUMABLE_KARAMBWAN, 0);
     for (int i = 0; i < brew; i++) l.inventory[slot++] = riskfight_supply_code(OSRS_CONSUMABLE_BREW, 4);
+    if (ours && g_upkeep_mode) {
+        l.inventory[slot++] = riskfight_supply_code(OSRS_CONSUMABLE_PRAYER_RESTORE, 4);
+        l.inventory[slot++] = riskfight_supply_code(OSRS_CONSUMABLE_PRAYER_RESTORE, 4);
+        l.inventory[slot++] = riskfight_supply_code(OSRS_CONSUMABLE_SUPER_RESTORE, 4);
+        l.inventory[slot++] = riskfight_supply_code(OSRS_CONSUMABLE_SUPER_COMBAT, 4);
+    }
     if (weapon != ITEM_VOIDWAKER) l.inventory[slot++] = osrs_inventory_content_code_from_item(ITEM_VOIDWAKER);
     l.inventory[slot++] = osrs_inventory_content_code_from_item(ITEM_GRANITE_MAUL_ORNATE);
     return l;
@@ -300,6 +313,17 @@ static void sc_make(Scenario* sc, uint32_t corpus_seed, uint32_t index) {
             .seen_health_bar = osrs_health_bar_ratio(hp[i], 99, OSRS_PLAYER_HEALTH_BAR_SCALE), .seen_last_attack_ago = -1, .poison_source = OSRS_POISON_CLEAR_PRIOR};
     }
     sc->warm = (int)sc_draw(&r, 6, 12);
+    RiskfightSideSnapshot* us = &s->side[0];
+    us->veng_active = g_upkeep_mode == SC_UPKEEP_NONE ? us->veng_active : 0;
+    if (g_upkeep_mode == SC_UPKEEP_PRAYER) {
+        us->overhead_prayer = PRAYER_PROTECT_MELEE;
+        us->prayer = (int)sc_draw(&r, 10, 18);
+    } else if (g_upkeep_mode == SC_UPKEEP_STATS) {
+        us->attack = (int)sc_draw(&r, 80, 96); us->strength = (int)sc_draw(&r, 80, 96);
+        us->magic = (int)sc_draw(&r, 70, 88); us->defence = 120;
+    } else if (g_upkeep_mode == SC_UPKEEP_MAGIC) {
+        us->magic = (int)sc_draw(&r, 84, 90);
+    }
 }
 /* Builds the decision-point Sim for a scenario: loaded state, warmed observer and history. Deterministic in (scenario, truth model). */
 static int sc_start(Sim* sim, const Scenario* sc, const OppModel* truth) {
@@ -344,7 +368,7 @@ static int sc_start(Sim* sim, const Scenario* sc, const OppModel* truth) {
     return 0;
 }
 typedef struct { int ko, death; double value; } ScOutcome;
-typedef enum { SC_RULES, SC_DEPLOYED } ScPolicy;
+typedef enum { SC_RULES, SC_DEPLOYED, SC_DEPLOYED_NO_UPKEEP } ScPolicy;
 /* Puts the decision-point state of `base` into `sim` with a fresh Ours: the plugin has just attached, nothing committed. */
 static void sc_load(Sim* sim, const Sim* base, int lookahead, uint32_t seed) {
     sim->state = base->state; sim->hist = base->hist; sim->tick_base = base->tick_base; sim->seen_since_eat = base->seen_since_eat; sim->previous = (StepEvents){0};
@@ -356,7 +380,8 @@ static void sc_load(Sim* sim, const Sim* base, int lookahead, uint32_t seed) {
 static ScOutcome sc_episode(Sim* sim, const Sim* base, ScPolicy policy, const LaScript* first, const OppModel* truth, uint32_t seed, int horizon) {
     static Outcome out;
     memset(&out, 0, sizeof(out)); sim->outcome = &out;
-    sc_load(sim, base, policy == SC_DEPLOYED, seed);
+    g_la_upkeep = policy != SC_DEPLOYED_NO_UPKEEP;
+    sc_load(sim, base, policy != SC_RULES, seed);
     if (first) { sim->ours.native_program = *first; sim->ours.native_active = first->n > 0; sim->ours.native_resume = base->tick_base + 1; }
     RiskfightState* s = &sim->state; g_rollout_seed = seed;
     uint32_t pending_rng = osrs_lowbias32(seed ^ 0x70656e64u) | 1;
@@ -393,16 +418,25 @@ static ScOutcome sc_episode(Sim* sim, const Sim* base, ScPolicy policy, const La
     result.value = result.ko * (double)base->obs.stakes.him - result.death * (double)base->obs.stakes.us;
     return result;
 }
-typedef struct { uint32_t index; double sum[2][3]; } ScRow; /* per policy: ko, death, value summed over episodes */
+typedef struct { uint32_t index; double sum[3][3]; } ScRow; /* per policy: ko, death, value summed over episodes */
 typedef struct { long chosen[LA_MACROS], calls, unavailable, rejected[5]; double seconds; } ScFooter;
 /* corpus SCENARIOS EPISODES HORIZON SELECT_WORLDS SEED train|heldout JOBS NATIVE_REV JAVA_REV MANIFEST
  * Rules proxy vs the deployed macro policy over the synthetic scenario corpus, paired by scenario and episode seed, forked across JOBS shards. */
 static void eval_corpus(int argc, char** argv) {
     uint32_t scenarios = eval_uint(argv[2], 2, 1000000), episodes = eval_uint(argv[3], 1, 100000), seed = eval_uint(argv[7], 1, UINT32_MAX);
     int horizon = (int)eval_uint(argv[4], 1, 32), worlds = (int)eval_uint(argv[5], 2, 1000000), jobs = (int)eval_uint(argv[8], 1, 256);
+    const char* upkeep = getenv("EVAL_UPKEEP");
+    if (upkeep) {
+        if (!strcmp(upkeep, "prayer")) g_upkeep_mode = SC_UPKEEP_PRAYER;
+        else if (!strcmp(upkeep, "stats")) g_upkeep_mode = SC_UPKEEP_STATS;
+        else if (!strcmp(upkeep, "magic")) g_upkeep_mode = SC_UPKEEP_MAGIC;
+        else eval_fail("EVAL_UPKEEP must be prayer, stats or magic");
+    }
+    int arms = g_upkeep_mode ? 3 : 2;
     OppModel train = eval_pool("train"), held = eval_pool(argv[6]); eval_config(scenarios, seed, horizon, worlds); g_la_model = &train;
     eval_provenance(argv[9], argv[10], argv[11], argc, argv);
-    printf("corpus\tsynthetic_scenarios=%u\tepisodes_per_scenario=%u\twarm_ticks=6..12\tour_hp=25..99\this_hp=12..99\tpolicies=rules_proxy,deployed_macro\tpairing=scenario_and_episode_seed\n", scenarios, episodes);
+    printf("corpus\tsynthetic_scenarios=%u\tepisodes_per_scenario=%u\twarm_ticks=6..12\tour_hp=25..99\this_hp=12..99\tpolicies=rules_proxy,deployed_macro%s\tpairing=scenario_and_episode_seed\tupkeep=%s\n", scenarios, episodes,
+        g_upkeep_mode ? ",deployed_without_upkeep_macros" : "", upkeep ? upkeep : "none");
     int fds[256];
     for (int j = 0; j < jobs; j++) {
         int pipefd[2]; if (pipe(pipefd)) eval_fail("pipe");
@@ -421,8 +455,8 @@ static void eval_corpus(int argc, char** argv) {
                 ScRow row = {.index = i};
                 for (uint32_t e = 0; e < episodes; e++) {
                     uint32_t episode = osrs_lowbias32(seed + i * 7919u + e) | 1;
-                    for (int p = 0; p < 2; p++) {
-                        ScOutcome o = sc_episode(work, base, p == 0 ? SC_RULES : SC_DEPLOYED, NULL, &held, episode, horizon);
+                    for (int p = 0; p < arms; p++) {
+                        ScOutcome o = sc_episode(work, base, p == 0 ? SC_RULES : p == 1 ? SC_DEPLOYED : SC_DEPLOYED_NO_UPKEEP, NULL, &held, episode, horizon);
                         row.sum[p][0] += o.ko; row.sum[p][1] += o.death; row.sum[p][2] += o.value;
                     }
                 }
@@ -437,7 +471,7 @@ static void eval_corpus(int argc, char** argv) {
         }
         close(pipefd[1]); fds[j] = pipefd[0];
     }
-    EvalStats pooled[2] = {0}; EvalMoment dko = {0}, ddeath = {0}, dvalue = {0}; ScFooter total = {0}; uint32_t seen = 0;
+    EvalStats pooled[3] = {0}; EvalMoment dko = {0}, ddeath = {0}, dvalue = {0}, uko = {0}, udeath = {0}, uvalue = {0}; ScFooter total = {0}; uint32_t seen = 0;
     for (int j = 0; j < jobs; j++) {
         for (;;) {
             ScRow row; ssize_t got = read(fds[j], &row, sizeof(row));
@@ -450,26 +484,34 @@ static void eval_corpus(int argc, char** argv) {
                 break;
             }
             seen++;
-            for (int p = 0; p < 2; p++) {
+            for (int p = 0; p < arms; p++) {
                 eval_add(&pooled[p].ko, row.sum[p][0] / episodes); eval_add(&pooled[p].death, row.sum[p][1] / episodes);
                 eval_add(&pooled[p].survival, 1 - row.sum[p][1] / episodes); eval_add(&pooled[p].draw, 1 - (row.sum[p][0] + row.sum[p][1]) / episodes);
                 eval_add(&pooled[p].value, row.sum[p][2] / episodes);
             }
             eval_add(&dko, (row.sum[1][0] - row.sum[0][0]) / episodes); eval_add(&ddeath, (row.sum[1][1] - row.sum[0][1]) / episodes);
             eval_add(&dvalue, (row.sum[1][2] - row.sum[0][2]) / episodes);
+            if (arms == 3) {
+                eval_add(&uko, (row.sum[1][0] - row.sum[2][0]) / episodes); eval_add(&udeath, (row.sum[1][1] - row.sum[2][1]) / episodes);
+                eval_add(&uvalue, (row.sum[1][2] - row.sum[2][2]) / episodes);
+            }
         }
         close(fds[j]);
     }
     for (int j = 0; j < jobs; j++) { int status; if (wait(&status) < 0 || !WIFEXITED(status) || WEXITSTATUS(status)) eval_fail("shard failed"); }
     if (seen != scenarios) eval_fail("missing scenarios");
     printf("note\tmetric rows are scenario means (n=scenarios); KO/death/survival/draw CIs are scenario-clustered normal, not Wilson\n");
-    const char* names[2] = {"rules_proxy_C_uncertified", "deployed_macro_policy"};
-    for (int p = 0; p < 2; p++) {
+    const char* names[3] = {"rules_proxy_C_uncertified", "deployed_macro_policy", "deployed_without_upkeep_macros"};
+    for (int p = 0; p < arms; p++) {
         eval_metric(names[p], "KO_scenario_mean", &pooled[p].ko, 0); eval_metric(names[p], "death_scenario_mean", &pooled[p].death, 0);
         eval_metric(names[p], "finite_horizon_draw_scenario_mean", &pooled[p].draw, 0); eval_metric(names[p], "expected_stake_value", &pooled[p].value, 0);
     }
     eval_metric(names[1], "paired_KO_minus_rules", &dko, 0); eval_metric(names[1], "paired_death_minus_rules", &ddeath, 0);
     eval_metric(names[1], "paired_value_minus_rules", &dvalue, 0);
+    if (arms == 3) {
+        eval_metric(names[1], "paired_KO_minus_without_upkeep", &uko, 0); eval_metric(names[1], "paired_death_minus_without_upkeep", &udeath, 0);
+        eval_metric(names[1], "paired_value_minus_without_upkeep", &uvalue, 0);
+    }
     printf("admission\tscenarios=%u\trejected_ended_in_warmup=%ld\trejected_no_rival=%ld\trejected_gear=%ld\trejected_stakes=%ld\n", scenarios, total.rejected[1], total.rejected[2], total.rejected[3], total.rejected[4]);
     printf("deployed_choices\tcalls=%ld\tunavailable_ticks=%ld\tmean_ms=%.3f", total.calls, total.unavailable, total.calls ? 1e3 * total.seconds / total.calls : 0.0);
     for (int m = 0; m < LA_MACROS; m++) if (total.chosen[m]) printf("\t%s=%ld", LA_NAME[m], total.chosen[m]);
