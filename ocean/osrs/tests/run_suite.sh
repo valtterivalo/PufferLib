@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds and runs every ocean/osrs/tests/test_*.c (cc -std=gnu11 -O2 -I. -Isrc ... -lm -lpthread, cwd = repo root; gnu11 so glibc exposes clock_gettime).
-# RAYLIB_INC=<dir> adds the raylib headers (the model tests need them).
+# RAYLIB_INC=<dir> / RAYLIB_LIB=<dir> add the raylib headers / link libraylib (the model and render tests need them).
 #   ocean/osrs/tests/run_suite.sh [-j JOBS] [-t TIMEOUT_SECONDS] [test_name ...]
 # One line per test on stdout: PASS|FAIL|BUILD name seconds; logs under $OUT (default /tmp/osrs-suite). Exit 1 if anything failed.
 set -u
@@ -33,6 +33,9 @@ fi
 # Per-test needs: oracle fixtures as argv, -D encounter selectors (one build per variant), raylib headers for the model tests.
 CFLAGS="-std=gnu11 -O2 -I. -Isrc"
 [ -n "${RAYLIB_INC:-}" ] && CFLAGS="$CFLAGS -I$RAYLIB_INC"
+LDLIBS="-lm -lpthread"
+[ -n "${RAYLIB_LIB:-}" ] && LDLIBS="-L$RAYLIB_LIB -lraylib -lGL -lX11 -ldl -lrt $LDLIBS"
+export LDLIBS
 export CFLAGS
 
 args_for() {
@@ -48,7 +51,7 @@ export -f args_for
 run_variant() { # label source defines...
   label=$1; src=$2; shift 2
   start=$(date +%s)
-  if ! cc $CFLAGS "$@" -o "$OUT/$label" "ocean/osrs/tests/$src.c" -lm -lpthread >"$OUT/$label.build.log" 2>&1; then
+  if ! cc $CFLAGS "$@" -o "$OUT/$label" "ocean/osrs/tests/$src.c" $LDLIBS >"$OUT/$label.build.log" 2>&1; then
     echo "BUILD $label $(( $(date +%s) - start ))" | tee "$OUT/$label.status"
     return
   fi
