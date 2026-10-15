@@ -486,7 +486,8 @@ static LaOutcome la_rollout(Sim* work, const RiskfightState* world, const Hist* 
         work->step_damage = work->step_max_hit = work->step_direct = 0;
         work->obs.hit_count = 0;
         riskfight_step_queues(s, &work->context, &hi->commands, &work->context.policy_commands[1].commands);
-        if (script->native_rules || proxy) observer_step(s, &work->obs, tick + 1 + step);
+        /* The kill tick is never observed: the HP-history model has no support for a meal on the tick he dies and aborts. */
+        if ((script->native_rules || proxy) && s->env.players[0].current_hitpoints > 0 && s->env.players[1].current_hitpoints > 0) observer_step(s, &work->obs, tick + 1 + step);
         int landed_direct = 0;
         for (int i = 0; i < work->obs.hit_count; i++)
             landed_direct |= work->obs.hits[i].source == 0 && work->obs.hits[i].kind == OSRS_HIT_DIRECT;
