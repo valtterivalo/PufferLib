@@ -87,7 +87,7 @@ static void test_macro_round_trip(void) {
     CHECK(checked >= 14);
     CHECK(kinds_seen[GS_WIRE_STOP_ATTACK] && kinds_seen[GS_WIRE_ALIGNED_READY] && kinds_seen[GS_WIRE_WAIT_SPEC_LAUNCH]);
     CHECK(kinds_seen[GS_WIRE_EQUIP_RECIPE] && kinds_seen[GS_WIRE_COND_ENERGY] && kinds_seen[GS_WIRE_CLICK_SLOT] && kinds_seen[GS_WIRE_CAST_VENGEANCE]);
-    CHECK(kinds_seen[GS_WIRE_EAT_RECIPE] >= 2 && feasible[LA_EAT_STAGGER]);
+    CHECK(feasible[LA_EAT_STAGGER]);
 
     /* The response's A records, echoed back verbatim as R, are a valid request with the same plan. */
     for (int m = 0; m < LA_MACROS; m++) {
@@ -137,7 +137,7 @@ static void test_macro_round_trip(void) {
 }
 
 /* Every meal click of every macro targets a carried item when it is pressed: single-dose food emptied by an earlier press of the same plan is never clicked
- * again (the staggered plan eats the hard food twice and needs two carried), and a recipe never skips for lack of food. */
+ * again (the staggered plan eats the hard food twice, on two different slots, and needs two carried). */
 static void test_meals_never_click_empty(void) {
     static char text[1 << 12];
     compose(text, sizeof(text), "P KNOWN 2\nD 1 4 0 1 0 1 0 20 0 30 8000 0 0\nD 1 7 0 1 0 1 0 20 0 30 8000 0 0\nR KNOWN 0\nEND\n");
@@ -162,27 +162,22 @@ static void test_meals_never_click_empty(void) {
         la_scripts(&g_base.state, q.tick, &q.feasible, &q.rules, scripts, feasible);
         CHECK(feasible[LA_EAT_TRIPLE] && feasible[LA_EAT_NOW]);
         CHECK(feasible[LA_EAT_STAGGER] == (carry >= 2));
-        int stagger_meals = 0;
+        int stagger_hard[2] = {-1, -1}, stagger_meals = 0;
         for (int m = 0; m < LA_MACROS; m++) {
             if (!feasible[m]) continue;
             Player walk = *us;
             for (int i = 0; i < scripts[m].n; i++) {
                 HumanCommand click = scripts[m].command[i];
-                int slot = -1;
-                if (scripts[m].op[i] == 8) {
-                    CHECK(la_recipe(&scripts[m], i, &walk, &click)); /* a recipe that finds nothing would skip: not enough food for the plan */
-                    for (int s = 0; s < OSRS_INVENTORY_SIZE && slot < 0; s++)
-                        if (osrs_inventory_cell_metadata(&walk.inventory_cells[s])->raw_osrs_id == click.item_osrs_id) slot = s;
-                    stagger_meals += m == LA_EAT_STAGGER;
-                } else if (scripts[m].op[i] == 0 && click.kind == HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK) {
-                    slot = click.inventory_slot;
-                } else continue;
+                if (scripts[m].op[i] != 0 || click.kind != HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK) continue;
+                int slot = click.inventory_slot;
+                if (m == LA_EAT_STAGGER && osrs_inventory_cell_metadata(&walk.inventory_cells[slot])->consumable_kind == OSRS_CONSUMABLE_ANGLERFISH)
+                    stagger_hard[stagger_meals++ & 1] = slot;
                 CHECK(slot >= 0 && slot < OSRS_INVENTORY_SIZE && !osrs_inventory_cell_is_empty(&walk.inventory_cells[slot]));
                 OsrsConsumableKind kind = osrs_inventory_cell_metadata(&walk.inventory_cells[slot])->consumable_kind;
                 if (kind == OSRS_CONSUMABLE_ANGLERFISH || kind == OSRS_CONSUMABLE_KARAMBWAN) walk.inventory_cells[slot] = osrs_inventory_cell_empty();
             }
         }
-        CHECK(stagger_meals == (carry >= 2 ? 2 : 0));
+        CHECK(stagger_meals == (carry >= 2 ? 2 : 0) && (carry < 2 || stagger_hard[0] != stagger_hard[1]));
     }
 }
 
