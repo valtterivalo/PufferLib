@@ -182,8 +182,9 @@ static const GoldenConfig CONFIGS[] = {
 #define NUM_CONFIGS ((int)(sizeof(CONFIGS) / sizeof(CONFIGS[0])))
 #define EPISODE_TICKS 4000
 
+/* w01 and w12 rebaselined when a boost potion stopped lowering a level already above base + boost (encounter_boost_level, c-drive upkeep). */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0xd11140586899bce6ULL,
+    0x4d5a8250b27a3f69ULL,
     0xa492522055e1f66cULL,
     0x7645fd997d792642ULL,
     0x7f2b0029f1743df9ULL,
@@ -194,7 +195,7 @@ static const uint64_t BASELINE[NUM_CONFIGS] = {
     0x8642a743771449f4ULL,
     0x9df4fb8c24dffbd6ULL,
     0x267a0897096df54fULL,
-    0x0193e6a1cda05f25ULL,
+    0x32b62bcebd524489ULL,
 };
 
 int main(int argc, char** argv) {
