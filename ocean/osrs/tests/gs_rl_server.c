@@ -267,6 +267,7 @@ int main(int argc, char** argv) {
     RtSeen seen;
     int new_fight, fight_start, obs_only;
     while (rt_parse(stdin, &q, &seen, &new_fight, &fight_start, &obs_only)) {
+        request_declare_priors(&q);
         const char* unavailable = server_unavailable(&q);
         if (unavailable) {
             printf("UNAVAILABLE %d %s\n", q.id, unavailable);
