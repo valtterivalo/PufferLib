@@ -468,6 +468,17 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     }
 
     osrs_ensure_player_equipment(defender);
+    PendingHitMetadata forced;
+    if (env->pvp_runtime.damage_override) {
+        int recorded = env->pvp_runtime.damage_override(env->pvp_runtime.damage_override_context,
+            env->tick, attacker_idx, defender_idx, hit);
+        if (recorded >= 0) {
+            hit->damage = recorded;
+            forced = *metadata;
+            forced.damage_mode = 1;
+            metadata = &forced;
+        }
+    }
     if (metadata->damage_mode != 0 && metadata->damage_mode != 1) {
         fprintf(stderr, "pending hit must be sampled before application\n");
         abort();
