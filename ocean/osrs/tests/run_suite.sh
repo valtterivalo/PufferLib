@@ -48,10 +48,18 @@ args_for() {
 }
 export -f args_for
 
+# osrs_riskfight.h reaches the fitted opponent through a separately compiled C object (build.sh does the same for the env); its pvp_* entry points are renamed.
+BRIDGE="$OUT/riskfight_oppfit_bridge.o"
+export BRIDGE
+needs_bridge() { grep -q 'osrs_riskfight/osrs_riskfight.h' "ocean/osrs/tests/$1.c"; }
+export -f needs_bridge
+
 run_variant() { # label source defines...
   label=$1; src=$2; shift 2
   start=$(date +%s)
-  if ! cc $CFLAGS "$@" -o "$OUT/$label" "ocean/osrs/tests/$src.c" $LDLIBS >"$OUT/$label.build.log" 2>&1; then
+  extra=""
+  needs_bridge "$src" && extra="$BRIDGE"
+  if ! cc $CFLAGS "$@" -o "$OUT/$label" "ocean/osrs/tests/$src.c" $extra $LDLIBS >"$OUT/$label.build.log" 2>&1; then
     echo "BUILD $label $(( $(date +%s) - start ))" | tee "$OUT/$label.status"
     return
   fi
@@ -74,6 +82,10 @@ run_one() {
   fi
 }
 export -f run_one
+
+cc -std=c11 -O2 -Wno-unused-function -D_POSIX_C_SOURCE=200809L -I. -Isrc \
+  -Dpvp_init=oppfit_pvp_init -Dpvp_reset=oppfit_pvp_reset -Dpvp_step=oppfit_pvp_step -Dpvp_close=oppfit_pvp_close \
+  -c ocean/osrs_riskfight/riskfight_oppfit_bridge.c -o "$BRIDGE"
 
 printf '%s\n' "${names[@]}" | xargs -P "$JOBS" -I{} bash -c 'run_one {}'
 cat "$OUT"/*.status | awk '{c[$1]++} END {for (k in c) printf "%s=%d ", k, c[k]; print ""}'
