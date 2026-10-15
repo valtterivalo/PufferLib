@@ -38,3 +38,10 @@ barriers (ready, hit, spec launch, aligned ready), conditions (energy, hp), grou
 - One decision per observed tick; while a sent click's effect has not been observed the plugin does not ask (it logs `committed`) and the remainder keeps executing.
 - Any protocol violation by either side is fatal for the session: the server exits 2 with the failing assertion on stderr, the plugin throws.
 - Changing a kind number, a tag grammar or the response shape bumps `GS_ENGINE_WIRE_VERSION`; `READY` will carry it once the Java side parses it (today: macro-name check).
+
+## Swappable decision policy (wire v2.1, backward compatible)
+The plugin never knows which algorithm decides. The server is started with `--policy lookahead|search|rl:CKPT` (default lookahead; every policy answers with the SAME response shape):
+- `READY <warm_micros> <names;...> [POLICY <name>] [OBS]`. names always begin `continue;no new clicks;` and may end with the policy's own plan names. A policy that is not a macro lookahead lists a single plan name (e.g. `search`, `rl`) at index 2; its `kill death value worlds` block entries are the policy's own estimates for that plan (worlds = samples, 0 and feasible 0 when it has none), and `best_index` 2 means: replace the remainder with the A records. Ties keep favouring continue.
+- `OBS`: the policy needs the observation every game tick, not only decision ticks (RL history rings, search belief updates). The plugin then sends `LA id tick` ... `END` with an extra header token `OBS` (`LA id tick OBS`) on ticks it would not decide (committed run, unlanded clicks); the server updates its per-fight state and answers `O id`. No A records, no plan change.
+- Per-fight state (history rings, recurrent state) is owned by the server; it resets on a tick gap > 2 or on `FIGHT tick` (a header line before the first request of a fight, sent by the plugin when the tracked opponent changes).
+- Latency budget applies per request including OBS requests.
