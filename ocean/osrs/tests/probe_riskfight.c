@@ -57,18 +57,21 @@ int main(int argc, char** argv) {
         g_net = rf_net_load(argv[5], RF_OBS_SIZE, atoi(argv[6]), atoi(argv[7]), RF_ACTION_DIMS, RF_HEADS);
         g_policy_hook = net_policy;
         g_net_hard = getenv("PROBE_HARD") != NULL;
-    } else if (argc == 9) {
-        FILE* f = fopen(argv[5], "rb"); assert(f && fread(&fit, sizeof(fit), 1, f) == 1); fclose(f);
+    }
+    const char* fit_path = argc == 9 ? argv[5] : getenv("PROBE_FIT");
+    const char* mix_path = argc == 9 ? argv[6] : getenv("PROBE_MIX");
+    if (fit_path) {
+        FILE* f = fopen(fit_path, "rb"); assert(f && fread(&fit, sizeof(fit), 1, f) == 1); fclose(f);
         fit.eat_action = ACT_EAT_WARNING;
-        f = fopen(argv[6], "rb"); assert(f && fread(&mixture, sizeof(mixture), 1, f) == 1); fclose(f);
+        f = fopen(mix_path, "rb"); assert(f && fread(&mixture, sizeof(mixture), 1, f) == 1); fclose(f);
         g_eat_model.on = 1; g_eat_model.model = EAT_MIXTURE; g_eat_model.types = mixture.types;
         memcpy(g_eat_model.pi, mixture.pi, sizeof(mixture.pi)); g_eat_model.logit = mixture.logit;
-        g_la_worlds = atoi(argv[7]); g_la_horizon = atoi(argv[8]);
+        if (argc == 9) { g_la_worlds = atoi(argv[7]); g_la_horizon = atoi(argv[8]); }
         la_model = (OppModel){MODEL_FIT, &fit};
         g_la_model = &la_model;
         g_la_cache = 0;
     }
-    OppModel model = heldout ?
+    OppModel model = getenv("PROBE_OPPFIT") ? la_model : heldout ?
         (OppModel){MODEL_PROFILES, NULL, RISKFIGHT_HUMAN_TRAIN_PROFILES, RISKFIGHT_HUMAN_HELDOUT_PROFILES} :
         (OppModel){MODEL_PROFILES, NULL, 0, RISKFIGHT_HUMAN_TRAIN_PROFILES};
     sim_init(&g_sim);
