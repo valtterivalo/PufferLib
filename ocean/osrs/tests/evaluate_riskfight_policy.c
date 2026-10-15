@@ -13,6 +13,7 @@
 #define main riskfight_protocol_server_main
 #include "gs_lookahead_server.c"
 #undef main
+#include "riskfight_spectator.h"
 #include <stdint.h>
 #include <inttypes.h>
 #include <unistd.h>
