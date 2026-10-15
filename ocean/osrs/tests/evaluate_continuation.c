@@ -14,9 +14,12 @@
  * evaluation pool, hidden state exact), so truth hold vs truth policy isolates the continuation; predicted vs truth adds belief error. */
 #define RISKFIGHT_EVALUATOR_LIBRARY
 #include "evaluate_riskfight_policy.c"
+#include <signal.h>
+#include <setjmp.h>
 
 typedef struct {
-    int feasible[LA_MACROS], best;
+    int feasible[LA_MACROS], bvalid[LA_MACROS], best;
+    long proxy_rollouts, proxy_aborted, nested_episodes, nested_aborted;
     double ratio, pv[LA_MACROS], pvp[LA_MACROS], pk[LA_MACROS], pd[LA_MACROS], bv[LA_MACROS]; /* pv: hold@WORLDS, pvp/bv: hold/proxy continuation @PROXY_WORLDS (same worlds) */
     double th[LA_MACROS][3], tb[LA_MACROS][3], tp[LA_MACROS][3]; /* ko rate, death rate, mean value */
     double th_sq[LA_MACROS], tp_sq[LA_MACROS];
@@ -36,32 +39,70 @@ static void ct_decide(Sim* ds, const Sim* base, int mode, LaDecision* out) {
 }
 
 static int ct_inner, ct_proxy_worlds;
+/* The rules proxy steps the plugin-side observer on sampled belief worlds. The HP-history model aborts on evidence its hypotheses cannot explain (a meal in a
+ * sampled world that the real history never allowed); such a rollout is excluded from both sides of the hold-vs-proxy pair and counted. */
+static sigjmp_buf ct_jump;
+static volatile sig_atomic_t ct_guard;
+static long ct_aborted, ct_proxy_rollouts;
+static void ct_on_abort(int sig) { (void)sig; if (ct_guard) siglongjmp(ct_jump, 1); _exit(134); }
+
+/* Hold vs rules-proxy continuation on the same PROXY_WORLDS belief worlds (the proxy rollout costs ~65 ms), using the deployed macro scripts. */
+static void ct_belief(const Sim* base, Sim* ds, Sim* rollout, const LaDecision* dec, CtRow* row, double ratio) {
+    static RiskfightState world; static Hist hist;
+    sc_load(ds, base, 1, 0);
+    g_la_proxy.ours = ds->ours; g_la_proxy.ours.lookahead = 0; g_la_proxy.observer = &base->obs; g_la_proxy.step = 0;
+    LaBelief belief = la_belief_of(ds, base->tick_base);
+    int tick = base->tick_base; long valid[LA_MACROS] = {0};
+    uint32_t world_rng = osrs_lowbias32((uint32_t)tick * 40503u + 12345u) | 1;
+    ct_proxy_rollouts = ct_aborted = 0;
+    for (int w = 0; w < ct_proxy_worlds; w++) {
+        uint32_t draw = world_rng ^ (uint32_t)(w * 2246822519u), wr = osrs_lowbias32(draw) | 1, seed = osrs_lowbias32(draw + 17);
+        la_world(&base->state, &base->hist, &belief, tick, &wr, &world, &hist);
+        for (int m = 0; m < LA_MACROS; m++) {
+            if (!dec->feasible[m]) continue;
+            LaOutcome h = la_rollout(rollout, &world, &hist, tick, g_la_model, &dec->scripts[m], seed), b = {0};
+            g_la_continue_mode = 1; ct_guard = 1; ct_proxy_rollouts++;
+            int ok = !sigsetjmp(ct_jump, 1);
+            if (ok) b = la_rollout(rollout, &world, &hist, tick, g_la_model, &dec->scripts[m], seed);
+            ct_guard = 0; g_la_continue_mode = 0;
+            if (!ok) { ct_aborted++; continue; }
+            row->pvp[m] += ct_value(h.kill, h.death, ratio); row->bv[m] += ct_value(b.kill, b.death, ratio); valid[m]++;
+        }
+    }
+    for (int m = 0; m < LA_MACROS; m++) { row->bvalid[m] = valid[m] > 0; if (valid[m]) { row->pvp[m] /= valid[m]; row->bv[m] /= valid[m]; } }
+    row->proxy_rollouts = ct_proxy_rollouts; row->proxy_aborted = ct_aborted;
+    observer_clear(&ds->obs);
+}
+
 static void ct_row(CtRow* row, Sim* base, Sim* ds, Sim* rollout, Sim* episode, const OppModel* held, int episodes, int horizon, uint32_t seed) {
-    static LaDecision hold, hold_small, proxy;
+    static LaDecision hold;
     memset(row, 0, sizeof(*row));
     ct_decide(ds, base, 0, &hold);
-    int worlds = g_la_worlds; g_la_worlds = g_la_stage = ct_proxy_worlds; /* the proxy rollout costs ~65 ms: its worlds are the first PROXY_WORLDS of the same stream */
-    ct_decide(ds, base, 0, &hold_small);
-    ct_decide(ds, base, 1, &proxy);
-    g_la_worlds = g_la_stage = worlds;
     GsStakes stakes = base->obs.stakes;
     double ratio = (double)stakes.him / (double)stakes.us;
     row->ratio = ratio; row->best = hold.best;
+    ct_belief(base, ds, rollout, &hold, row, ratio);
     int tick = base->tick_base;
     for (int m = 0; m < LA_MACROS; m++) {
         if (!hold.feasible[m]) continue;
-        if (!proxy.feasible[m] || !hold_small.feasible[m] || hold.score[m].worlds != g_la_worlds) eval_fail("macro feasibility changed with the continuation mode");
         row->feasible[m] = 1;
         row->pv[m] = hold.score[m].value / hold.score[m].worlds; row->pk[m] = hold.score[m].kill / hold.score[m].worlds; row->pd[m] = hold.score[m].death / hold.score[m].worlds;
-        row->pvp[m] = hold_small.score[m].value / hold_small.score[m].worlds; row->bv[m] = proxy.score[m].value / proxy.score[m].worlds;
         for (int e = 0; e < episodes; e++) {
             uint32_t episode_seed = osrs_lowbias32(seed + 7919u * (uint32_t)e + 101u * (uint32_t)m) | 1;
             LaOutcome h = la_rollout(rollout, &base->state, &base->hist, tick, held, &hold.scripts[m], episode_seed);
             g_la_continue_mode = 1; g_la_proxy.step = 0; g_la_proxy.observer = &base->obs;
-            LaOutcome b = la_rollout(rollout, &base->state, &base->hist, tick, held, &hold.scripts[m], episode_seed);
+            LaOutcome b = h; /* an HP-history abort leaves the hold outcome (dV = 0, understating the proxy) and is counted in proxy_aborted */
+            ct_guard = 1; row->proxy_rollouts++;
+            if (!sigsetjmp(ct_jump, 1)) b = la_rollout(rollout, &base->state, &base->hist, tick, held, &hold.scripts[m], episode_seed);
+            else row->proxy_aborted++;
+            ct_guard = 0;
             g_la_continue_mode = 0;
             int outer_worlds = g_la_worlds; g_la_worlds = g_la_stage = ct_inner; /* the nested deployed policy decides at its live world count */
-            ScOutcome p = sc_episode(episode, base, SC_DEPLOYED, &hold.scripts[m], held, episode_seed, horizon);
+            ScOutcome p = {h.kill, h.death, 0}; /* an HP-history abort in the nested episode keeps the hold outcome (dV = 0, understating the continuation error) and is counted */
+            ct_guard = 1; row->nested_episodes++;
+            if (!sigsetjmp(ct_jump, 1)) p = sc_episode(episode, base, SC_DEPLOYED, &hold.scripts[m], held, episode_seed, horizon);
+            else row->nested_aborted++;
+            ct_guard = 0;
             g_la_worlds = g_la_stage = outer_worlds;
             double vh = ct_value(h.kill, h.death, ratio), vp = ct_value(p.ko, p.death, ratio);
             row->th[m][0] += h.kill; row->th[m][1] += h.death; row->th[m][2] += vh; row->th_sq[m] += vh * vh;
@@ -84,7 +125,7 @@ static void ct_values(const double (*table)[3], double* out) { for (int m = 0; m
 typedef struct { long n; double ko, death, kill_hold; } CtBin;
 
 static void ct_report(const CtMessage* rows, int count, int episodes) {
-    long pairs = 0, decisions = 0, flips[6] = {0};
+    long pairs = 0, decisions = 0, flips[6] = {0}, pairs_b = 0, flip0_n = 0, proxy_rollouts = 0, proxy_aborted = 0, nested_n = 0, nested_bad = 0;
     double d_pred = 0, d_th_tp = 0, s_th_tp = 0, d_th_tb = 0, s_th_tb = 0, d_p_tp = 0, d_p_th = 0, se_th = 0, se_tp = 0, d_pb_tp = 0;
     CtBin kbin[5] = {{0}}, dbin[4] = {{0}}; double kb_pred[5] = {0}, db_pred[4] = {0};
     static const double kcut[4] = {0.05, 0.2, 0.5, 0.8}, dcut[3] = {0.01, 0.05, 0.2};
@@ -96,17 +137,19 @@ static void ct_report(const CtMessage* rows, int count, int episodes) {
         for (int m = 0; m < LA_MACROS; m++) { pv[m] = row->pv[m]; pvp[m] = row->pvp[m]; bv[m] = row->bv[m]; }
         for (int m = 0; m < LA_MACROS; m++) if (row->feasible[m]) {
             pairs++;
-            d_pred += fabs(row->pvp[m] - row->bv[m]);
+            if (row->bvalid[m]) { pairs_b++; d_pred += fabs(row->pvp[m] - row->bv[m]); d_pb_tp += fabs(row->bv[m] - row->tp[m][2]); }
             d_th_tp += fabs(row->th[m][2] - row->tp[m][2]); s_th_tp += row->tp[m][2] - row->th[m][2];
             d_th_tb += fabs(row->th[m][2] - row->tb[m][2]); s_th_tb += row->tb[m][2] - row->th[m][2];
-            d_p_tp += fabs(row->pv[m] - row->tp[m][2]); d_p_th += fabs(row->pv[m] - row->th[m][2]); d_pb_tp += fabs(row->bv[m] - row->tp[m][2]);
+            d_p_tp += fabs(row->pv[m] - row->tp[m][2]); d_p_th += fabs(row->pv[m] - row->th[m][2]);
             se_th += sqrt(fmax(0, row->th_sq[m] - row->th[m][2] * row->th[m][2]) / episodes);
             se_tp += sqrt(fmax(0, row->tp_sq[m] - row->tp[m][2] * row->tp[m][2]) / episodes);
         }
         int c_pred = ct_argmax(row, pv), c_ps = ct_argmax(row, pvp), c_pb = ct_argmax(row, bv), c_th = ct_argmax(row, th), c_tb = ct_argmax(row, tb), c_tp = ct_argmax(row, tp);
         if (c_pred != row->best) eval_fail("harness argmax disagrees with la_evaluate");
-        decisions++;
-        flips[0] += c_ps != c_pb; flips[1] += c_th != c_tp; flips[2] += c_th != c_tb; flips[3] += c_pred != c_tp; flips[4] += c_pred != c_th; flips[5] += c_tb != c_tp;
+        decisions++; proxy_rollouts += row->proxy_rollouts; proxy_aborted += row->proxy_aborted; nested_n += row->nested_episodes; nested_bad += row->nested_aborted;
+        int all_valid = 1; for (int m = 0; m < LA_MACROS; m++) all_valid &= !row->feasible[m] || row->bvalid[m];
+        flip0_n += all_valid; flips[0] += all_valid && c_ps != c_pb;
+        flips[1] += c_th != c_tp; flips[2] += c_th != c_tb; flips[3] += c_pred != c_tp; flips[4] += c_pred != c_th; flips[5] += c_tb != c_tp;
         int b = row->best;
         double pk = row->pk[b], pd = row->pd[b];
         cal_pk += pk; cal_tp_k += row->tp[b][0]; cal_th_k += row->th[b][0]; cal_pd += pd; cal_tp_d += row->tp[b][1]; cal_th_d += row->th[b][1];
@@ -117,16 +160,16 @@ static void ct_report(const CtMessage* rows, int count, int episodes) {
     }
     printf("continuation\tdecision_points=%ld\tmacro_pairs=%ld\tmean_feasible_macros=%.2f\ttruth_episodes_per_macro=%d\n", decisions, pairs, (double)pairs / decisions, episodes);
     printf("table\terror of the macro values (units: KO*stake_ratio - death; mean over decision point x feasible macro)\n");
-    printf("row\tmean_abs_dV predicted: hold vs rules-proxy continuation (same belief worlds)\t%.5f\n", d_pred / pairs);
+    printf("row\tmean_abs_dV predicted: hold vs rules-proxy continuation (same %d belief worlds, %ld/%ld proxy rollouts aborted by the HP-history model and excluded, %ld pairs; truth-proxy/nested aborts keep the hold outcome: nested %ld/%ld)\t%.5f\n", ct_proxy_worlds, proxy_aborted, proxy_rollouts, pairs_b, nested_bad, nested_n, d_pred / pairs_b);
     printf("row\tmean_abs_dV truth: hold vs deployed-policy continuation (pure continuation error)\t%.5f\tsigned(policy-hold)=%+.5f\tmc_se(hold)=%.5f\tmc_se(policy)=%.5f\n", d_th_tp / pairs, s_th_tp / pairs, se_th / pairs, se_tp / pairs);
     printf("row\tmean_abs_dV truth: hold vs rules-proxy continuation\t%.5f\tsigned(proxy-hold)=%+.5f\n", d_th_tb / pairs, s_th_tb / pairs);
     printf("row\tmean_abs_error predicted(hold,belief) vs truth-policy (total: belief + continuation)\t%.5f\n", d_p_tp / pairs);
     printf("row\tmean_abs_error predicted(hold,belief) vs truth-hold (belief/sampling only)\t%.5f\n", d_p_th / pairs);
-    printf("row\tmean_abs_error predicted(proxy,belief) vs truth-policy\t%.5f\n", d_pb_tp / pairs);
+    printf("row\tmean_abs_error predicted(proxy,belief) vs truth-policy\t%.5f\n", d_pb_tp / pairs_b);
     printf("table\tdecision flips (argmax changes, deployed tie rule: continue unless strictly better), %% of decision points\n");
     const char* names[6] = {"predicted hold -> predicted proxy-continuation", "truth hold -> truth policy-continuation", "truth hold -> truth proxy-continuation",
         "predicted hold (deployed choice) -> truth policy-continuation", "predicted hold -> truth hold", "truth proxy -> truth policy"};
-    for (int i = 0; i < 6; i++) printf("row\t%s\t%.2f%%\t(%ld/%ld)\n", names[i], 100.0 * flips[i] / decisions, flips[i], decisions);
+    for (int i = 0; i < 6; i++) { long n = i == 0 ? flip0_n : decisions, f = flips[i]; printf("row\t%s\t%.2f%%\t(%ld/%ld)\n", names[i], 100.0 * f / n, f, n); }
     printf("table\tcalibration of the chosen macro: predicted vs realised (realised = macro at step 0 then the deployed policy, exact hidden state)\n");
     printf("row\toverall kill predicted %.4f realised(policy) %.4f realised(hold on truth) %.4f | death predicted %.4f realised(policy) %.4f realised(hold on truth) %.4f\n",
         cal_pk / decisions, cal_tp_k / decisions, cal_th_k / decisions, cal_pd / decisions, cal_tp_d / decisions, cal_th_d / decisions);
@@ -146,7 +189,7 @@ static void ct_continuation(char** argv) {
         int pipefd[2]; if (pipe(pipefd)) eval_fail("pipe");
         pid_t pid = fork(); if (pid < 0) eval_fail("fork");
         if (pid == 0) {
-            close(pipefd[0]);
+            close(pipefd[0]); signal(SIGABRT, ct_on_abort);
             Sim* base = eval_alloc(sizeof(*base)); Sim* ds = eval_alloc(sizeof(*ds)); Sim* rollout = eval_alloc(sizeof(*rollout)); Sim* episode = eval_alloc(sizeof(*episode));
             sim_init(base); sim_init(ds); sim_init(rollout); sim_init(episode);
             CtMessage* message = eval_alloc(sizeof(*message));

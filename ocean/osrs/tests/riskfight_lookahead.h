@@ -485,7 +485,8 @@ static LaOutcome la_rollout(Sim* work, const RiskfightState* world, const Hist* 
         work->step_damage = work->step_max_hit = work->step_direct = 0;
         work->obs.hit_count = 0;
         riskfight_step_queues(s, &work->context, &hi->commands, &work->context.policy_commands[1].commands);
-        if (script->native_rules || proxy) observer_step(s, &work->obs, tick + 1 + step);
+        /* The kill tick is never observed: the HP-history model has no support for a meal on the tick he dies and aborts. */
+        if ((script->native_rules || proxy) && s->env.players[0].current_hitpoints > 0 && s->env.players[1].current_hitpoints > 0) observer_step(s, &work->obs, tick + 1 + step);
         int landed_direct = 0;
         for (int i = 0; i < work->obs.hit_count; i++)
             landed_direct |= work->obs.hits[i].source == 0 && work->obs.hits[i].kind == OSRS_HIT_DIRECT;
@@ -739,17 +740,28 @@ static void la_scripts(const RiskfightState* base, int tick, const LaFeasible* f
         r = saved;
         la_press(&r, &scripts[LA_EAT_NOW], tick, clicks, 2);
     }
+    /* The next carried hard food after the first one's slot: the staggered plan eats twice, and the first meal empties its slot. */
+    int hard_next = -1;
+    for (int i = slot[GS_HARD_FOOD] + 1; slot[GS_HARD_FOOD] >= 0 && i < OSRS_INVENTORY_SIZE && hard_next < 0; i++)
+        if (osrs_inventory_cell_metadata(&us->inventory_cells[i])->consumable_kind == OSRS_CONSUMABLE_ANGLERFISH) hard_next = i;
     if (f->eat_ok && slot[GS_HARD_FOOD] >= 0 && slot[GS_FAST_FOOD] >= 0 && slot[GS_POTION] >= 0) {
-        feasible[LA_EAT_TRIPLE] = feasible[LA_EAT_STAGGER] = 1;
+        /* The triple clicks three distinct slots, each carried now and untouched by the other two clicks. */
+        feasible[LA_EAT_TRIPLE] = 1;
         HumanCommand triple[4] = {click_command(slot[GS_HARD_FOOD]), click_command(slot[GS_FAST_FOOD]), click_command(slot[GS_POTION]), attack_command()};
         r = saved;
         la_press(&r, &scripts[LA_EAT_TRIPLE], tick, triple, 4);
-        HumanCommand first[2] = {click_command(slot[GS_HARD_FOOD]), attack_command()};
-        HumanCommand second[3] = {click_command(slot[GS_POTION]), click_command(slot[GS_FAST_FOOD]), attack_command()};
-        r = saved;
-        la_press(&r, &scripts[LA_EAT_STAGGER], tick, first, 2);
-        la_press(&r, &scripts[LA_EAT_STAGGER], tick + 3, second, 3);
-        la_press(&r, &scripts[LA_EAT_STAGGER], tick + 6, first, 2);
+        /* The staggered plan clicks the hard food's slot, then (three ticks on) the next carried one, so it exists only with two carried: a press
+         * never targets a slot an earlier press of the plan emptied. */
+        if (hard_next >= 0) {
+            feasible[LA_EAT_STAGGER] = 1;
+            HumanCommand first[2] = {click_command(slot[GS_HARD_FOOD]), attack_command()};
+            HumanCommand again[2] = {click_command(hard_next), attack_command()};
+            HumanCommand second[3] = {click_command(slot[GS_POTION]), click_command(slot[GS_FAST_FOOD]), attack_command()};
+            r = saved;
+            la_press(&r, &scripts[LA_EAT_STAGGER], tick, first, 2);
+            la_press(&r, &scripts[LA_EAT_STAGGER], tick + 3, second, 3);
+            la_press(&r, &scripts[LA_EAT_STAGGER], tick + 6, again, 2);
+        }
     }
     if (f->veng_ok) {
         feasible[LA_VENG_NOW] = 1;
