@@ -50,7 +50,6 @@ int main(int argc, char** argv) {
     g_ablation.panic = 0.8; g_ablation.panic_hp = 25;
     observer_register_items();
     static OppFit fit;
-    static EatMixture mixture;
     static OppModel la_model;
     if (policy.kind == OURS_NET) {
         /* net SPLIT FIRST_SEED EPISODES CHECKPOINT HIDDEN LAYERS: sampled actions unless PROBE_HARD is set. */
@@ -61,11 +60,7 @@ int main(int argc, char** argv) {
     const char* fit_path = argc == 9 ? argv[5] : getenv("PROBE_FIT");
     const char* mix_path = argc == 9 ? argv[6] : getenv("PROBE_MIX");
     if (fit_path) {
-        FILE* f = fopen(fit_path, "rb"); assert(f && fread(&fit, sizeof(fit), 1, f) == 1); fclose(f);
-        fit.eat_action = ACT_EAT_WARNING;
-        f = fopen(mix_path, "rb"); assert(f && fread(&mixture, sizeof(mixture), 1, f) == 1); fclose(f);
-        g_eat_model.on = 1; g_eat_model.model = EAT_MIXTURE; g_eat_model.types = mixture.types;
-        memcpy(g_eat_model.pi, mixture.pi, sizeof(mixture.pi)); g_eat_model.logit = mixture.logit;
+        opp_load(fit_path, mix_path, &fit, &g_eat_model);
         if (argc == 9) { g_la_worlds = atoi(argv[7]); g_la_horizon = atoi(argv[8]); }
         la_model = (OppModel){MODEL_FIT, &fit};
         g_la_model = &la_model;

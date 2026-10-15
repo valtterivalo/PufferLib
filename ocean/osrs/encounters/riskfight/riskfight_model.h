@@ -125,6 +125,9 @@ typedef struct {
     int ticks_axe[2];
     int ticks_voidwaker[2];
     int ticks_maul[2];
+    /* Scripted opponent reaction lag in ticks (domain randomization): his actions are those of opp_lag ticks ago. */
+    int opp_lag;
+    int opp_ring[4][RF_HEADS];
 } RiskfightState;
 typedef struct {
     uint8_t equipment[NUM_GEAR_SLOTS];
@@ -160,11 +163,8 @@ static uint16_t riskfight_supply_code(OsrsConsumableKind kind, int doses) {
 
 static RiskfightLoadout RISKFIGHT_DEFAULT_LOADOUT;
 /* The bag and gear of the recorded live fights (tape 20261005T193654 KeengCr1mson): Voidwaker, ornate granite maul, anglerfish, karambwan, brews,
- * restores, a super combat, a Vengeance sack and a teleport; both sides carry it. */
-static const RiskfightLoadout RISKFIGHT_LIVE_LOADOUT = {
-    .equipment = {0, 46, 148, 255, 33, 115, 138, 150, 13, 149, 79},
-    .inventory = {216, 216, 199, 199, 149, 199, 199, 199, 149, 216, 199, 199, 216, 145, 216, 145, 0, 216, 216, 216, 203, 157, 216, 216, 216, 216, 211, 210},
-    .hitpoints = 121, .vengeance_sacks = 27};
+ * restores, a super combat, a Vengeance sack and a teleport; both sides carry it. Built at load from names, not item codes. */
+static RiskfightLoadout RISKFIGHT_LIVE_LOADOUT;
 
 __attribute__((constructor)) static void riskfight_build_default_loadout(void) {
     RiskfightLoadout loadout = {.hitpoints = 121, .vengeance_sacks = 100};
@@ -200,6 +200,33 @@ __attribute__((constructor)) static void riskfight_build_default_loadout(void) {
     loadout.inventory[slot++] = riskfight_supply_code(OSRS_CONSUMABLE_LOCATOR_ORB, 0);
     assert(slot == 27);
     RISKFIGHT_DEFAULT_LOADOUT = loadout;
+}
+
+__attribute__((constructor)) static void riskfight_build_live_loadout(void) {
+    RiskfightLoadout loadout = {.hitpoints = 121, .vengeance_sacks = 27};
+    for (int i = 0; i < NUM_GEAR_SLOTS; i++) loadout.equipment[i] = ITEM_NONE;
+    loadout.equipment[GEAR_SLOT_HEAD] = ITEM_HELM_NEITIZNOT;
+    loadout.equipment[GEAR_SLOT_CAPE] = ITEM_INFERNAL_CAPE;
+    loadout.equipment[GEAR_SLOT_NECK] = ITEM_AMULET_OF_STRENGTH;
+    loadout.equipment[GEAR_SLOT_WEAPON] = ITEM_VOIDWAKER;
+    loadout.equipment[GEAR_SLOT_SHIELD] = ITEM_AVERNIC_DEFENDER;
+    loadout.equipment[GEAR_SLOT_BODY] = ITEM_FIGHTER_TORSO;
+    loadout.equipment[GEAR_SLOT_LEGS] = ITEM_DRAGON_PLATELEGS;
+    loadout.equipment[GEAR_SLOT_HANDS] = ITEM_BARROWS_GLOVES;
+    loadout.equipment[GEAR_SLOT_FEET] = ITEM_DRAGON_BOOTS;
+    loadout.equipment[GEAR_SLOT_RING] = ITEM_RING_OF_RECOIL;
+    const struct { OsrsConsumableKind kind; int doses, count; } supplies[] = {
+        {OSRS_CONSUMABLE_ANGLERFISH, 0, 12}, {OSRS_CONSUMABLE_KARAMBWAN, 0, 7}, {OSRS_CONSUMABLE_BREW, 4, 2},
+        {OSRS_CONSUMABLE_SUPER_RESTORE, 4, 2}, {OSRS_CONSUMABLE_SUPER_COMBAT, 4, 1},
+        {OSRS_CONSUMABLE_TELEPORT, 0, 1}, {OSRS_CONSUMABLE_VENGEANCE_SACK, 0, 1},
+    };
+    int slot = 0;
+    for (size_t k = 0; k < sizeof(supplies) / sizeof(*supplies); k++)
+        for (int n = 0; n < supplies[k].count; n++)
+            loadout.inventory[slot++] = riskfight_supply_code(supplies[k].kind, supplies[k].doses);
+    loadout.inventory[slot++] = osrs_inventory_content_code_from_item(ITEM_GRANITE_MAUL_ORNATE);
+    assert(slot == 27);
+    RISKFIGHT_LIVE_LOADOUT = loadout;
 }
 
 static void riskfight_init_context(EncounterContext* context) {
