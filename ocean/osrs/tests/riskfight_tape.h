@@ -7,6 +7,7 @@
 #include <ctype.h>
 #include "../encounters/encounter_riskfight.h"
 #include "riskfight_observer_state.h"
+#include "../gearswapper/gs_stat_items.h"
 
 enum { TAPE_WORN = 13, TAPE_BAG = 28 };
 enum { SIDE_US = 'U', SIDE_HIM = 'O' };
@@ -367,13 +368,12 @@ static void tape_free(Tape* tape) {
     free(tape->ticks); free(tape->anims); free(tape->hits); free(tape->actions);
 }
 
-/** An id without an ITEM_DATABASE row is an explicit unknown: the raw id stays in the tape, the sim slot is ITEM_NONE until a stats-priced row is plugged in here
- * (osrs_item_priced_from_stats(raw)). Never an abort. */
+/** An id without an ITEM_DATABASE row is priced from its stats (gs_item_priced_from_stats, a stat row valid until osrs_stat_items_clear()); the raw id
+ * stays in the tape. An id with no stats row stays an explicit unknown: ITEM_NONE. Never an abort. */
 static uint8_t raw_id_to_item(int raw) {
     if (raw < 0) return ITEM_NONE;
-    int item = osrs_item_index_from_raw_id(raw);
-    if (item >= 0) return (uint8_t)item;
-    return ITEM_NONE;
+    int item = gs_item_priced_from_stats(raw, 0);
+    return item >= 0 ? (uint8_t)item : ITEM_NONE;
 }
 
 /** Inventory content code of a raw id; 0 (empty) for an explicit unknown, see tape_unknown_count. */

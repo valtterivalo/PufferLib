@@ -169,7 +169,8 @@ typedef enum {
     ITEM_NONE = 255
 } ItemIndex;
 
-static const Item ITEM_DATABASE[NUM_ITEMS] = {
+/* Mutable only past NUM_ITEMS: the OSRS_STAT_ITEM_SLOTS spare rows hold stat-priced items (osrs_stat_item_register). */
+static Item ITEM_DATABASE[NUM_ITEMS + OSRS_STAT_ITEM_SLOTS] = {
     [ITEM_HELM_NEITIZNOT] = {
         .item_id = 10828, .name = "Helm of neitiznot", .slot = SLOT_HEAD,
         .attack_speed = 0, .attack_range = 0,
@@ -1611,9 +1612,9 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
 
 };
 static_assert(
-    sizeof(ITEM_DATABASE) / sizeof(ITEM_DATABASE[0]) == NUM_ITEMS,
-    "item database row count must match ItemIndex");
-static_assert(NUM_ITEMS < ITEM_NONE,
+    sizeof(ITEM_DATABASE) / sizeof(ITEM_DATABASE[0]) == NUM_ITEMS + OSRS_STAT_ITEM_SLOTS,
+    "item database row count must match ItemIndex plus the stat-priced rows");
+static_assert(NUM_ITEMS + OSRS_STAT_ITEM_SLOTS < ITEM_NONE,
     "generated item indexes must remain distinct from ITEM_NONE");
 
 

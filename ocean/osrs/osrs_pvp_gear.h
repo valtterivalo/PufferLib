@@ -412,7 +412,7 @@ static inline void pvp_apply_equipment_plan(
 
 static inline AttackStyle get_slot_weapon_attack_style(Player* p) {
     uint8_t weapon = p->equipped[GEAR_SLOT_WEAPON];
-    if (weapon >= NUM_ITEMS) return ATTACK_STYLE_NONE;
+    if (!osrs_item_row_valid(weapon)) return ATTACK_STYLE_NONE;
     return (AttackStyle)get_item_attack_style(weapon);
 }
 

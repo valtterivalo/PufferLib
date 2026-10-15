@@ -2,6 +2,8 @@
 #define OSRS_ITEMS_H
 
 #include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <stddef.h>
 
@@ -64,7 +66,34 @@ typedef struct {
     uint32_t effect_mask;
 } Item;
 
+/* Rows after the fixed table hold items the sim has no hand-written row for, priced from their stats at run time (gearswapper/gs_stat_items.h
+ * fills them from the Java item table: bonuses, speed, style, two-handedness; no special attack, no effects). The table is rewritten only at a
+ * request boundary (osrs_stat_items_clear), never while worlds run. */
+#define OSRS_STAT_ITEM_SLOTS 80 /* NUM_ITEMS + slots must stay below ITEM_NONE (255) */
 #include "osrs_items_generated.h"
+
+static int osrs_stat_item_count;
+static uint8_t osrs_stat_item_style[OSRS_STAT_ITEM_SLOTS]; /* AttackStyle of a stat row: 1 melee, 2 ranged, 3 magic */
+
+static inline int osrs_item_row_valid(int item_index) {
+    return item_index >= 0 && item_index < NUM_ITEMS + osrs_stat_item_count;
+}
+
+static inline void osrs_stat_items_clear(void) { osrs_stat_item_count = 0; }
+
+/** Appends `row` as a stat-priced item and returns its index; an id already registered returns its row. Aborts when the table is full. */
+static inline int osrs_stat_item_register(const Item* row, int attack_style) {
+    for (int i = 0; i < osrs_stat_item_count; i++)
+        if (ITEM_DATABASE[NUM_ITEMS + i].item_id == row->item_id) return NUM_ITEMS + i;
+    if (osrs_stat_item_count == OSRS_STAT_ITEM_SLOTS) {
+        fprintf(stderr, "stat-priced item table full (%d): raw item %d\n", OSRS_STAT_ITEM_SLOTS, row->item_id);
+        abort();
+    }
+    int index = NUM_ITEMS + osrs_stat_item_count++;
+    ITEM_DATABASE[index] = *row;
+    osrs_stat_item_style[index - NUM_ITEMS] = (uint8_t)attack_style;
+    return index;
+}
 
 /* Equivalent combat gear variants. Locked cape stats: OSRS Wiki,
  * https://oldschool.runescape.wiki/w/Infernal_cape#Combat_stats .
@@ -91,7 +120,7 @@ static inline int osrs_item_index_from_raw_id(int raw) {
         OSRS_ITEM_RAW_GEAR_ALIAS_ROWS(OSRS_RAW_GEAR_ALIAS_CASE)
     }
 #undef OSRS_RAW_GEAR_ALIAS_CASE
-    for (int i = 0; i < NUM_ITEMS; i++)
+    for (int i = 0; i < NUM_ITEMS + osrs_stat_item_count; i++)
         if (ITEM_DATABASE[i].item_id == raw) return i;
     return -1;
 }
@@ -107,7 +136,7 @@ static inline uint16_t osrs_item_canonical_raw_id(uint16_t raw) {
 }
 
 static inline const Item* get_item(uint8_t item_index) {
-    if (item_index >= NUM_ITEMS) return NULL;
+    if (!osrs_item_row_valid(item_index)) return NULL;
     return &ITEM_DATABASE[item_index];
 }
 
@@ -166,12 +195,12 @@ static inline int get_item_attack_style(uint8_t item_index) {
         case ITEM_TUMEKENS_SHADOW:
             return 3;
         default:
-            return 0;
+            return item_index >= NUM_ITEMS && osrs_item_row_valid(item_index) ? osrs_stat_item_style[item_index - NUM_ITEMS] : 0;
     }
 }
 
 static inline int item_is_two_handed(uint8_t item_index) {
-    if (item_index >= NUM_ITEMS) return 0;
+    if (!osrs_item_row_valid(item_index)) return 0;
     return ITEM_DATABASE[item_index].slot == SLOT_WEAPON &&
            ITEM_DATABASE[item_index].two_handed;
 }
