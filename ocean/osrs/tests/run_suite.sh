@@ -34,7 +34,7 @@ fi
 CFLAGS="-std=gnu11 -O2 -I. -Isrc"
 [ -n "${RAYLIB_INC:-}" ] && CFLAGS="$CFLAGS -I$RAYLIB_INC"
 LDLIBS="-lm -lpthread"
-[ -n "${RAYLIB_LIB:-}" ] && LDLIBS="-L$RAYLIB_LIB -lraylib -lGL -lX11 -ldl -lrt $LDLIBS"
+[ -n "${RAYLIB_LIB:-}" ] && LDLIBS="-L$RAYLIB_LIB -Wl,-rpath,$RAYLIB_LIB -lraylib -lGL -lX11 -ldl -lrt $LDLIBS"
 export LDLIBS
 export CFLAGS
 
