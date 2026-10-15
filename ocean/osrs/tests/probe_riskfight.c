@@ -71,6 +71,7 @@ int main(int argc, char** argv) {
         (OppModel){MODEL_PROFILES, NULL, 0, RISKFIGHT_HUMAN_TRAIN_PROFILES};
     sim_init(&g_sim);
     if (getenv("PROBE_LIVE")) for (int i = 0; i < 2; i++) g_sim.context.loadout[i] = &RISKFIGHT_LIVE_LOADOUT;
+    riskfight_deployable = getenv("PROBE_DEPLOY") != NULL;
     g_step_hook = probe_hook;
     g_attack_first = getenv("PROBE_ATTACK_FIRST") != NULL;
     Tape tape = {0};

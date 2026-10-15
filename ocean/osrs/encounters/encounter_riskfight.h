@@ -45,6 +45,8 @@ static void riskfight_put_int(EncounterState* state, EncounterContext* context, 
         ctx->opponent = (RiskfightOpponent)value;
     } else if (strcmp(key, "self_play") == 0) {
         assert(value == 0 || value == 1); ctx->self_play = value;
+    } else if (strcmp(key, "deployable") == 0) {
+        assert(value == 0 || value == 1); riskfight_deployable = value;
     } else if (strcmp(key, "live_loadout") == 0) {
         assert(value == 0 || value == 1);
         for (int i = 0; i < 2; i++) ctx->loadout[i] = value ? &RISKFIGHT_LIVE_LOADOUT : NULL;

@@ -164,6 +164,15 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
         heads[RF_PRAYER][action] = p->current_prayer > 0;
     for (int action = 1; action < RF_ACTION_DIMS[RF_OVERHEAD]; action++)
         heads[RF_OVERHEAD][action] = p->current_prayer > 0;
+    if (riskfight_deployable) {
+        for (int head = 0; head < RF_HEADS; head++) {
+            int keep = head == RF_WEAPON || head == RF_SHIELD || head == RF_RING || (head >= RF_FOOD && head <= RF_COMBO) ||
+                head == RF_VENGEANCE || head == RF_SPECIAL || head == RF_PRIMARY;
+            if (!keep) memset(heads[head] + 1, 0, RF_ACTION_DIMS[head] - 1);
+        }
+        for (int action = 1; action < RF_ACTION_DIMS[RF_PRIMARY]; action++)
+            heads[RF_PRIMARY][action] = action == RF_ATTACK || action == RF_STOP;
+    }
 }
 
 /** First inventory slot (1-based, 0 when absent) per consumable kind and per item. */

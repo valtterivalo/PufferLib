@@ -161,6 +161,8 @@ static uint16_t riskfight_supply_code(OsrsConsumableKind kind, int doses) {
     return osrs_inventory_content_code_from_consumable(kind, (uint8_t)doses);
 }
 
+/* Restricts the action mask to what the plugin can click: no prayers, style, orb, armour swaps other than weapon/shield/ring, no movement or teleport. Set once at start-up. */
+static int riskfight_deployable;
 static RiskfightLoadout RISKFIGHT_DEFAULT_LOADOUT;
 /* The bag and gear of the recorded live fights (tape 20261005T193654 KeengCr1mson): Voidwaker, ornate granite maul, anglerfish, karambwan, brews,
  * restores, a super combat, a Vengeance sack and a teleport; both sides carry it. Built at load from names, not item codes. */

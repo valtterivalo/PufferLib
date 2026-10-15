@@ -57,6 +57,8 @@ void puf_init(Env* env, Dict* kwargs) {
     const char* keys[] = {"opponent_type", "self_play"};
     for (int i = 0; i < 2; i++) riskfight_put_int((EncounterState*)&env->state,
         (EncounterContext*)&env->context, keys[i], (int)dict_get(kwargs, keys[i]));
+    DictItem* deployable = dict_find(kwargs, "deployable");
+    if (deployable) riskfight_put_int((EncounterState*)&env->state, (EncounterContext*)&env->context, "deployable", (int)deployable->value);
     DictItem* live = dict_find(kwargs, "live_loadout");
     if (live) riskfight_put_int((EncounterState*)&env->state, (EncounterContext*)&env->context, "live_loadout", (int)live->value);
     const char* reward_keys[] = {"damage_reward_coeff", "teleport_penalty", "chance_reward_coeff"};
