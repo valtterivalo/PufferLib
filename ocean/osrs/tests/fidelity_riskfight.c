@@ -624,6 +624,14 @@ static int run_fight(Run* r, uint32_t seed, int exact, RiskfightState* state, Ri
             us->current_hitpoints = prev->hp;
             us->veng_active = prev->veng_us; us->veng_cooldown = prev->veng_cooldown_us; us->special_energy = prev->spec_us;
             him_p->veng_active = prev->veng_him; him_p->veng_cooldown = prev->veng_cooldown_him; him_p->special_energy = prev->spec_him;
+            /* His hit points are not recorded; where the last bar shown bounds them the replay keeps the sim inside that band (so he does not die before the recording says). */
+            if (prev->bar_now_ratio > 0 && prev->bar_now_scale > 1) {
+                OsrsHealthBarRange band = osrs_health_bar_range(prev->bar_now_ratio, prev->bar_now_scale, 99, 121);
+                if (band.kind == OSRS_HEALTH_BAR_KNOWN && him_p->current_hitpoints > 0) {
+                    if (him_p->current_hitpoints < band.lower) him_p->current_hitpoints = band.lower;
+                    if (him_p->current_hitpoints > band.upper) him_p->current_hitpoints = band.upper;
+                }
+            }
         }
         build_commands(r, x, state, cmds);
         HumanCommandQueue queues[2] = {{.items = cmds[0].items, .count = cmds[0].count}, {.items = cmds[1].items, .count = cmds[1].count}};
