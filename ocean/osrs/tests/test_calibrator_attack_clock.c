@@ -293,7 +293,7 @@ int main(int argc, char** argv) {
     assert(!request_snapshot.pending_pid_active);
     assert(memcmp(request_snapshot.pending, request.pending, sizeof(request.pending)) == 0);
     assert(memcmp(request_snapshot.pending_metadata, request.pending_metadata, sizeof(request.pending_metadata)) == 0);
-    assert(request.rules_known && request.rules.n == 3);
+    assert(request.rules.n == 3);
     assert(request.rules.command[0].kind == HUMAN_COMMAND_SPEC_TOGGLE && request.rules.command[0].spec_mode == HUMAN_SPEC_TOGGLE);
     assert(request.rules.op[1] == 1 && request.rules.op[2] == 2);
     assert(request.rules.fixed[0] == 1 && request.rules.fixed[1] == 1 && request.rules.fixed[2] == 1);
@@ -320,14 +320,6 @@ int main(int argc, char** argv) {
     assert(request_snapshot.pending_pid_active);
     assert(!memcmp(request_snapshot.pending_pid, request.pending_pid, sizeof(request.pending_pid)));
     assert(!memcmp(request_snapshot.pending_pid_metadata, request.pending_pid_metadata, sizeof(request.pending_pid_metadata)));
-    fclose(stream);
-    stream = tmpfile();
-    assert(stream);
-    rules.native_rules = &sim.ours;
-    la_dump_request(stream, &sim, &belief, 110, &feasible, (GsStakes){0}, &rules);
-    rewind(stream);
-    read_request(stream, &request);
-    assert(!request.rules_known && request.rules.n == 0);
     fclose(stream);
     printf("Hazard feature parity exact %d retained unknown %d source_frames %d\n", exact, unknown, recorded.hi - recorded.lo);
     puts("Calibrator attack-clock eligibility passed");

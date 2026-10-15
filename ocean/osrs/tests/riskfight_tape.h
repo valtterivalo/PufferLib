@@ -86,7 +86,7 @@ static double g_fm[4][12];
 static double g_dm_n[3], g_dm_lethal[3], g_dm_any[3], g_dm_dead[3], g_dm_ate[3], g_dm_sum[3];
 static double g_diag_n[4][4], g_diag_exp[4][4], g_diag_true[4][4];
 static double g_exp_counted[4], g_exp_predicted[4], g_exp_realized[4], g_exp_mean[4], g_exp_true[4];
-static uint32_t g_rollout_seed;
+static _Thread_local uint32_t g_rollout_seed; /* per rollout thread: the lookahead rolls worlds out in parallel */
 static int (*g_unseen_ticks)(const Tape*, int tick);
 
 static const TapeTick* tape_tick(const Tape* tape, int tick) {

@@ -82,7 +82,8 @@ typedef struct {
     X(24133, ITEM_INFERNAL_CAPE) \
     X(24224, ITEM_INFERNAL_CAPE) \
     X(28055, ITEM_DRAGON_BOOTS) \
-    X(28069, ITEM_FIGHTER_TORSO)
+    X(28069, ITEM_FIGHTER_TORSO) \
+    X(33335, ITEM_SOULREAPER_AXE)
 
 static inline int osrs_item_index_from_raw_id(int raw) {
 #define OSRS_RAW_GEAR_ALIAS_CASE(RAW, INDEX) case RAW: return INDEX;
@@ -139,6 +140,7 @@ static inline int get_item_attack_style(uint8_t item_index) {
         case ITEM_DRAGON_MACE_BH:
         case ITEM_VOIDWAKER:
         case ITEM_STATIUS_WARHAMMER:
+        case ITEM_SOULREAPER_AXE:
             return 1;
         case ITEM_RUNE_CROSSBOW:
         case ITEM_ARMADYL_CROSSBOW:

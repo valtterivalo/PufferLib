@@ -309,7 +309,7 @@ static void la_script_step(LaScript* script, RiskfightState* s, HumanInput* hi,
     int now, int* cursor, int* resume, int hit, int damage);
 
 static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
-    if (ours->lookahead && !ours->native_active && !ours->burst_pending && ours->pending_count == 0 && la_override(sim, ours, step, tick)) return;
+    /* The rules proxy only: the deployed lookahead policy never calls it (la_override decides in ours_act). */
     RiskfightState* s = &sim->state;
     Player* us = &s->env.players[0];
     static GsInfer view;
@@ -443,6 +443,15 @@ static void ours_act(Sim* sim, Ours* ours, HumanInput* hi, int step) {
         return;
     }
     int rival = inf->timed >= 0 && inf->c.ratio != 0;
+    if (ours->lookahead) {
+        /* Deployed policy: la_decide every tick around the committed remainder; no click without a macro, no rules proxy, no re-acquisition. */
+        if (rival && inf->c.forecast_available) la_override(sim, ours, step, tick);
+        if (ours->native_active) {
+            la_script_step(&ours->native_program, s, hi, tick + 1, &ours->native_cursor, &ours->native_resume, 0, 0);
+            ours->native_active = ours->native_cursor < ours->native_program.n;
+        }
+        return;
+    }
     if (!rival && (ours->burst_pending || ours->native_active)) {
         ours->native_active = 0;
         ours->native_cursor = ours->native_program.n;

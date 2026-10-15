@@ -922,53 +922,12 @@ static void la_dump_request(FILE* out, const Sim* sim, const LaBelief* b, int ti
             }
         }
     }
-    int kinds[LA_SCRIPT], args[LA_SCRIPT], rules_known = rules->native_rules == NULL;
-    for (int i = 0; rules_known && i < rules->n; i++) {
-        const HumanCommand* c = &rules->command[i];
-        args[i] = 0;
-        if (rules->production && rules->op[i]) {
-            int op = rules->op[i];
-            if (op < 1 || op > 10) { rules_known = 0; break; }
-            kinds[i] = op >= 8 ? op + 6 : op == 1 ? 2 : op == 2 ? 4 : op + 3;
-            args[i] = op >= 8 ? 0 : rules->arg[i];
-        } else switch (c->kind) {
-            case HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK:
-                kinds[i] = c->item_osrs_id ? 12 : 0;
-                args[i] = c->item_osrs_id ? c->item_osrs_id : c->inventory_slot;
-                break;
-            case HUMAN_COMMAND_ATTACK_NPC: kinds[i] = 1; rules_known = c->npc_slot == 1; break;
-            case HUMAN_COMMAND_VENGEANCE: kinds[i] = 3; break;
-            case HUMAN_COMMAND_SPEC_TOGGLE:
-                kinds[i] = c->spec_mode == HUMAN_SPEC_ENABLE ? 2 : c->spec_mode == HUMAN_SPEC_DISARM ? 4 : 13;
-                rules_known = c->spec_mode == HUMAN_SPEC_TOGGLE || c->spec_mode == HUMAN_SPEC_ENABLE || c->spec_mode == HUMAN_SPEC_DISARM;
-                break;
-            case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
-                kinds[i] = 11;
-                args[i] = c->item_osrs_id;
-                if (args[i] <= 0 && c->item_db_idx >= 0 && c->item_db_idx < NUM_ITEMS)
-                    args[i] = ITEM_DATABASE[c->item_db_idx].item_id;
-                rules_known = args[i] > 0;
-                break;
-            case HUMAN_COMMAND_UNEQUIP:
-                kinds[i] = 5;
-                args[i] = -1;
-                for (int slot = 0; slot < TAPE_WORN; slot++) if (WORN_TO_GEAR[slot] >= 0 && WORN_TO_GEAR[slot] == c->gear_slot) args[i] = slot;
-                rules_known = args[i] >= 0;
-                break;
-            default: rules_known = 0; break;
-        }
-    }
-    if (!rules_known) fprintf(out, "R UNKNOWN\n");
-    else {
-        fprintf(out, "R KNOWN %d\n", rules->n);
-        for (int i = 0; i < rules->n; i++) {
-            fprintf(out, "C %d %d %d %d", rules->due[i], kinds[i], args[i], rules->production ? rules->fixed[i] : 1);
-            if (kinds[i] >= 14) {
-                fprintf(out, " %d", rules->candidate_count[i]);
-                for (int c = 0; c < rules->candidate_count[i]; c++) fprintf(out, " %d", rules->candidates[i][c]);
-            }
-            fputc('\n', out);
-        }
+    if (rules->native_rules) { fprintf(stderr, "a closed-loop rules baseline has no wire form: protocol v2 only carries committed C records\n"); abort(); }
+    fprintf(out, "R KNOWN %d\n", rules->n);
+    for (int i = 0; i < rules->n; i++) {
+        fputc('C', out);
+        la_script_emit_record(out, rules, i);
+        fputc('\n', out);
     }
     fprintf(out, "END\n");
 }
