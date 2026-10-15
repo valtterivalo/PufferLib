@@ -213,7 +213,7 @@ static int rt_parse(FILE* in, Request* q, RtSeen* seen, int* new_fight, int* fig
 
 static void rt_respond(FILE* out, const Request* q, double micros, const RtRecord* records, int count, int obs_only) {
     if (obs_only) { fprintf(out, "O %d\n", q->id); return; }
-    fprintf(out, "R %d %.0f 2 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 A %d", q->id, micros, count);
+    fprintf(out, "R %d %.0f 2 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 A %d", q->id, micros, count); /* plan 2 "rl" has no estimate: feasible 0, worlds 0 (ENGINE_WIRE.md) */
     for (int i = 0; i < count; i++) fprintf(out, " %d %d %d %d", q->tick + 1, records[i].kind, records[i].arg, 0);
     fprintf(out, "\n");
 }

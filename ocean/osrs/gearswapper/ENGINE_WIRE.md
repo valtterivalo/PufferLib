@@ -21,7 +21,7 @@ Field-by-field grammar of the existing tags: header comment of `gs_lookahead_ser
   There is no `R UNKNOWN`: the plugin has no plan of its own.
 
 ## Response (one line)
-`R id server_micros best_index` then 18 x `feasible kill death value worlds` (macro order = READY names), then
+`R id server_micros best_index` then one `feasible kill death value worlds` block per READY name, in READY order (21 for the lookahead: indexes 0..17 are the spec, meal, Vengeance and alignment plans, 18..20 the upkeep drinks), then
 `A n` + n records, then optionally `PRIOR k` + k triples `side slot raw` (what the engine substituted a declared prior for; side 1 = opponent, slot 0 weapon, 1 shield, 2.. armor kit slots).
 then optionally `ASSUME n name...` = the declared priors the answer rests on (own-side observations the plugin could not complete on that tick, once per name on stderr too):
 `pending_empty` (`P UNKNOWN`: a launch, echo or proc it could not pin down, served as `P KNOWN 0`) and `own_attack_ready` (attack clock `UNKNOWN`, served as ready: `OBSERVED -1 -1`; the one thing it can get wrong is a cooldown still running).
@@ -35,6 +35,17 @@ Ties go to `continue`: another macro needs a strictly better value.
 barriers (ready, hit, spec launch, aligned ready), conditions (energy, hp), group boundaries and recipes. A search plan may use only timed clicks:
 `due=T kind=CLICK_SLOT arg=slot timing=1` means "have that click processed on tick T". The plugin maps a plan to ActionRun groups; a record whose `due` is later than tick+1 is held behind a tick gate
 (start the hand at tick due-1). Records execute in list order within a group; groups (kind 10) are sequential. `due` is never in the past of the request tick; ties keep list order.
+
+## Upkeep macros (18..20, appended after the original 18)
+`drink prayer`, `drink restore`, `drink combat`: `[click the carried potion's slot (kind 0), (Vengeance cast, kind 3), attack]`, timed through the motor model like the meals. They read only the O and G lines
+(prayer points, boosted levels, active prayers, potion timer, bag) and the F `castable` bit; no wire field was added. A plain slot click, not a family recipe (the recipe candidates are canonical sim ids, the bag holds client ids).
+No worth term was added to the value. The rollouts price the effects exactly inside the horizon (an empty prayer turns Piety, Protect and Smite off; a drained level lowers accuracy and max hit; magic under 94 blocks Vengeance; a drink restores at once), so
+a drink is a macro only in a state where its effect shows inside the horizon, and the value (kill and death over the rollout) decides whether it is worth the click:
+- `drink prayer`: a prayer potion (else a super restore) is carried and the prayers that are on drain the points to 0 within the horizon (drain counter taken at its fullest). An empty prayer is not a state it acts on: nothing is on, and the engine has no prayer click (PrayerKeeper's job).
+- `drink restore`: a super restore is carried and a level the weapon swings with, or defence, is below base, or magic is under 94 with a restore bringing it back and Vengeance otherwise castable (not up, off cooldown, a sack carried, F says not castable): then the plan casts Vengeance after the drink.
+- `drink combat`: a super combat is carried and attack/strength (melee weapon) or defence is below base plus the boost.
+All three need the potion timer 0 (O line) at the request. A drink locks hard food three ticks (the sim and the game agree) and adds no attack delay; the click only interrupts the attack, hence the closing attack record.
+A level the horizon does not see is not priced: stat drain that would only matter after it, and the three-tick food lock after a drink (the rollouts' baseline holds, it does not eat).
 
 ## Invariants
 - parse(emit(plan)) is the identity for every plan the engine emits; an echoed A is a valid R.
