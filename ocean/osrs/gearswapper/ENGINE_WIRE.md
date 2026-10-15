@@ -48,3 +48,24 @@ The plugin never knows which algorithm decides. The server is started with `--po
 - `OBS`: the policy needs the observation every game tick, not only decision ticks (RL history rings, search belief updates). The plugin then sends `LA id tick` ... `END` with an extra header token `OBS` (`LA id tick OBS`) on ticks it would not decide (committed run, unlanded clicks); the server updates its per-fight state and answers `O id`. No A records, no plan change.
 - Per-fight state (history rings, recurrent state) is owned by the server; it resets on a tick gap > 2 or on `FIGHT tick` (a header line before the first request of a fight, sent by the plugin when the tracked opponent changes).
 - Latency budget applies per request including OBS requests.
+
+## Release build (what the plugin launches)
+One command, from any directory inside the checkout, on the Mac (arm64, `-O2`, no sanitizers, asserts kept: a violated protocol invariant must abort with exit 2):
+
+    ocean/osrs/gearswapper/build_engine_release.sh [RELEASE_DIR]      # default ~/.light2/engine-release; OSRS_DATA=<dir> overrides ocean/osrs/data
+
+It runs exactly
+
+    cc -std=c11 -O2 -I. -o RELEASE_DIR/gs_lookahead_server ocean/osrs/tests/gs_lookahead_server.c -lm -lpthread
+    cc -std=c11 -O2 -I. -o RELEASE_DIR/gs_rl_server        ocean/osrs/tests/gs_rl_server.c        -lm -lpthread
+
+and lays out the files `EngineBridge` expects (`~/.light2/opponent-loop` is the live default; point the plugin at a release with `-D` properties for server, model, mixture and home):
+
+    RELEASE_DIR/gs_lookahead_server
+    RELEASE_DIR/gs_rl_server                                  (needs an RL checkpoint of the current observation size; none is shipped)
+    RELEASE_DIR/model.fit  eat_mixture.fit                    (opponent fit v2, copied from ocean/osrs/tests/fixtures)
+    RELEASE_DIR/home/ocean/osrs/data/wilderness.cmap          (the only data file the server reads; cwd of the child = RELEASE_DIR/home)
+    RELEASE_DIR/BUILD                                         (git sha, date, compiler, platform)
+
+The script finishes by starting the server once with stdin at EOF and requires its `READY` line. The server takes `MODEL.fit EAT_MIXTURE.fit [WORLDS HORIZON [THREADS]]` (defaults 512 worlds, horizon 15, 8 threads).
+The C suite is `ocean/osrs/tests/run_suite.sh [-j N] [-t SECONDS] [test_name ...]` (on Linux it needs `RAYLIB_INC`/`RAYLIB_LIB` for the render and model tests).

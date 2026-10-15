@@ -13,6 +13,9 @@ mkdir -p "$RELEASE/home/ocean/osrs/data"
 # Native arm64 (Mac) or whatever the host is; -O2, no sanitizers, no -DNDEBUG: a violated protocol invariant must stay a loud abort (exit 2).
 cc -std=c11 -O2 -I. -o "$RELEASE/gs_lookahead_server.new" ocean/osrs/tests/gs_lookahead_server.c -lm -lpthread
 mv "$RELEASE/gs_lookahead_server.new" "$RELEASE/gs_lookahead_server"
+# The RL policy server: same wire, run as `gs_rl_server CHECKPOINT HIDDEN LAYERS [sample|argmax]` with a checkpoint trained on this observation size.
+cc -std=c11 -O2 -I. -o "$RELEASE/gs_rl_server.new" ocean/osrs/tests/gs_rl_server.c -lm -lpthread
+mv "$RELEASE/gs_rl_server.new" "$RELEASE/gs_rl_server"
 cp ocean/osrs/tests/fixtures/model.fit ocean/osrs/tests/fixtures/eat_mixture.fit "$RELEASE/"
 cp "$DATA/wilderness.cmap" "$RELEASE/home/ocean/osrs/data/wilderness.cmap"
 echo "$(git rev-parse HEAD) $(date -u +%FT%TZ) $(cc --version | head -1) $(uname -sm)" > "$RELEASE/BUILD"
