@@ -99,6 +99,8 @@ typedef struct {
     const RiskfightProfile* opponent_profile;
     uint32_t script_seed[2];
     int consume_ticks[2];
+    uint8_t anim_carry[2]; /* the player showed an animation (swing, meal, cast or block) on the previous tick: a meal now may hide behind it */
+    uint8_t anim_now[2];   /* the same for the tick just stepped; anim_carry takes it at the start of the next step */
     int escaped[2];
     OsrsEscapeSupplies escape_supplies[2][2];
     int escape_tick[2];

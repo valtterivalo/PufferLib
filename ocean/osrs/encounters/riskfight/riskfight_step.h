@@ -301,6 +301,20 @@ static void riskfight_observe_attack_chance(void* context, const OsrsPvpAttackCh
     if (observer->next) observer->next(observer->next_context, event);
 }
 
+/* A meal's animation is visible to the other side with a probability that depends on what else the eater shows (fit_meal_visibility.py over our
+ * own meals, whose animations the other side sees exactly as we see his; Fact 7 has the spectator side of the same hiding): never on a swing tick
+ * (Fact 6), p(quiet: no animation the tick before, no hit landing) 0.91, p(an animation carried from the tick before) 0.48, p(a hit lands, its
+ * block animation competing) 0.56. The old rule hid a meal exactly on swing and hit ticks and showed every other one. */
+static const double RF_MEAL_VISIBLE_QUIET = 0.91, RF_MEAL_VISIBLE_CARRY = 0.48, RF_MEAL_VISIBLE_HIT = 0.56;
+
+static int riskfight_meal_visible(const RiskfightState* s, int agent) {
+    const Player* p = &s->env.players[agent];
+    if (!osrs_consumption_animation_visible(p->current_hitpoints, p->attack_style_this_tick, p->ate_food_this_tick,
+            p->ate_karambwan_this_tick, s->inventory_use[agent].potion_animation_tick_plus_one == s->env.tick)) return 0;
+    double visible = p->hit_landed_this_tick ? RF_MEAL_VISIBLE_HIT : s->anim_carry[agent] ? RF_MEAL_VISIBLE_CARRY : RF_MEAL_VISIBLE_QUIET;
+    return (riskfight_sample_hash(s->script_seed[agent], (uint32_t)s->env.tick, 91) % 1000000u) < (uint32_t)(visible * 1e6);
+}
+
 static void riskfight_actor_inputs(RiskfightState* s, RiskfightContext* ctx,
     int agent, const HumanCommandQueue* queue) {
     if (s->env.players[agent].current_hitpoints <= 0 || s->escaped[agent]) return;
@@ -339,6 +353,7 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
     for (int i = 0; i < 2; i++) {
         Player* p = &s->env.players[i];
         memset(s->visible[i].events[s->env.tick % RF_HISTORY_TICKS], 0, RF_EVENT_WIDTH * sizeof(float));
+        s->anim_carry[i] = s->anim_now[i];
         reset_tick_flags(p);
         p->hit_damage = 0;
         p->render_hit_count = 0;
@@ -426,6 +441,11 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
             }
             if (pvp_is_maul(weapon) && p->special_energy >= 50) s->maul_opp[i]++;
         }
+    }
+    for (int i = 0; i < 2; i++) {
+        const Player* p = &s->env.players[i];
+        s->anim_now[i] = p->attack_style_this_tick != ATTACK_STYLE_NONE || p->ate_food_this_tick || p->ate_karambwan_this_tick ||
+            s->inventory_use[i].potion_animation_tick_plus_one == s->env.tick + 1 || p->hit_landed_this_tick || p->cast_veng_this_tick;
     }
     s->env.tick++;
     pvp_tick_priority(&s->env);

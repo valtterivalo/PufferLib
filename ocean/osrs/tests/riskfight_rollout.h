@@ -193,11 +193,7 @@ static void queue_ours(Sim* sim, const Tape* tape, const OursPolicy* policy, int
     }
 }
 
-static int consumption_visible(const RiskfightState* s, int agent) {
-    const Player* p = &s->env.players[agent];
-    return osrs_consumption_animation_visible(p->current_hitpoints, p->attack_style_this_tick, p->ate_food_this_tick,
-        p->ate_karambwan_this_tick, s->inventory_use[agent].potion_animation_tick_plus_one == s->env.tick) && !p->hit_landed_this_tick;
-}
+static int consumption_visible(const RiskfightState* s, int agent) { return riskfight_meal_visible(s, agent); }
 
 #include "riskfight_lookahead.h"
 

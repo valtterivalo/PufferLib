@@ -130,6 +130,45 @@ static void test_hitsplat_types(void) {
     }
 }
 
+/* Our own meals are visible 0.91 of the time when nothing else is shown, 0.48 behind a carried animation, 0.56 with a hit landing, never on a swing
+ * tick (fit_meal_visibility.py); the old rule hid exactly the swing and hit ticks and showed every other meal. */
+static double visible_share(int swing, int hit, int carry) {
+    enum { N = 20000 };
+    int visible = 0;
+    for (int i = 0; i < N; i++) {
+        reset();
+        Player* p = &state.env.players[1];
+        p->ate_food_this_tick = 1;
+        p->attack_style_this_tick = swing ? ATTACK_STYLE_MELEE : ATTACK_STYLE_NONE;
+        p->hit_landed_this_tick = hit;
+        state.anim_carry[1] = (uint8_t)carry;
+        state.script_seed[1] = osrs_lowbias32((uint32_t)i + 1);
+        visible += riskfight_meal_visible(&state, 1);
+    }
+    return visible / (double)N;
+}
+
+static void test_meal_visibility(void) {
+    assert(fabs(visible_share(0, 0, 0) - RF_MEAL_VISIBLE_QUIET) < 0.015);
+    assert(fabs(visible_share(0, 0, 1) - RF_MEAL_VISIBLE_CARRY) < 0.015);
+    assert(fabs(visible_share(0, 1, 0) - RF_MEAL_VISIBLE_HIT) < 0.015);
+    assert(fabs(visible_share(0, 1, 1) - RF_MEAL_VISIBLE_HIT) < 0.015);
+    assert(visible_share(1, 0, 0) == 0);
+    reset();
+    reset_tick_flags(&state.env.players[1]);
+    state.env.players[1].hit_landed_this_tick = 0;
+    state.env.tick = 5; /* potion_animation_tick_plus_one == 0 means none, which equals tick 0 */
+    assert(!riskfight_meal_visible(&state, 1)); /* no meal this tick */
+    /* The carry flag follows the previous tick: a swing on tick T shows as carry on T+1 and not on T+2. */
+    reset();
+    state.env.players[1].attack_timer = state.env.players[1].attack_timer_uncapped = 0;
+    state.anim_now[1] = 1;
+    step(NULL, 0);
+    assert(state.anim_carry[1] == 1);
+    step(NULL, 0);
+    assert(state.anim_carry[1] == state.anim_now[1] && state.anim_now[1] == 0);
+}
+
 static uint32_t rng = 12345;
 static double uniform(void) { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return (rng >> 8) / 16777216.0; }
 static int compare(const void* a, const void* b) { double x = *(const double*)a, y = *(const double*)b; return (x > y) - (x < y); }
@@ -180,6 +219,7 @@ int main(void) {
     test_karambwan_not_at_t_plus_two();
     test_maul_costs();
     test_hitsplat_types();
+    test_meal_visibility();
     test_motor_clock();
     riskfight_destroy_context((EncounterContext*)&context);
     puts("Riskfight live-fact regressions passed");
