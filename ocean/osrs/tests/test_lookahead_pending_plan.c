@@ -531,7 +531,8 @@ static void test_source_actor_constraints_and_clone(void) {
     snapshot.loadout[0] = snapshot.loadout[1] = RISKFIGHT_DEFAULT_LOADOUT;
     uint32_t rng = 11;
     int hitpoints;
-    source_actor_snapshot(inf->health, 121, 0, &rng, &snapshot.actor[1], &hitpoints);
+    GsTargetReady clocks;
+    source_actor_snapshot(inf->health, 121, 0, &rng, &snapshot.actor[1], &hitpoints, &clocks);
     assert(snapshot.actor[1].hitpoints == 82 && snapshot.actor[1].attack == 99
         && snapshot.actor[1].strength == 99 && snapshot.actor[1].defence == 99);
     assert(riskfight_actor_combat_level(&snapshot.actor[1]) == 121);

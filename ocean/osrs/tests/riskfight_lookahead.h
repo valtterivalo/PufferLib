@@ -146,11 +146,13 @@ static void la_world(const RiskfightState* base, const Hist* base_hist, const La
     for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++)
         him->equipped[WORN_TO_GEAR[GS_ARMOR_KIT_SLOT[slot]]] = la_item_of(b->gear.armor[slot]).item;
     osrs_refresh_player_equipment(him);
+    GsTargetReady clocks = {0};
+    int source_clocks = b->health && b->health->has_started;
     if (b->health && b->health->has_started) {
         if (g_la_belief_hp_shift != 0) { fprintf(stderr, "source-conditioned actor does not permit unsupported HP shifts\n"); abort(); }
         RiskfightActorStats stats;
         int hitpoints;
-        source_actor_snapshot(b->health, b->combat_level, b->bar_ratio == 0, r, &stats, &hitpoints);
+        source_actor_snapshot(b->health, b->combat_level, b->bar_ratio == 0, r, &stats, &hitpoints, &clocks);
         riskfight_apply_actor_stats(him, &stats);
         him->current_hitpoints = hitpoints;
     } else {
@@ -193,8 +195,14 @@ static void la_world(const RiskfightState* base, const Hist* base_hist, const La
     him->attack_timer_uncapped = attack_timer;
     him->attack_timer = imax(-1, attack_timer);
     him->has_attack_timer = 1;
-    him->food_timer = la_food_timer(b->food_ready, tick);
-    him->potion_timer = him->karambwan_timer = 0;
+    if (source_clocks) {
+        him->food_timer = la_food_timer(clocks.hard, tick);
+        him->potion_timer = la_food_timer(clocks.potion, tick);
+        him->karambwan_timer = la_food_timer(clocks.fast, tick);
+    } else {
+        him->food_timer = la_food_timer(b->food_ready, tick);
+        him->potion_timer = him->karambwan_timer = 0;
+    }
     la_resupply(him, r);
     int carries_vw = b->seen_vw || la_uniform(r, 0, 1) < 0.65, carries_maul = b->seen_maul || la_uniform(r, 0, 1) < 0.51;
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
