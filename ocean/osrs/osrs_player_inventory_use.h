@@ -50,6 +50,10 @@ static inline void osrs_player_inventory_drink_effect(void* player, OsrsConsumab
             encounter_brew_drain_stats(p);
             p->ate_brew_this_tick = 1;
             break;
+        case OSRS_CONSUMABLE_PRAYER_RESTORE:
+            encounter_add_prayer_restore(p, osrs_prayer_potion_restore_amount(p->base_prayer));
+            encounter_cap_prayer_restore(p);
+            break;
         case OSRS_CONSUMABLE_SANFEW:
         case OSRS_CONSUMABLE_SUPER_RESTORE:
             if (kind == OSRS_CONSUMABLE_SANFEW) {

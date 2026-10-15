@@ -1746,16 +1746,18 @@ static inline void encounter_bastion_boost(Player* p) {
     if (p->current_defence > def_cap) p->current_defence = def_cap;
 }
 
+/* A boost potion raises a level by its amount up to base + amount and never lowers a level already above that (a brew's defence boost). */
+static inline void encounter_boost_level(int* current, int base, int boost) {
+    int cap = base + boost;
+    if (*current >= cap) return;
+    *current += boost;
+    if (*current > cap) *current = cap;
+}
+
 static inline void encounter_super_combat_boost(Player* p) {
-    int boost = osrs_super_combat_boost_amount(p->base_attack);
-    p->current_attack += boost;
-    if (p->current_attack > p->base_attack + boost) p->current_attack = p->base_attack + boost;
-    boost = osrs_super_combat_boost_amount(p->base_strength);
-    p->current_strength += boost;
-    if (p->current_strength > p->base_strength + boost) p->current_strength = p->base_strength + boost;
-    boost = osrs_super_combat_boost_amount(p->base_defence);
-    p->current_defence += boost;
-    if (p->current_defence > p->base_defence + boost) p->current_defence = p->base_defence + boost;
+    encounter_boost_level(&p->current_attack, p->base_attack, osrs_super_combat_boost_amount(p->base_attack));
+    encounter_boost_level(&p->current_strength, p->base_strength, osrs_super_combat_boost_amount(p->base_strength));
+    encounter_boost_level(&p->current_defence, p->base_defence, osrs_super_combat_boost_amount(p->base_defence));
 }
 
 static inline void encounter_ranging_boost(Player* p) {
