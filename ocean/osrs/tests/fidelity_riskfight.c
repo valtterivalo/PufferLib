@@ -530,6 +530,18 @@ static int run_fight(Run* r, uint32_t seed, int exact, RiskfightState* state, Ri
         if (empty >= 0) him->inventory[empty] = code;
         else if (replace >= 0) him->inventory[replace] = code;
     }
+    /* His ring of recoil: the recording decides (a recoil echo on us anywhere in the window means he wears one; damaging hits on him and none means he does not);
+     * without either the seed's prior draw stays. */
+    {
+        int recoil_echo = 0, damaged = 0;
+        for (int x = t0 + 1; x <= tape->hi; x++) {
+            const RecTick* rt = &r->rec->at[x - tape->lo];
+            for (int i = 0; i < rt->echo[0].n; i++) recoil_echo |= rt->echo[0].klass[i] == 'R';
+            for (int i = 0; i < rt->attack[1].n; i++) damaged |= rt->attack[1].amount[i] > 0;
+        }
+        if (recoil_echo) snap.loadout[1].equipment[GEAR_SLOT_RING] = ITEM_RING_OF_RECOIL;
+        else if (damaged) snap.loadout[1].equipment[GEAR_SLOT_RING] = ITEM_NONE;
+    }
     /* Pending hits launched on tick t0 that land on t0+1: no launch is in the window, so they are given (recorded damage) and left out of the statistics. */
     /* His hit points: drawn inside the first bar band the recording shows after the seed tick, then raised by the damage recorded on him up to that tick (no meal
      * is assumed in between). Without any bar in the window the calibrator's uniform prior stays. The PID before the first recorded pairing is the first known one. */
