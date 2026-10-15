@@ -26,13 +26,12 @@ static int weapon_kind_of_item(int item) {
         case ITEM_VOIDWAKER: return WK_VW;
         case ITEM_AGS: return WK_AGS;
         case ITEM_DRAGON_CLAWS: return WK_CLAWS;
-        case ITEM_DHAROKS_GREATAXE: return WK_AXE;
         case ITEM_GRANITE_MAUL: case ITEM_GRANITE_MAUL_ORNATE: return WK_MAUL;
         default: return WK_NONE;
     }
 }
 
-static const uint8_t WK_ITEM[WK_COUNT] = {ITEM_VOIDWAKER, ITEM_AGS, ITEM_DRAGON_CLAWS, ITEM_DHAROKS_GREATAXE, ITEM_GRANITE_MAUL_ORNATE};
+static const uint8_t WK_ITEM[WK_COUNT] = {ITEM_VOIDWAKER, ITEM_AGS, ITEM_DRAGON_CLAWS, ITEM_GRANITE_MAUL_ORNATE};
 
 static int raw_of_item_id(uint8_t item);
 
@@ -155,7 +154,6 @@ static void hist_step(Hist* h, RiskfightState* s, int tick, const StepEvents* e)
     if (e->maul) in.launch_class = WK_MAUL;
     else if (e->vw) in.launch_class = WK_VW;
     else if (spec && in.wield_class != WK_NONE && WK_COST[in.wield_class] > 0) in.launch_class = in.wield_class;
-    else if (e->swung && in.wield_class == WK_AXE) in.launch_class = WK_AXE;
     h->last_energy = him->special_energy;
     int kit[KIT_SLOTS];
     kit_of_equipped(us->equipped, kit);
@@ -182,7 +180,7 @@ static int roll(uint32_t seed, int tick, int salt, double p) {
     return (int)(riskfight_sample_hash(seed, (uint32_t)tick, (uint32_t)salt) % 1000000u) < (int)(p * 1000000);
 }
 
-/** The chance he swings weapon kind `k`'s spec (the axe: with the axe) on a swing, 0 where he cannot (no weapon in his kit, no energy). */
+/** The chance he swings weapon kind `k`'s spec on a swing, 0 where he cannot (no weapon in his kit, no energy). */
 static double spec_probability(const OppFit* fit, const OppIn* in, int k) {
     if (!in->has[k] || !in->energy_ok[k]) return 0;
     int seen = in->seen_mask >> k & 1;

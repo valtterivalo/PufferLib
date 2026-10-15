@@ -264,7 +264,6 @@ static void fit_series(const SpecDuel* d, int side, FitRow* out, Hist* final) {
         in.wield_class = wielded;
         SpecKind spec = x->spec;
         if (spec != SPEC_NONE && spec != SPEC_OTHER) in.launch_class = spec == SPEC_VW ? WK_VW : spec == SPEC_AGS ? WK_AGS : spec == SPEC_CLAWS ? WK_CLAWS : WK_MAUL;
-        else if (swing && wielded == WK_AXE) in.launch_class = WK_AXE;
         if (x->bar >= 0) hp_ratio = x->bar;
         if (y->bar >= 0) our_bar = y->bar;
         if (x->nhit > 0 && x->bar >= 0) { hit_ratio = x->bar; hit_scale = 30; meals = 0; }

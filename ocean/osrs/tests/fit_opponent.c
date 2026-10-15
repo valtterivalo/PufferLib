@@ -10,7 +10,7 @@
 #include "riskfight_observe.h"
 #include "riskfight_spectator.h"
 
-enum { MAX_ROWS = 500000, FOLDS = 8, NNZ = 10 };
+enum { MAX_ROWS = 500000, FOLDS = 8, NNZ = 14 };
 
 typedef struct { uint8_t n, idx[NNZ]; float val[NNZ]; } SparseX;
 
@@ -278,12 +278,12 @@ static void fit_all(const Hazard* hz, uint32_t groups, int constant, Model* m, d
 static Lab lab_eat(const FitRow* r, int arg) { (void)arg; return (Lab){r->in.since_eat >= LOCK_TICKS && !r->masked, r->ate}; }
 static Lab lab_swing(const FitRow* r, int arg) { (void)arg; return (Lab){r->in.ready && !r->ate && !r->swing_unknown, r->swung}; }
 static Lab lab_veng(const FitRow* r, int arg) { (void)arg; return (Lab){r->in.veng_ok, r->veng}; }
-/** arg = kind * 2 + seen: the swing is the spec of the weapon (the axe swing), among his swings, for a weapon he has (not) used before in the fight. The maul is not a swing. */
+/** arg = kind * 2 + seen: the swing is the spec of the weapon, among his swings, for a weapon he has (not) used before in the fight. The maul is not a swing. */
 static Lab lab_spec(const FitRow* r, int arg) {
     int k = arg >> 1, seen = arg & 1;
     if ((r->in.seen_mask >> k & 1) != seen) return (Lab){0, 0};
     if (k == WK_MAUL) return (Lab){r->in.energy_ok[k] && !r->ate, r->launch == WK_MAUL};
-    return (Lab){r->swung && !r->swing_unknown && r->launch != WK_MAUL && (k == WK_AXE || r->in.energy_ok[k]), r->launch == k};
+    return (Lab){r->swung && !r->swing_unknown && r->launch != WK_MAUL && r->in.energy_ok[k], r->launch == k};
 }
 
 static void feat_eat(const OppIn* in, int arg, uint32_t groups, double* x) { (void)arg; eat_x(in, groups, 0, x); }
@@ -594,6 +594,39 @@ int main(int argc, char** argv) {
     fprintf(rep, "\nEater types: %d, shares", mix.types);
     for (int k = 0; k < mix.types; k++) fprintf(rep, " %.3f", mix.pi[k]);
     fprintf(rep, "\n");
+    fprintf(rep, "\n## Fitted rates\n\nswing when ready, by ticks ready (1 = first tick he could swing; no meal in 3 ticks, not idle): ");
+    for (int age = 1; age <= 6; age++) {
+        OppIn in = {.ready_age = age, .since_eat = 99, .since_swing = 4};
+        double x[OPP_DIM];
+        swing_x(&in, fit.swing_groups, x);
+        fprintf(rep, "%d: %.3f  ", age, glm_p(&fit.swing, x));
+    }
+    fprintf(rep, "\n\nspec of a weapon on a swing by our hitpoints 35/50/70/100 (used before / first use):\n\n");
+    for (int k = 0; k < WK_COUNT; k++) {
+        fprintf(rep, "- %s:", WK_NAME[k]);
+        for (int seen = 1; seen >= 0; seen--) {
+            for (int hp = 0; hp < 4; hp++) {
+                static const int HPS[4] = {35, 50, 70, 100};
+                OppIn in = {.our_hp = HPS[hp], .seen_mask = seen << k};
+                double x[OPP_DIM];
+                spec_x(&in, k, seen, fit.spec_groups[k][seen], x);
+                fprintf(rep, " %.3f", glm_p(&fit.spec[k][seen], x));
+            }
+            fprintf(rep, seen ? " /" : "\n");
+        }
+    }
+    fprintf(rep, "\neat by his hitpoints bucket x ticks until our next swing (0/1/2/3+), warned, bar 14-24, type 0:\n\n");
+    for (int hp = 0; hp < 5; hp++) {
+        static const int HPS[5] = {25, 40, 55, 75, 95};
+        fprintf(rep, "- hp %d:", HPS[hp]);
+        for (int tau = 0; tau < 4; tau++) {
+            OppIn in = {.his_hp = HPS[hp], .his_bar_ratio = 20, .lag = 2, .warned = 1, .our_tau = tau == 3 ? 9 : tau, .our_spec = 1};
+            double x[OPP_DIM];
+            eat_x(&in, mix.groups, 0, x);
+            fprintf(rep, " %.3f", glm_p(&mix.glm, x));
+        }
+        fprintf(rep, "\n");
+    }
     snprintf(path, sizeof(path), "%s/model.fit", out_dir);
     opp_write(path, &fit, sizeof(fit));
     snprintf(path, sizeof(path), "%s/eat_mixture.fit", out_dir);

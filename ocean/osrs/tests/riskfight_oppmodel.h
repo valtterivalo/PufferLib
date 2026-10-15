@@ -15,11 +15,12 @@
 
 enum { OPP_DIM = 24, MAX_TYPES = 3, OPP_LAG_NONE = 99 };
 
-/** A spec weapon of his arsenal (or the axe he swaps to), by the hazard that models its use. MAUL is the instant spec: no swing. */
-typedef enum { WK_VW, WK_AGS, WK_CLAWS, WK_AXE, WK_MAUL, WK_COUNT } WeaponKind;
+/** A spec weapon of his arsenal, by the hazard that models its use. MAUL is the instant spec: no swing. (Dharok's greataxe is not here: a fight in which he wields it is a DHAROK-style
+ * fight, which this fit leaves out by definition, so a swap to it cannot be fitted on the OTHER style.) */
+typedef enum { WK_VW, WK_AGS, WK_CLAWS, WK_MAUL, WK_COUNT } WeaponKind;
 enum { WK_NONE = -1 };
-static const char* const WK_NAME[WK_COUNT] = {"Voidwaker spec", "AGS spec", "dragon claws spec", "Dharok's greataxe swing", "granite maul spec"};
-static const int WK_COST[WK_COUNT] = {50, 50, 50, 0, 50};
+static const char* const WK_NAME[WK_COUNT] = {"Voidwaker spec", "AGS spec", "dragon claws spec", "granite maul spec"};
+static const int WK_COST[WK_COUNT] = {50, 50, 50, 50};
 
 typedef struct { double w[OPP_DIM]; } Glm;
 
@@ -87,7 +88,7 @@ static void swing_x(const OppIn* in, uint32_t groups, double* x) {
 
 enum { SPG_HP = 1, SPG_BAND = 2, SPG_FOLLOW = 4, SPG_WIELD = 8 };
 
-/** The hazard that his next swing is weapon `k`'s spec (the axe: his swing with it): `seen` he has used it before in this fight. */
+/** The hazard that his next swing is weapon `k`'s spec: `seen` he has used it before in this fight. */
 static void spec_x(const OppIn* in, int k, int seen, uint32_t groups, double* x) {
     memset(x, 0, OPP_DIM * sizeof(double));
     x[0] = 1;
