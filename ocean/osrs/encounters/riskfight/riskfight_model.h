@@ -159,6 +159,10 @@ typedef struct {
     float chance_reward_coeff;
     float teleport_penalty;
     RiskfightMotor motor;
+    /* His actions from a fitted policy instead of the script: opp_hook fills them for the tick about to be processed, opp_after sees the tick that ran. */
+    void* opp_user;
+    void (*opp_hook)(void* user, const void* state, int* actions);
+    void (*opp_after)(void* user, void* state);
 } RiskfightContext;
 
 /** Stake-weighted outcome: a kill wins his gear (1), a death loses ours (price), both at once nets 1 - price, a timeout costs a death. */

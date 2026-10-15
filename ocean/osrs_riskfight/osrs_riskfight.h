@@ -12,6 +12,7 @@ typedef float obs_t;
 #include "../osrs/encounters/encounter_riskfight.h"
 #undef Log
 #include "riskfight_training.h"
+#include "riskfight_oppfit_bridge.h"
 #ifdef OSRS_PUFFER_RENDER
 #include "../osrs/osrs_puffer_render.h"
 #endif
@@ -34,6 +35,7 @@ struct Log {
     float combat_opp, maul_opp;
     float ticks_tentacle, ticks_axe, ticks_voidwaker, ticks_maul;
     float swings, aligned_swings, adjacent_swings, spec_swings, spec_aligned, spec_adjacent;
+    float oppfit_episodes;
     float stops, ready_idle, vengs, eats, stop_spec, veng_spec, stop_veng_spec, spec_delay, norm_delay;
 };
 struct Env {
@@ -46,6 +48,8 @@ struct Env {
     RiskfightContext context;
     RiskfightTraining training;
     RiskfightAlign align;
+    void* oppfit;
+    float oppfit_probability;
 #ifdef OSRS_PUFFER_RENDER
     void* renderer;
 #endif
@@ -57,6 +61,10 @@ void puf_init(Env* env, Dict* kwargs) {
     const char* keys[] = {"opponent_type", "self_play"};
     for (int i = 0; i < 2; i++) riskfight_put_int((EncounterState*)&env->state,
         (EncounterContext*)&env->context, keys[i], (int)dict_get(kwargs, keys[i]));
+    DictItem* oppfit_p = dict_find(kwargs, "oppfit_probability");
+    env->oppfit_probability = oppfit_p ? (float)oppfit_p->value : 0;
+    assert(env->oppfit_probability >= 0 && env->oppfit_probability <= 1);
+    env->oppfit = env->oppfit_probability > 0 ? oppfit_create() : NULL;
     DictItem* motor = dict_find(kwargs, "motor");
     if (motor) riskfight_put_int((EncounterState*)&env->state, (EncounterContext*)&env->context, "motor", (int)motor->value);
     DictItem* deployable = dict_find(kwargs, "deployable");
@@ -109,6 +117,15 @@ static void riskfight_native_observe(Env* env) {
 static void riskfight_native_reset(Env* env) {
     riskfight_align_reset(&env->align);
     riskfight_training_reset(&env->training, &env->state, &env->context, env->tag);
+    env->context.opp_hook = NULL;
+    env->context.opp_after = NULL;
+    env->context.opp_user = NULL;
+    if (env->oppfit && encounter_rand_float(&env->training.rng) < env->oppfit_probability) {
+        oppfit_reset(env->oppfit, &env->state, xorshift32(&env->training.rng) | 1);
+        env->context.opp_user = env->oppfit;
+        env->context.opp_hook = oppfit_actions;
+        env->context.opp_after = oppfit_after;
+    }
 }
 void puf_reset(Env* env) {
     riskfight_native_reset(env);
@@ -150,6 +167,7 @@ static void riskfight_native_log_round(Env* env) {
         env->log.stops += a->stops; env->log.ready_idle += a->ready_idle; env->log.vengs += a->vengs; env->log.eats += a->eats;
         env->log.stop_spec += a->stop_spec; env->log.veng_spec += a->veng_spec; env->log.stop_veng_spec += a->stop_veng_spec; env->log.spec_delay += a->spec_delay; env->log.norm_delay += a->norm_delay;
     }
+    env->log.oppfit_episodes += env->context.opp_hook != NULL;
     env->log.drink_brew += s->drink_brew[0];
     env->log.drink_sanfew += s->drink_sanfew[0];
     env->log.drink_combat += s->drink_combat[0];
@@ -236,6 +254,7 @@ void puf_render(Env* env) {
 #endif
 }
 void puf_close(Env* env) {
+    if (env->oppfit) oppfit_destroy(env->oppfit);
 #ifdef OSRS_PUFFER_RENDER
     if (env->renderer) osrs_puffer_render_destroy(env->renderer);
 #endif
@@ -249,6 +268,7 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "timeouts", log->timeouts);
     dict_set(out, "net_stake", log->net_stake);
     dict_set(out, "episode_length", log->episode_length);
+    dict_set(out, "oppfit_episodes", log->oppfit_episodes);
     dict_set(out, "swings", log->swings);
     dict_set(out, "aligned_swings", log->aligned_swings);
     dict_set(out, "adjacent_swings", log->adjacent_swings);

@@ -500,6 +500,12 @@ if [ "$MODE" = "native" ]; then
                 -DPLATFORM_DESKTOP \
                 -c ocean/osrs/osrs_puffer_render.c \
                 -o "$OSRS_RENDER_OBJECT"
+            if [ "$ENV" = "osrs_riskfight" ]; then
+                # The fitted opponent is C (gearswapper tables); the env sees only riskfight_oppfit_bridge.h.
+                $CC $LINK_OPT -std=c11 -Wno-unused-function -D_POSIX_C_SOURCE=200809L -I. \
+                    -c ocean/osrs_riskfight/riskfight_oppfit_bridge.c -o build/riskfight_oppfit_bridge.o
+                OSRS_RENDER_OBJECT="$OSRS_RENDER_OBJECT build/riskfight_oppfit_bridge.o"
+            fi
             ;;
     esac
     echo "Compiling $ENV_HEADER -> $TRAIN_BIN..."
