@@ -68,6 +68,12 @@ A level the horizon does not see is not priced: stat drain that would only matte
 - Any protocol violation by either side is fatal for the session: the server exits 2 with the failing assertion on stderr, the plugin throws.
 - Changing a kind number, a tag grammar or the response shape bumps `GS_ENGINE_WIRE_VERSION`; `READY` will carry it once the Java side parses it (today: macro-name check).
 
+## Anglerfish overheal lock (no wire field)
+An anglerfish overheals only for a player who was not attacked or damaged by the other player (any hitsplat, 0s included) in the last 16 ticks (wiki Anglerfish; the arena is always a PvP area); the sim keeps `Player.pvp_overheal_block` (ticks left, set to 16 when a hit lands, counted down every tick) and both sides obey it.
+A snapshot has no field for it: `riskfight_load_state` derives each side's lock from the other side's last swing (`seen_last_attack_ago`: a swing `s >= 1` ticks ago landed `s - 1` ticks ago, lock `17 - s`; a swing that has not landed is in the pending queue and sets the lock when the sim lands it).
+The O line's `his_last_ago` is the plugin's estimate from his attack timer and reads 0 while that timer is unseen, so the lock is exact only when the timer is; the RL policy never reads it (its observation and mask do not carry it), the lookahead's rollouts do.
+An exact source would be one more request line, `HU ago` = ticks since the last hitsplat on the local player from the tracked opponent (-1 when none), stamped by the hitsplat handler like `EngineSeen.hit`; not implemented.
+
 ## Swappable decision policy (wire v2.1, backward compatible)
 The plugin never knows which algorithm decides. The server is started with `--policy lookahead|search|rl:CKPT` (default lookahead; every policy answers with the SAME response shape):
 - `READY <warm_micros> <names;...> [POLICY <name>] [OBS]`. names always begin `continue;no new clicks;` and may end with the policy's own plan names. A policy that is not a macro lookahead lists a single plan name (e.g. `search`, `rl`) at index 2; its `kill death value worlds` block entries are the policy's own estimates for that plan (worlds = samples, 0 and feasible 0 when it has none), and `best_index` 2 means: replace the remainder with the A records. Ties keep favouring continue.
