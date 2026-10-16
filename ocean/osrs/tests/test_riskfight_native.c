@@ -130,11 +130,12 @@ int main(void) {
     puf_step(env);
     assert(terminals[0] == 1);
     assert(env->log.n == 2 && env->log.rounds == 4 && env->log.net_stake == (float)RF_TICKS_PER_HOUR / 20000);
-    /* A fight that nobody ends costs a death at the round limit and goes on to the next. */
+    /* A fight that nobody ends is a draw at the round limit (no stake, the session clock runs on) and goes on to the next. */
+    float stake_before = env->session_stake;
     actions[0][RF_PRIMARY] = 0;
     env->state.env.tick = RISKFIGHT_ROUND_TICKS - 1;
     puf_step(env);
-    assert(terminals[0] == 0 && terminals[1] == 0 && rewards[0] == -RF_REWARD_SCALE && rewards[1] == -RF_REWARD_SCALE);
+    assert(terminals[0] == 0 && terminals[1] == 0 && rewards[0] == 0 && rewards[1] == 0 && env->session_stake == stake_before);
     wait_out();
     assert(env->state.env.tick == 0 && env->log.timeouts == 1);
     puf_close(env); free(env);

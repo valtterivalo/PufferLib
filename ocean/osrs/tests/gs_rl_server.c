@@ -12,8 +12,11 @@
  *       attack's AttackStyle number (0 none, 1 melee, 2 ranged, 3 magic; 0 when swing_raw is -1); hit_landed: 1 when any hitsplat appeared on him this tick
  *       (damage or block, any source); hit_damage: the damage of those hitsplats added up; veng_cast: his Vengeance cast graphic this tick; consuming: a meal or
  *       potion animation of his this tick; bar_ratio/bar_scale: his health bar as displayed now (-1 -1 when hidden); veng_text: "Taste vengeance!" over his
- *       head this tick. swing_spec (optional, 0 when absent): 1 when that attack animation was a special attack animation (VW 11275, maul 1667, ...); it feeds the
- *       session observation's estimate of his special energy, which stays at 100 on a wire that does not send it.
+ *       head this tick. swing_spec (optional, 0 when absent): the COUNT of special attacks he launched on this tick (0, 1 or 2). A double granite maul plays one animation
+ *       (1667) and lands two hits in the same tick, so the count comes from his hits, not from the animation: it is 2 there. Every other special is 1, and a Behead
+ *       (10173) is 1 (no energy, but it spends his Soulreaper stacks). The count may arrive on the swing's tick or on the next one; either way it is charged to his
+ *       last swing. The server subtracts count x osrs_spec_cost(weapon) from the session observation's estimate of his special energy, which stays at 100 on a wire
+ *       that does not send it. A count with no swing of his in this tick or the one before is a malformed wire and aborts.
  * Every tick of a fight must reach the server with the full request body: the server owns the history ring, the consume estimates and the recurrent state.
  * A tick gap above 2 or a tick that does not advance starts a new fight. On a decision tick the response is `R id micros 2 <3 x "feasible kill death value worlds">
  * A n <n x "due kind arg timing">` (best_index 2 = replace the remainder with these clicks, due = tick + 1); on an `OBS` tick it is `O id`. UNAVAILABLE as in the
@@ -68,13 +71,21 @@ static void rt_observe(RiskfightVisibleOpponent* v, const RtSeen* seen, int n, c
         event[0] = 1;
         event[1] = item == ITEM_NONE ? 0 : item;
         event[2] = seen->swing_style;
-        riskfight_threat_note_swing(&v->threat, (uint8_t)item, n - 1, seen->swing_spec);
-        if (seen->swing_spec && item != ITEM_NONE) riskfight_spec_est_seen(v, osrs_spec_cost(item));
+        v->last_swing_item = item;
+        v->last_swing_tick = n - 1;
+        riskfight_threat_note_swing(&v->threat, (uint8_t)item, n - 1, seen->swing_spec > 0);
         /* The maul special is instant: the sim logs the hits but does not move his swing clock. */
         if (item == ITEM_NONE || !pvp_is_maul(item)) {
             v->last_attack_tick = n - 1;
             v->last_attack_speed = q->his_speed > 0 ? q->his_speed : item == ITEM_NONE ? 4 : ITEM_DATABASE[item].attack_speed;
         }
+    }
+    if (seen->swing_spec > 0) {
+        assert(seen->swing_spec <= 2 && n - 1 - v->last_swing_tick <= 1 && "special count with no swing of his in this tick or the one before");
+        if (seen->swing_raw == -1 && seen->swing_style == 0) /* the count came a tick after its swing: the Behead of a Soulreaper axe is read now */
+            riskfight_threat_note_swing(&v->threat, (uint8_t)v->last_swing_item, v->last_swing_tick, 1);
+        if (v->last_swing_item != ITEM_NONE)
+            for (int i = 0; i < seen->swing_spec; i++) riskfight_spec_est_seen(v, osrs_spec_cost(v->last_swing_item));
     }
     if (seen->hit_landed && seen->bar_scale == OSRS_PLAYER_HEALTH_BAR_SCALE && seen->bar_ratio >= 0) v->health_bar = seen->bar_ratio;
     if (seen->veng_cast) v->last_cast_tick = n;
@@ -242,6 +253,7 @@ static int rt_parse(FILE* in, Request* q, RtSeen* seen, int* new_fight, int* fig
             int fields = sscanf(line + 2, "%d %d %d %d %d %d %d %d %d %d", &seen->swing_raw, &seen->swing_style, &seen->hit_landed, &seen->hit_damage, &seen->veng_cast,
                 &seen->consuming, &seen->bar_ratio, &seen->bar_scale, &seen->veng_text, &seen->swing_spec);
             assert(fields == 9 || fields == 10);
+            assert(seen->swing_spec >= 0 && seen->swing_spec <= 2);
         } else {
             assert(header && "request must start with LA");
             used += (size_t)snprintf(text + used, sizeof(text) - used, "%s", line);

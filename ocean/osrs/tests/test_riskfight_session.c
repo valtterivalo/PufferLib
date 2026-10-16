@@ -382,7 +382,7 @@ static void test_session_observation(void) {
     float obs[RF_OBS_SIZE];
     riskfight_write_observation(&s, 0, obs);
     assert(obs[RF_SESSION_START] == 1 && obs[RF_SESSION_START + 1] == 1);
-    riskfight_special_used(&s, 1, ITEM_VOIDWAKER);
+    riskfight_special_used(&s, 1, ITEM_VOIDWAKER, 1);
     riskfight_write_observation(&s, 0, obs);
     assert(obs[RF_SESSION_START + 1] == 0.5f && s.specs_used[1] == 1);
     riskfight_write_observation(&s, 1, obs);

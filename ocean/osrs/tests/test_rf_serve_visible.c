@@ -21,6 +21,8 @@ int main(void) {
         mine.pending_consume_tick = -1;
         mine.health_bar = OSRS_PLAYER_HEALTH_BAR_SCALE;
         RiskfightVisibleOpponent start = s->visible[0];
+        int his_specs = 0;
+        mine.spec_est = 100;
         const RiskfightProfile* ours = &RISKFIGHT_HUMAN_PROFILES[seed % RISKFIGHT_HUMAN_TRAIN_PROFILES];
         const RiskfightProfile* his = &RISKFIGHT_HUMAN_PROFILES[(seed * 7 + 3) % RISKFIGHT_HUMAN_TRAIN_PROFILES];
         static Request q;
@@ -42,11 +44,14 @@ int main(void) {
                 s->inventory_use[1].potion_animation_tick_plus_one == s->env.tick);
             int swing = s->visible[0].events[(s->env.tick - 1) % RF_HISTORY_TICKS][0] > 0;
             if (swing) { seen.swing_raw = ITEM_DATABASE[him->equipped[GEAR_SLOT_WEAPON]].item_id; seen.swing_style = s->visible[0].events[(s->env.tick - 1) % RF_HISTORY_TICKS][2]; }
+            seen.swing_spec = s->specs_used[1] - his_specs; /* the count of his specials of the tick: 2 for a double maul */
+            his_specs = s->specs_used[1];
             rt_observe(&mine, &seen, s->env.tick, &q);
             ticks++;
             const RiskfightVisibleOpponent* sim_v = &s->visible[0];
             int bad = 0;
             bad |= mine.health_bar != sim_v->health_bar;
+            bad |= mine.spec_est != sim_v->spec_est;
             bad |= mine.last_attack_tick != sim_v->last_attack_tick;
             bad |= mine.last_cast_tick != sim_v->last_cast_tick || mine.last_proc_tick != sim_v->last_proc_tick;
             bad |= mine.consume_food_est != sim_v->consume_food_est || mine.consume_potion_est != sim_v->consume_potion_est ||

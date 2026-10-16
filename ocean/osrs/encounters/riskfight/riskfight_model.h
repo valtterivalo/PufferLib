@@ -107,6 +107,8 @@ typedef struct {
     RiskfightThreat threat; /* his weapons as the viewer knows them: the swings seen, the slots of riskfight_threat.h */
     /* His special energy as a player counts it: starts at 100, loses the cost of every special swing seen, regenerates 10 every 50 ticks once below 100. */
     int spec_est, spec_regen_phase;
+    /* The live server's memory of his last swing (weapon item index, fight tick): a special count can arrive a tick after its swing and is charged to that weapon. */
+    int last_swing_item, last_swing_tick;
 } RiskfightVisibleOpponent;
 
 typedef struct {
@@ -197,9 +199,9 @@ typedef struct {
     void (*opp_after)(void* user, void* state);
 } RiskfightContext;
 
-/** Stake-weighted outcome: a kill wins his gear (1), a death loses ours (price), both at once nets 1 - price, a timeout costs a death. */
+/** Stake-weighted outcome: a kill wins his gear (1), a death loses ours (price), both at once nets 1 - price; a timeout, an escape and a fight still going are draws (0). */
 static inline float riskfight_outcome_reward(RiskfightOutcome outcome, float price) {
-    return outcome == RISKFIGHT_KILL ? 1 : outcome == RISKFIGHT_DEATH || outcome == RISKFIGHT_TIMEOUT ? -price :
+    return outcome == RISKFIGHT_KILL ? 1 : outcome == RISKFIGHT_DEATH ? -price :
         outcome == RISKFIGHT_MUTUAL_DEATH ? 1 - price : 0;
 }
 

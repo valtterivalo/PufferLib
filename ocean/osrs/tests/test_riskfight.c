@@ -303,7 +303,7 @@ static void test_tick_order_and_boundaries(void) {
     assert(!state.env.episode_over);
     step(actions);
     assert(state.outcome[0] == RISKFIGHT_TIMEOUT && state.outcome[1] == RISKFIGHT_TIMEOUT);
-    assert(state.rewards[0] == -RF_REWARD_SCALE && state.rewards[1] == -RF_REWARD_SCALE && state.env.winner == -1);
+    assert(state.rewards[0] == 0 && state.rewards[1] == 0 && state.env.winner == -1); /* the round limit is a draw */
     for (int code = 0; code < OSRS_ITEM_CONTENT_COUNT; code++) {
         const OsrsItemContentMetadata* meta = osrs_item_content_metadata(code);
         assert(osrs_inventory_cell_obs_code_decode(osrs_inventory_cell_obs_code_encode(code)) == code);

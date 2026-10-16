@@ -9,7 +9,7 @@
  *             special energy for his) the pair meets again with probability RF_REMATCH_PROBABILITY, after M, each side with the supplies it had left (the one
  *             that teleported refilled). Otherwise (a rude teleport, or no rematch) he is gone and the next fight is with a new opponent: after the restock
  *             delay R when we left, which as measured (teleport to the next fight with a new opponent) already holds the search, after S when he left.
- *   a timeout he is gone, a new opponent after S, our supplies kept
+ *   a timeout a draw (reward 0, no price); he is gone, a new opponent after S, our supplies kept, the session clock runs on
  * Both seats follow these rules (a second agent's teleport is as rude as ours); only the clock is ours, as the session is seat 0's.
  * Supplies are everything in the inventory, the worn gear, boosted levels, special energy (regenerating over the time passed) and Vengeance. Hitpoints
  * persist as what the player eats back during the wait (riskfight_idle_eat), at the cost of the food. */

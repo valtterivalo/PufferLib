@@ -26,15 +26,16 @@ static void riskfight_record_attack(RiskfightState* s, int agent, int hits, int 
         visible->last_attack_speed = get_slot_gear_bonuses(p)->attack_speed;
     }
 }
-/* A special attack of `agent` with `weapon`: counted, and seen by the other side, whose estimate of his special energy pays the cost. */
-static void riskfight_special_used(RiskfightState* s, int agent, int weapon) {
-    s->specs_used[agent]++;
-    riskfight_spec_est_seen(&s->visible[1 - agent], osrs_spec_cost(weapon));
+/* `count` special attacks of `agent` with `weapon` this tick: counted, and seen by the other side, whose estimate of his special energy pays the cost of each.
+ * A double granite maul is one animation and two hits, so two specials; every other special is one (a Behead costs nothing and still counts). */
+static void riskfight_special_used(RiskfightState* s, int agent, int weapon, int count) {
+    s->specs_used[agent] += count;
+    for (int i = 0; i < count; i++) riskfight_spec_est_seen(&s->visible[1 - agent], osrs_spec_cost(weapon));
 }
 static void riskfight_count_maul_spec(RiskfightState* s, int agent, int hits) {
     if (hits <= 0) return;
     s->spec_maul[agent]++;
-    riskfight_special_used(s, agent, s->env.players[agent].equipped[GEAR_SLOT_WEAPON]);
+    riskfight_special_used(s, agent, s->env.players[agent].equipped[GEAR_SLOT_WEAPON], hits);
 }
 
 static void riskfight_attack(RiskfightState* s, RiskfightContext* ctx, int agent) {
@@ -61,7 +62,7 @@ static void riskfight_attack(RiskfightState* s, RiskfightContext* ctx, int agent
             s->env.tick, agent, 1 - agent);
         abort();
     }
-    if (special) riskfight_special_used(s, agent, weapon);
+    if (special) riskfight_special_used(s, agent, weapon, 1);
     if (special && weapon == ITEM_VOIDWAKER) s->spec_voidwaker[agent]++;
     perform_attack(&s->env, agent, 1 - agent, style, special, 0, distance);
     riskfight_record_attack(s, agent, 1, 0);
