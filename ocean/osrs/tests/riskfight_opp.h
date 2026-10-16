@@ -16,6 +16,8 @@ typedef struct {
     /* Spec weapons he has used in this fight (bit per WeaponKind), the kind of the weapon of his last swing, how many of his last swings came on the first tick he could,
      * and his spec energy as the sim last read it. */
     int seen_mask, wield_class, on_time_streak, last_energy;
+    /* The first damage on him that no meal of his has answered since, and the damage taken since (it takes his reaction a few ticks to arrive). */
+    int unanswered_since, unanswered_damage;
 } Hist;
 
 static int lag_of(int step_tick, int anchor) { return anchor == WARNING_NONE ? LAG_NONE : step_tick - anchor; }
@@ -70,7 +72,7 @@ typedef struct {
 
 static Hist hist_start(void) {
     return (Hist){.big_hit_tick = WARNING_NONE, .since_eat = 99, .since_vw_spec = 99, .since_maul_spec = 99, .warning = warning_start(), .last_swing_tick = -100,
-        .wield_class = WK_NONE, .last_energy = 100};
+        .wield_class = WK_NONE, .last_energy = 100, .unanswered_since = WARNING_NONE};
 }
 
 /** Moves the history of a fighter one tick on. `ate` is his own knowledge of his meals, `ate_visible` the 829 the viewer saw. */
@@ -86,6 +88,12 @@ static void hist_update(Hist* h, int tick, const HistInput* in) {
     if (in->launch_class != WK_NONE) h->seen_mask |= 1 << in->launch_class;
     h->ready_age = in->ready ? h->ready_age + 1 : 0;
     if (in->damage >= BIG_HIT_DAMAGE) h->big_hit_tick = tick;
+    /* A meal heals before the damage landing on its tick (inputs resolve before incoming hits), so the damage of that tick starts a new unanswered run. */
+    if (in->ate) { h->unanswered_since = WARNING_NONE; h->unanswered_damage = 0; }
+    if (in->damage > 0) {
+        if (h->unanswered_since == WARNING_NONE) h->unanswered_since = tick;
+        h->unanswered_damage += in->damage;
+    }
     if (in->ate_visible) warning_ate(&h->warning, tick);
     if (in->animated) warning_animated(&h->warning, tick);
     if (in->hits) warning_hitsplat(&h->warning);
@@ -131,6 +139,7 @@ static OppIn opp_inputs(const RiskfightState* s, const Hist* h, int tick) {
         .our_spec = h->warning.spec_wielded_since != WARNING_NONE, .our_veng = us->veng_active,
         .seen_mask = h->seen_mask, .wield_class = h->wield_class,
         .veng_ok = !him->veng_active && him->veng_cooldown <= 0,
+        .dmg_lag = lag_of(tick, h->unanswered_since), .dmg_size = h->unanswered_damage,
     };
     for (int k = 0; k < WK_COUNT; k++) {
         in.energy_ok[k] = him->special_energy >= WK_COST[k];

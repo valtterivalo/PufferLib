@@ -13,7 +13,7 @@
  * of what he did. The fit (fit_opponent.c) builds an OppIn from a recording and the sim builds one from its state, through the
  * same feature functions, so a tick of a recording and a tick of a rollout are scored by the same arithmetic. */
 
-enum { OPP_DIM = 24, MAX_TYPES = 3, OPP_LAG_NONE = 99 };
+enum { OPP_DIM = 40, MAX_TYPES = 3, OPP_LAG_NONE = 99 };
 
 /** A spec weapon of his arsenal, by the hazard that models its use. MAUL is the instant spec: no swing. (Dharok's greataxe is not here: a fight in which he wields it is a DHAROK-style
  * fight, which this fit leaves out by definition, so a swap to it cannot be fitted on the OTHER style.) */
@@ -33,6 +33,7 @@ typedef struct {
     int our_tau, our_spec, our_veng;
     int seen_mask, wield_class;
     int energy_ok[WK_COUNT], has[WK_COUNT], veng_ok;
+    int dmg_lag, dmg_size; /* ticks since the first damage on him that no meal of his has answered (OPP_LAG_NONE: none), and the damage since */
 } OppIn;
 
 static double sigmoid(double z) { return 1.0 / (1.0 + exp(-z)); }
@@ -44,7 +45,16 @@ static int opp_imax(int a, int b) { return a > b ? a : b; }
 /* ---------- eat ---------- */
 
 /** Feature groups of the eat hazard beyond its base (his bar band, lag since the warning, warned): the rest of the layout is fixed. */
-enum { EG_HP = 1, EG_TYPE = 2, EG_TAU = 4, EG_SPEC = 8, EG_VENG = 16, EG_LOW = 32 };
+enum { EG_HP = 1, EG_TYPE = 2, EG_TAU = 4, EG_SPEC = 8, EG_VENG = 16, EG_LOW = 32, EG_DMG = 64, EG_DMGHP = 128 };
+
+/** Ticks since the first damage on him that no meal has answered: 1 the tick after it landed (the earliest he can eat on it), 2, 3, 4-6; 0 none or older. */
+static int opp_dmg_bin(int dmg_lag) { return dmg_lag < 1 || dmg_lag >= OPP_LAG_NONE ? 0 : dmg_lag <= 3 ? dmg_lag : dmg_lag <= 6 ? 4 : 0; }
+/** What the unanswered damage took of the hitpoints he had before it: under 20 percent 0, 20-40 percent 1, more 2. */
+static int opp_dmg_size_bin(int dmg_size, int his_hp) {
+    if (dmg_size <= 0) return 0;
+    double share = (double)dmg_size / (his_hp + dmg_size);
+    return share < 0.2 ? 0 : share < 0.4 ? 1 : 2;
+}
 
 static int opp_lag_bin(int lag) { return lag < 1 || lag >= OPP_LAG_NONE ? 0 : lag == 1 ? 1 : lag == 2 ? 2 : lag == 3 ? 3 : lag <= 8 ? 4 : 0; }
 static int opp_band4(int bar_ratio) { return bar_ratio <= 8 ? 0 : bar_ratio <= 13 ? 1 : bar_ratio <= 24 ? 2 : 3; }
@@ -67,6 +77,16 @@ static void eat_x(const OppIn* in, uint32_t groups, int type, double* x) {
     if (groups & EG_SPEC) { x[19] = in->our_spec; x[20] = in->our_spec && soon; }
     if (groups & EG_VENG) x[21] = in->our_veng;
     if ((groups & EG_LOW) && soon && in->his_hp <= 60) x[22] = 1;
+    int dl = opp_dmg_bin(in->dmg_lag);
+    if ((groups & EG_DMG) && dl) {
+        x[24 + dl - 1] = 1;
+        int size = opp_dmg_size_bin(in->dmg_size, in->his_hp);
+        if (size) x[28 + size - 1] = 1;
+    }
+    if ((groups & EG_DMGHP) && dl) {
+        if (in->his_hp <= 60) x[31 + dl - 1] = 1;
+        if (in->warned) x[35 + dl - 1] = 1;
+    }
 }
 
 /* ---------- swing cadence ---------- */
@@ -111,7 +131,7 @@ static void veng_x(const OppIn* in, uint32_t groups, double* x) {
 
 /* ---------- the model ---------- */
 
-enum { OPP_MAGIC = 0x4f505032, OPP_VERSION = 2 };
+enum { OPP_MAGIC = 0x4f505032, OPP_VERSION = 3 };
 
 /** The fitted policy besides the eat hazard (the eat hazard is its own file, a mixture over eater types). */
 typedef struct {

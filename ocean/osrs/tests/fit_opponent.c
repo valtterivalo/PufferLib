@@ -9,8 +9,9 @@
 #define _POSIX_C_SOURCE 200809L
 #include "riskfight_observe.h"
 #include "riskfight_spectator.h"
+#include <sys/stat.h>
 
-enum { MAX_ROWS = 500000, FOLDS = 8, NNZ = 14 };
+enum { MAX_ROWS = 500000, FOLDS = 8, NNZ = 20 };
 
 typedef struct { uint8_t n, idx[NNZ]; float val[NNZ]; } SparseX;
 
@@ -74,14 +75,19 @@ typedef struct {
     void (*feat)(const OppIn*, int arg, uint32_t groups, double* x);
     int arg, samples;
     uint32_t base;              /* the groups of the structure of the Oct 8 deployment */
-    uint32_t extra[6];          /* groups tried on top of it, greedily */
+    uint32_t extra[8];          /* groups tried on top of it, greedily */
     int mixture;                /* eater types fitted by EM */
+    int visible;                /* the label is a meal animation the other side saw: the hazard is the rate of meals, and a meal shows with the row's vis (fit by EM over the unseen ones) */
 } Hazard;
 
-typedef struct { SparseX x; uint8_t y, fold, style, clean, source; int pf; float weight; } Obs;
+typedef struct { SparseX x; uint8_t y, fold, style, clean, source; int pf; float weight, vis; } Obs;
 
 static Obs* g_obs;
 static int g_obs_count;
+/** Whether the likelihood of a label reads it as a meal that showed with chance vis (fits) or as the rate itself (v2's reading, and the scores of v2). */
+static int g_use_vis;
+/** OPP_EAT_GROUPS=mask pins the eat hazard's feature groups (an ablation: no greedy selection), -1 selects them; OPP_EAT_SHOWN_RATE=1 fits the labels as v2 did. */
+static int g_force_groups = -1;
 
 static void build(const Hazard* hz, uint32_t groups, int constant) {
     g_obs_count = 0;
@@ -103,6 +109,7 @@ static void build(const Hazard* hz, uint32_t groups, int constant) {
             o->source = (uint8_t)r->source;
             o->pf = j * g_fights + g_fight[i];
             o->weight = 1.0f / hz->samples;
+            o->vis = hz->visible ? (float)r->vis : 1.0f;
         }
 }
 
@@ -113,7 +120,7 @@ static double clipp(double p) { return p < 1e-6 ? 1e-6 : p > 1 - 1e-6 ? 1 - 1e-6
 static double obs_p(const Model* m, const Obs* o, int type) {
     double z = sparse_z(&m->g, &o->x);
     if (type > 0) z += m->g.w[13 + type];
-    return sigmoid(z);
+    return g_use_vis ? o->vis * sigmoid(z) : sigmoid(z);
 }
 
 static void solve(double a[OPP_DIM][OPP_DIM + 1]) {
@@ -146,7 +153,10 @@ static void newton(Glm* g, const int* sel, const double* wt, const uint8_t* type
             if (type && type[s] > 0) { assert(x.n < NNZ); x.idx[x.n] = (uint8_t)(13 + type[s]); x.val[x.n++] = 1; }
             double z = 0;
             for (int a = 0; a < x.n; a++) z += g->w[x.idx[a]] * x.val[a];
-            double p = sigmoid(z), r = wt[s] * (o->y - p), v = wt[s] * p * (1 - p);
+            double p = sigmoid(z);
+            /* A label of no meal may hide one that did not show: its expected target is the posterior chance of a meal given it did not show (E step of the EM). */
+            double target = o->y ? 1.0 : g_use_vis ? p * (1 - o->vis) / (1 - o->vis * p) : 0.0;
+            double r = wt[s] * (target - p), v = wt[s] * p * (1 - p);
             for (int a = 0; a < x.n; a++) {
                 grad[x.idx[a]] += r * x.val[a];
                 for (int b = 0; b < x.n; b++) h[x.idx[a]][x.idx[b]] += v * x.val[a] * x.val[b];
@@ -173,7 +183,7 @@ static void fit_model(Model* m, const int* sel, int n, int mixture, int types) {
     m->types = mixture ? types : 1;
     double* wt = malloc((size_t)n * (size_t)m->types * sizeof(double));
     for (int s = 0; s < n; s++) wt[s] = g_obs[sel[s]].weight;
-    newton(&m->g, sel, wt, NULL, n, 0, 30);
+    newton(&m->g, sel, wt, NULL, n, 0, g_use_vis ? 150 : 30);
     if (!mixture) { free(wt); return; }
     for (int k = 0; k < types; k++) m->pi[k] = 1.0 / types;
     if (types > 1) m->g.w[14] = 0.8;
@@ -210,7 +220,7 @@ static void fit_model(Model* m, const int* sel, int n, int mixture, int types) {
             if (s == 0 || g_obs[sel[s]].pf != g_obs[sel[s - 1]].pf) pf++;
             for (int k = 0; k < types; k++) { esel[e] = sel[s]; ewt[e] = g_obs[sel[s]].weight * post[pf * MAX_TYPES + k]; etype[e++] = (uint8_t)k; }
         }
-        newton(&m->g, esel, ewt, etype, e, 1, 4);
+        newton(&m->g, esel, ewt, etype, e, 1, g_use_vis ? 12 : 4);
     }
     free(wt); free(post); free(esel); free(ewt); free(etype);
 }
@@ -248,8 +258,9 @@ static void score_obs(const Model* m, int fold, Cv* cv, int only_clean) {
 
 static int has_events(void) { double y = 0; for (int i = 0; i < g_obs_count; i++) if (g_obs[i].style == 0) y += g_obs[i].y; return y > 0; }
 
-/** Each fold scored under the fit of the others (the rows of the OTHER style only), the DHAROK rows under the fit of their fold. */
-static void cv_run(const Hazard* hz, uint32_t groups, int constant, Cv* cv) {
+/** Each fold scored under the fit of the others (the rows of the OTHER style only), the DHAROK rows under the fit of their fold. The fit reads the labels as meals that
+ * showed with the row's vis if `fit_vis`, the score reads the model's rate that way if `score_vis`. */
+static void cv_run_as(const Hazard* hz, uint32_t groups, int constant, int fit_vis, int score_vis, Cv* cv) {
     build(hz, groups, constant);
     memset(cv, 0, sizeof(*cv));
     int* sel = malloc((size_t)g_obs_count * sizeof(int));
@@ -257,11 +268,16 @@ static void cv_run(const Hazard* hz, uint32_t groups, int constant, Cv* cv) {
         int n = 0;
         for (int i = 0; i < g_obs_count; i++) if (g_obs[i].fold != f && g_obs[i].style == 0) sel[n++] = i;
         Model m;
+        g_use_vis = fit_vis;
         fit_model(&m, sel, n, hz->mixture && !constant && (groups & EG_TYPE), 2);
+        g_use_vis = score_vis;
         score_obs(&m, f, cv, 0);
     }
+    g_use_vis = 0;
     free(sel);
 }
+
+static void cv_run(const Hazard* hz, uint32_t groups, int constant, Cv* cv) { cv_run_as(hz, groups, constant, hz->visible, hz->visible, cv); }
 
 static void fit_all(const Hazard* hz, uint32_t groups, int constant, Model* m, double* events, double* opportunities) {
     build(hz, groups, constant);
@@ -269,7 +285,9 @@ static void fit_all(const Hazard* hz, uint32_t groups, int constant, Model* m, d
     int n = 0;
     *events = *opportunities = 0;
     for (int i = 0; i < g_obs_count; i++) if (g_obs[i].style == 0) { sel[n++] = i; *events += g_obs[i].y * g_obs[i].weight; *opportunities += g_obs[i].weight; }
+    g_use_vis = hz->visible;
     fit_model(m, sel, n, hz->mixture && !constant && (groups & EG_TYPE), 2);
+    g_use_vis = 0;
     free(sel);
 }
 
@@ -298,7 +316,7 @@ static char g_hz_name[HZ_COUNT][64];
 static int g_has_old[HZ_COUNT];
 
 static void define_hazards(void) {
-    g_hz[HZ_EAT] = (Hazard){"eat", lab_eat, feat_eat, 0, FIT_SAMPLES, EG_HP | EG_TYPE, {EG_TAU, EG_SPEC, EG_VENG, EG_LOW}, 1};
+    g_hz[HZ_EAT] = (Hazard){"eat", lab_eat, feat_eat, 0, FIT_SAMPLES, EG_HP | EG_TYPE, {EG_TAU, EG_SPEC, EG_VENG, EG_LOW, EG_DMG, EG_DMGHP}, 1, 1};
     g_hz[HZ_SWING] = (Hazard){"swing when ready", lab_swing, feat_swing, 0, 1, 0, {SW_STREAK, SW_IDLE}, 0};
     g_hz[HZ_VENG] = (Hazard){"Vengeance cast", lab_veng, feat_veng, 0, 1, 0, {VG_OURS}, 0};
     g_has_old[HZ_EAT] = g_has_old[HZ_SWING] = g_has_old[HZ_VENG] = 1;
@@ -327,7 +345,7 @@ typedef struct {
 static const char* group_names(int hazard, uint32_t g, char* out) {
     out[0] = 0;
     if (hazard == HZ_EAT) {
-        if (g & EG_HP) strcat(out, "hp "); if (g & EG_TYPE) strcat(out, "type "); if (g & EG_TAU) strcat(out, "our-timer ");
+        if (g & EG_HP) strcat(out, "hp "); if (g & EG_TYPE) strcat(out, "type "); if (g & EG_DMG) strcat(out, "damage-lag-size "); if (g & EG_DMGHP) strcat(out, "damage-lag*low-hp,warned "); if (g & EG_TAU) strcat(out, "our-timer ");
         if (g & EG_SPEC) strcat(out, "our-spec "); if (g & EG_VENG) strcat(out, "our-veng "); if (g & EG_LOW) strcat(out, "low-hp*soon ");
     } else if (hazard == HZ_SWING) {
         if (g & SW_STREAK) strcat(out, "streak "); if (g & SW_IDLE) strcat(out, "idle ");
@@ -372,10 +390,15 @@ static void select_hazard(int h, FILE* rep, Choice* c) {
         cv_run(hz, 0, 0, &alt);
         report_row(rep, hz->name, "without hp and types", &alt, &c->cv_const);
     }
-    for (;;) {
+    int forced = h == HZ_EAT && g_force_groups >= 0;
+    if (forced) {
+        cur = (uint32_t)g_force_groups;
+        cv_run(hz, cur, 0, &c->cv_new);
+    }
+    while (!forced) {
         int best = -1;
         Cv best_cv = c->cv_new;
-        for (int e = 0; e < 6; e++) {
+        for (int e = 0; e < 8; e++) {
             uint32_t g = hz->extra[e];
             if (!g || (cur & g)) continue;
             Cv trial;
@@ -515,6 +538,8 @@ int main(int argc, char** argv) {
     }
     assign_folds();
     define_hazards();
+    if (getenv("OPP_EAT_GROUPS")) g_force_groups = atoi(getenv("OPP_EAT_GROUPS"));
+    if (getenv("OPP_EAT_SHOWN_RATE")) g_hz[HZ_EAT].visible = 0; /* v2's reading: the hazard is the rate of shown meals (an ablation) */
     load_old("/Users/valtterivalo/.light2/opponent-loop/model.fit", "/Users/valtterivalo/.light2/opponent-loop/eat_mixture.fit");
     char path[512];
     snprintf(path, sizeof(path), "%s/oppfit.md", out_dir);
@@ -562,6 +587,36 @@ int main(int argc, char** argv) {
             fprintf(rep, "| %s | %.1f | %.0f | %.5f | %.5f | %.5f | %.5f |\n", g_hz[h].name, c->cv_const.clean_events, n, c->cv_const.clean_loss / n, cv.loss[0] / cv.n[0],
                 c->cv_old.clean_loss / n, c->cv_new.clean_loss / n);
         }
+    }
+
+    /* The eat hazard against OppFit v2 on the same ticks and labels: P(label) is what each model says of "a meal animation showed on this tick" (the row's vis times its meal rate for
+     * the sim's reading, the rate itself for v2's own), so every row is a held-out log loss of the same event. */
+    {
+        enum { V2_GROUPS = EG_HP | EG_TYPE | EG_TAU | EG_SPEC | EG_LOW };
+        const Choice* e = &choice[HZ_EAT];
+        uint32_t groups = e->constant ? 0 : e->groups;
+        Cv v2_own, v2_sim, v2_structure_vis, new_plain;
+        cv_run_as(&g_hz[HZ_EAT], V2_GROUPS, 0, 0, 0, &v2_own);
+        cv_run_as(&g_hz[HZ_EAT], V2_GROUPS, 0, 0, 1, &v2_sim);
+        cv_run_as(&g_hz[HZ_EAT], V2_GROUPS, 0, 1, 1, &v2_structure_vis);
+        cv_run_as(&g_hz[HZ_EAT], groups, 0, 0, 0, &new_plain);
+        fprintf(rep, "\n## Eat hazard against OppFit v2 (held out by recording, OTHER-style rows)\n\n"
+            "| eat hazard | features | fitted as | scored as | events | opportunities | nats per opportunity | total nats | against v2 as fitted (nats) |\n|---|---|---|---|---|---|---|---|---|\n");
+        char new_features[160];
+        group_names(HZ_EAT, groups, new_features);
+        const char* const v2_features = "hp type our-timer our-spec low-hp*soon";
+        struct { const char* name; const char* features; const char* fitted; const char* scored; const Cv* cv; } rows[] = {
+            {"v2 (its structure refit on these folds)", v2_features, "the rate of shown meals", "the rate of shown meals", &v2_own},
+            {"v2 read as the sim reads it", v2_features, "the rate of shown meals", "a meal rate that shows with the tick's visibility", &v2_sim},
+            {"v2 structure, visibility-aware fit", v2_features, "meals, shown with the tick's visibility", "a meal rate that shows with the tick's visibility", &v2_structure_vis},
+            {"damage features, v2-style fit", new_features, "the rate of shown meals", "the rate of shown meals", &new_plain},
+            {"new (damage features, visibility-aware fit)", new_features, "meals, shown with the tick's visibility", "a meal rate that shows with the tick's visibility", &e->cv_new},
+        };
+        for (int i = 0; i < 5; i++)
+            fprintf(rep, "| %s | %s | %s | %s | %.1f | %.0f | %.5f | %.1f | %+.1f |\n", rows[i].name, rows[i].features, rows[i].fitted, rows[i].scored, rows[i].cv->events[0], rows[i].cv->n[0],
+                per(rows[i].cv), rows[i].cv->loss[0], v2_own.loss[0] - rows[i].cv->loss[0]);
+        fprintf(rep, "\nDHAROK-style rows, scored under the OTHER fit of their fold (nats per opportunity): v2 %.5f, v2 read as the sim reads it %.5f, new %.5f\n",
+            v2_own.loss[1] / v2_own.n[1], v2_sim.loss[1] / v2_sim.n[1], e->cv_new.loss[1] / e->cv_new.n[1]);
     }
 
     /* the files */
@@ -626,6 +681,42 @@ int main(int argc, char** argv) {
             fprintf(rep, " %.3f", glm_p(&mix.glm, x));
         }
         fprintf(rep, "\n");
+    }
+    fprintf(rep, "\neat rate per tick (a meal, shown or not; eater type 0) by ticks since the first unanswered damage (none / 1 / 2 / 3 / 4-6) at his hitpoints 30/50/75/95, "
+        "the damage a fifth of the hitpoints he had (bar 14-24, warned, our swing not in reach):\n\n");
+    for (int hp = 0; hp < 4; hp++) {
+        static const int HPS[4] = {30, 50, 75, 95};
+        fprintf(rep, "- hp %d:", HPS[hp]);
+        for (int dl = 0; dl < 5; dl++) {
+            static const int LAGS[5] = {OPP_LAG_NONE, 1, 2, 3, 5};
+            OppIn in = {.his_hp = HPS[hp], .his_bar_ratio = 20, .lag = 2, .warned = 1, .our_tau = 9, .dmg_lag = LAGS[dl], .dmg_size = dl ? HPS[hp] / 4 : 0};
+            double x[OPP_DIM];
+            eat_x(&in, mix.groups, 0, x);
+            fprintf(rep, " %.3f", glm_p(&mix.glm, x));
+        }
+        fprintf(rep, "\n");
+    }
+    /* The eat mixture of each fold under the fit of the other folds, for the held-out replay of reaction_replay.c (-F). */
+    {
+        const Hazard* hz = &g_hz[HZ_EAT];
+        build(hz, mix.groups, 0);
+        int* sel = malloc((size_t)g_obs_count * sizeof(int));
+        for (int f = 0; f < FOLDS; f++) {
+            int n = 0;
+            for (int i = 0; i < g_obs_count; i++) if (g_obs[i].fold != f && g_obs[i].style == 0) sel[n++] = i;
+            Model m;
+            g_use_vis = hz->visible;
+            fit_model(&m, sel, n, hz->mixture && (mix.groups & EG_TYPE), 2);
+            g_use_vis = 0;
+            EatMixture fold = mix;
+            fold.glm = m.g; fold.types = m.types;
+            for (int k = 0; k < MAX_TYPES; k++) fold.pi[k] = k < m.types ? (m.types == 1 ? 1 : m.pi[k]) : 0;
+            snprintf(path, sizeof(path), "%s/fold_%d", out_dir, f);
+            if (mkdir(path, 0755) && errno != EEXIST) opp_fail(path, "cannot make the fold directory");
+            snprintf(path, sizeof(path), "%s/fold_%d/eat_mixture.fit", out_dir, f);
+            opp_write(path, &fold, sizeof(fold));
+        }
+        free(sel);
     }
     snprintf(path, sizeof(path), "%s/model.fit", out_dir);
     opp_write(path, &fit, sizeof(fit));

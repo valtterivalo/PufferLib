@@ -7,7 +7,9 @@
  *   READY <worst_warm_micros> <macro names joined with ';'>
  * before it reads stdin (worst_warm_micros = slowest decision after the first two cold ones). stderr carries one line per gear prior used.
  *
- * REQUEST: LA id tick, B belief, K stakes, F feasibility, O own state, W worn, G bag, SHIELD/ARMOR/Q/H/RA/PS observations, P pending hits, R plan, END.
+ * REQUEST: LA id tick, B belief, K stakes, F feasibility, O own state, W worn, G bag, SHIELD/ARMOR/Q/H/U/RA/PS observations, P pending hits, R plan, END.
+ * U since damage: the tick of the first damage on him that no meal of his has answered (`none` for no such damage) and the damage taken since; his meal hazard reads the
+ * time since it. Absent: none.
  * P KNOWN n followed by n D records, or P UNKNOWN. P VARIANTS localCount opponentCount retains both concrete-holder queues; each D
  * adds a holder (0 LOCAL, 1 OPPONENT) before source. Fixed D records omit holder.
  * D [holder] source delay kind style special success mode damage min max accuracyBp prayer smite.
@@ -190,6 +192,7 @@ typedef struct {
     int rules_expected;
     int prior_count, prior[GS_PRIOR_MAX][3]; /* side slot raw, see request_gear_priors */
     int big_hit, since_vw, since_maul, ready_age, last_swing;
+    int unanswered_since, unanswered_damage; /* U: the first damage on him that no meal has answered (tick or none) and the damage since; his meal hazard reads it */
     int poison_source[2]; /* 0 missing/unknown, 1 exact, 2 horizon immunity, 3 declared clean prior */
     int poison_seen[2];
     int poison_observation_age[2];
@@ -313,6 +316,7 @@ static void request_alignment_windows(Request* q) {
 static void read_request(FILE* in, Request* q) {
     memset(q, 0, sizeof(*q));
     q->big_hit = WARNING_NONE;
+    q->unanswered_since = WARNING_NONE;
     q->since_vw = q->since_maul = 99;
     q->last_swing = -100;
     char line[4096];
@@ -409,7 +413,14 @@ static void read_request(FILE* in, Request* q) {
             for (int i = 0; i < q->unseen_count; i++) q->unseen[i] = request_int(&p);
             request_end(p);
         } else if (!strcmp(tag, "H")) assert(sscanf(p, "%d %d %d %d %d", &q->big_hit, &q->since_vw, &q->since_maul, &q->ready_age, &q->last_swing) == 5);
-        else if (!strcmp(tag, "RA")) {
+        else if (!strcmp(tag, "U")) {
+            char since[16];
+            assert(sscanf(p, "%15s %d%n", since, &q->unanswered_damage, &used) == 2);
+            assert(q->unanswered_damage >= 0);
+            q->unanswered_since = strcmp(since, "none") ? atoi(since) : WARNING_NONE;
+            p += used;
+            request_end(p);
+        } else if (!strcmp(tag, "RA")) {
             assert(!q->auto_retaliate_seen);
             q->auto_retaliate_seen = 1;
             char source[16];
@@ -678,6 +689,8 @@ static double server_decide(Request* q) {
     hist.since_maul_spec = q->since_maul;
     hist.ready_age = q->ready_age;
     hist.last_swing_tick = q->last_swing;
+    hist.unanswered_since = q->unanswered_since;
+    hist.unanswered_damage = q->unanswered_damage;
     la_decide(&g_base.state, &hist, &q->belief, q->tick, (GsStakes){.us = q->us, .him = q->him}, &q->feasible, &q->rules, (uint32_t)q->id, &g_decision);
     return (la_seconds() - started) * 1e6;
 }
