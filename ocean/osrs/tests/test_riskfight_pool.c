@@ -157,7 +157,7 @@ static void test_every_kit_plays(void) {
                 riskfight_write_observation(&state, side, obs);
                 /* The threat block stays in [0, 1] and nothing is NaN (older inputs such as the age of his last swing scale past 1 by design). */
                 for (int j = 0; j < RF_OBS_SIZE; j++) {
-                    int in_block = j >= RF_THREAT_START;
+                    int in_block = j >= RF_THREAT_START && j < RF_SESSION_START; /* the session block ends in a margin that goes negative */
                     if (!(obs[j] >= (in_block ? 0 : -8) && obs[j] <= (in_block ? 1.0001f : 8))) { printf("kit %d (%s) tick %d obs[%d] = %f\n", i, RISKFIGHT_POOL[i].source, tick, j, obs[j]); abort(); }
                 }
             }
