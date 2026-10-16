@@ -58,16 +58,8 @@ static LaGearIssue la_gear_status(GsObservedGear gear) {
     return (LaGearIssue){.status = LA_GEAR_SUPPORTED};
 }
 
-/* Declared ammo prior of the opponent's mapped weapon: the sim has no observation of his quiver. */
-static uint8_t la_ammo_prior(uint8_t weapon) {
-    switch (weapon) {
-        case ITEM_MAGIC_SHORTBOW_I: return ITEM_AMETHYST_ARROW;
-        case ITEM_DARK_BOW: case ITEM_TWISTED_BOW: return ITEM_DRAGON_ARROWS;
-        case ITEM_RUNE_CROSSBOW: case ITEM_ARMADYL_CROSSBOW: case ITEM_ZARYTE_CROSSBOW: return ITEM_RUBY_DRAGON_BOLTS_E;
-        case ITEM_HEAVY_BALLISTA: return ITEM_DRAGON_JAVELIN;
-        default: return ITEM_NONE;
-    }
-}
+/* Declared ammo prior of the opponent's mapped weapon: the sim has no observation of his quiver (osrs_ammo_assumption, shared with the threat features). */
+static uint8_t la_ammo_prior(uint8_t weapon) { return osrs_ammo_assumption(weapon); }
 
 /* Every observed slot is empty or an item the sim has; priors (la_ammo_prior, server gear priors) cover the rest. */
 static int la_gear_wearable(GsObservedGear gear) {
