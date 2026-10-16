@@ -108,7 +108,7 @@ static void check_threat_block_against_reference(const RiskfightState* s, const 
     for (int i = 0; i < t->count; i++) {
         const OsrsThreatWeapon* w = &t->slots[i].w;
         assert(fabsf(block[i * RF_THREAT_HIS_WIDTH + 3] - osrs_threat_hit_chance(w, &ours)) < 1e-6f);
-        if (w->spec_cost > 0) assert(fabsf(block[i * RF_THREAT_HIS_WIDTH + 10] - osrs_threat_spec_hit_chance(w, &ours)) < 1e-6f);
+        if (w->spec_hits > 0) assert(fabsf(block[i * RF_THREAT_HIS_WIDTH + 10] - osrs_threat_spec_hit_chance(w, &ours)) < 1e-6f);
     }
     uint8_t items[RF_THREAT_OURS_SLOTS];
     int n = 0;
@@ -126,7 +126,7 @@ static void check_threat_block_against_reference(const RiskfightState* s, const 
         const float* o = block + RF_THREAT_OURS_OFFSET + i * RF_THREAT_OURS_WIDTH;
         assert(o[0] == 1 && fabsf(o[1] - (float)osrs_threat_max_hit_at(&w, RF_THREAT_BASE_HITPOINTS, p->current_hitpoints) / RF_THREAT_DAMAGE_SCALE) < 1e-6f);
         assert(fabsf(o[2] - osrs_threat_hit_chance(&w, &his)) < 1e-6f && fabsf(o[3] - (float)w.speed / RF_THREAT_SPEED_SCALE) < 1e-6f);
-        if (w.spec_cost > 0) assert(fabsf(o[6] - osrs_threat_spec_hit_chance(&w, &his)) < 1e-6f);
+        if (w.spec_hits > 0) assert(fabsf(o[6] - osrs_threat_spec_hit_chance(&w, &his)) < 1e-6f);
     }
     if (n < RF_THREAT_OURS_SLOTS) assert(block[RF_THREAT_OURS_OFFSET + n * RF_THREAT_OURS_WIDTH] == 0);
 }

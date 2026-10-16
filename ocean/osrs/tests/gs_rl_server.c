@@ -68,7 +68,7 @@ static void rt_observe(RiskfightVisibleOpponent* v, const RtSeen* seen, int n, c
         event[0] = 1;
         event[1] = item == ITEM_NONE ? 0 : item;
         event[2] = seen->swing_style;
-        riskfight_threat_note_swing(&v->threat, (uint8_t)item);
+        riskfight_threat_note_swing(&v->threat, (uint8_t)item, n - 1, seen->swing_spec);
         if (seen->swing_spec && item != ITEM_NONE) riskfight_spec_est_seen(v, osrs_spec_cost(item));
         /* The maul special is instant: the sim logs the hits but does not move his swing clock. */
         if (item == ITEM_NONE || !pvp_is_maul(item)) {
@@ -195,7 +195,7 @@ static double rt_decide(Request* q, const RtSeen* seen, int new_fight, int fight
     f->vis.interacting = loaded.interacting;
     /* The request's stat-priced item rows are rewritten every request (osrs_stat_items_clear), so item indices of an earlier tick may mean another item: rebuild. */
     f->vis.threat.valid = 0;
-    riskfight_threat_refresh(&f->vis.threat, f->vis.equipment);
+    riskfight_threat_refresh(&f->vis.threat, f->vis.equipment, n);
     Player* us = &s->env.players[0];
     us->x = FIGHT_AREA_BASE_X + FIGHT_AREA_WIDTH / 2;
     us->y = FIGHT_AREA_BASE_Y + FIGHT_AREA_HEIGHT / 2;

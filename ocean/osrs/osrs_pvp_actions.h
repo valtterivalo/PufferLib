@@ -261,6 +261,7 @@ static void update_player_timers(Player* p, int prayer_bonus) {
     if (p->frozen_ticks > 0) p->frozen_ticks--;
     if (p->freeze_immunity_ticks > 0) p->freeze_immunity_ticks--;
     if (p->veng_cooldown > 0) p->veng_cooldown--;
+    osrs_soul_tick(p);
 
     if (!p->is_lms) {
         encounter_drain_all_prayers(p, prayer_bonus);

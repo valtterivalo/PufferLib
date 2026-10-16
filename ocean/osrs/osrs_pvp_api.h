@@ -177,6 +177,8 @@ static void init_player(Player* p) {
 
     p->bolt_proc_damage = 0.2f;
     p->bolt_ignores_defense = 0;
+    p->soul_stacks = 0;
+    p->soul_decay_ticks = 0;
 
     p->prev_hp_percent = 1.0f;
 }

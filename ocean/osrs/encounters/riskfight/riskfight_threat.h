@@ -17,6 +17,11 @@
  *       11 spec_speed  ticks until his next attack after the special / RF_THREAT_SPEED_SCALE (1: the granite maul's instant special)
  *   OURS, RF_THREAT_OURS_SLOTS slots of RF_THREAT_OURS_WIDTH: the weapon we wield, then the weapons in our bag by item index. Against his visible defence:
  *       0 present, 1 max (a Dharok's at our hitpoints), 2 hit, 3 speed, 4 spec_cost, 5 spec_max, 6 spec_hit.
+ *   STACKS, 2 floats at RF_THREAT_STACKS_OFFSET: [0] his Soulreaper stacks / 5 as a viewer counts them, [1] ours / 5. A special with 0 cost and a max (Behead) is told
+ *   by spec_max > 0. Max and spec_max include a bolt's effect (ruby, diamond) against the hitpoints the defender has.
+ * His stacks are not shown by the client (the wiki puts the counter in the wielder's own special-attack interface): they are counted as SoulStacks.java does,
+ * +1 (cap 5) per swing of the axe, all of them gone after a Behead (a swing with the special animation), one lost per 50 ticks since his last axe swing. Stacks
+ * he held when the fight began are not known: 0 is assumed. An undetected Behead leaves the estimate too high until the stacks decay.
  *
  * Assumptions a player makes, stated once: his levels are OSRS_THREAT_ASSUMED_* (a maxed account boosted), his prayer piety / rigour / augury by weapon style,
  * his defence level 99 on a defence prayer (x1.25); ours are our real levels, prayer and stance. Magic is the sim's spell (base 30).
@@ -30,7 +35,8 @@ enum {
     RF_THREAT_HIS_SLOTS = 5, RF_THREAT_HIS_WIDTH = 12,
     RF_THREAT_OURS_SLOTS = 4, RF_THREAT_OURS_WIDTH = 7,
     RF_THREAT_OURS_OFFSET = RF_THREAT_HIS_SLOTS * RF_THREAT_HIS_WIDTH,
-    RF_THREAT_SIZE = RF_THREAT_OURS_OFFSET + RF_THREAT_OURS_SLOTS * RF_THREAT_OURS_WIDTH,
+    RF_THREAT_STACKS_OFFSET = RF_THREAT_OURS_OFFSET + RF_THREAT_OURS_SLOTS * RF_THREAT_OURS_WIDTH,
+    RF_THREAT_SIZE = RF_THREAT_STACKS_OFFSET + 2,
     RF_THREAT_SPEED_SCALE = 10,
     RF_THREAT_DAMAGE_SCALE = 128,
     RF_THREAT_BASE_HITPOINTS = 99,
@@ -50,7 +56,8 @@ typedef struct {
 typedef struct {
     uint16_t shown_raw[RF_THREAT_HIS_SLOTS];
     int shown_count;
-    int built_for_shown;
+    int built_for_shown, built_stacks;
+    int soul_held, soul_tick; /* his Soulreaper stacks as of the last swing with the axe (SoulStacks.java) */
     uint8_t shield_seen, has_shield_seen; /* the last shield he wore: a one-handed weapon he is not holding is rated with it, the two-hander he holds now has pushed it off */
     uint8_t key[NUM_GEAR_SLOTS];
     int valid, count;
@@ -58,9 +65,22 @@ typedef struct {
     OsrsDefenceRolls his_defence;
 } RiskfightThreat;
 
-/** He swung `weapon` (a sim item index, ITEM_NONE for fists). A sixth distinct weapon in one fight pushes out the oldest: no fight of the 159 tapes shows more than four. */
-static void riskfight_threat_note_swing(RiskfightThreat* t, uint8_t weapon) {
+/** His Soulreaper stacks as read at fight tick `now`: one lost per 50 ticks since his last axe swing. A swing of tick T is noted at T and read first at T + 1, so
+ * `now - 1 - T` ticks have run since it; the sim loses the stack in the step of tick T + 50 (osrs_soul_tick), which is read at T + 51. */
+static inline int riskfight_threat_stacks(const RiskfightThreat* t, int now) {
+    if (t->soul_held == 0) return 0;
+    int left = t->soul_held - (now - 1 - t->soul_tick) / OSRS_SOUL_DECAY_TICKS;
+    return left > 0 ? left : 0;
+}
+
+/** He swung `weapon` (a sim item index, ITEM_NONE for fists) at fight tick `tick`; `spec` says the swing had a special attack's animation. */
+static void riskfight_threat_note_swing(RiskfightThreat* t, uint8_t weapon, int tick, int spec) {
     if (weapon == ITEM_NONE) return;
+    if (weapon == ITEM_SOULREAPER_AXE) {
+        int held = spec ? 0 : riskfight_threat_stacks(t, tick + 1) + 1;
+        t->soul_held = held > OSRS_SOUL_STACKS_MAX ? OSRS_SOUL_STACKS_MAX : held;
+        t->soul_tick = tick;
+    }
     uint16_t raw = ITEM_DATABASE[weapon].item_id;
     for (int i = 0; i < t->shown_count; i++) if (t->shown_raw[i] == raw) return;
     if (t->shown_count == RF_THREAT_HIS_SLOTS) {
@@ -70,9 +90,12 @@ static void riskfight_threat_note_swing(RiskfightThreat* t, uint8_t weapon) {
     t->shown_raw[t->shown_count++] = raw;
 }
 
-/** Rebuilds the slots when what he wears or has shown changed since the last build. `equipment` is what the viewer sees of him (ring and ammunition blank). */
-static void riskfight_threat_refresh(RiskfightThreat* t, const uint8_t equipment[NUM_GEAR_SLOTS]) {
-    if (t->valid && t->built_for_shown == t->shown_count && !memcmp(t->key, equipment, NUM_GEAR_SLOTS)) return;
+/** Rebuilds the slots when what he wears, has shown or holds (stacks) changed since the last build. `equipment` is what the viewer sees of him (ring and ammunition
+ * blank), `now` the fight tick the observation is read at. */
+static void riskfight_threat_refresh(RiskfightThreat* t, const uint8_t equipment[NUM_GEAR_SLOTS], int now) {
+    int stacks = riskfight_threat_stacks(t, now);
+    if (t->valid && t->built_for_shown == t->shown_count && t->built_stacks == stacks && !memcmp(t->key, equipment, NUM_GEAR_SLOTS)) return;
+    t->built_stacks = stacks;
     if (equipment[GEAR_SLOT_SHIELD] != ITEM_NONE) { t->shield_seen = equipment[GEAR_SLOT_SHIELD]; t->has_shield_seen = 1; }
     memcpy(t->key, equipment, NUM_GEAR_SLOTS);
     t->built_for_shown = t->shown_count;
@@ -106,6 +129,7 @@ static void riskfight_threat_refresh(RiskfightThreat* t, const uint8_t equipment
         t->slots[i].p = p[i];
         t->slots[i].shown = shown[i];
         OsrsThreatActor who = osrs_threat_actor_assumed(osrs_threat_style_of_weapon(items[i]));
+        who.soul_stacks = stacks;
         uint8_t worn[NUM_GEAR_SLOTS];
         memcpy(worn, equipment, NUM_GEAR_SLOTS);
         if (worn[GEAR_SLOT_SHIELD] == ITEM_NONE && t->has_shield_seen) worn[GEAR_SLOT_SHIELD] = t->shield_seen;
@@ -119,7 +143,7 @@ static void riskfight_threat_refresh(RiskfightThreat* t, const uint8_t equipment
 /** The levels, prayer and stance one of our Players fights with, as the sim's calculate_effective_* read them. */
 static OsrsThreatActor riskfight_threat_actor_of(const Player* p) {
     return (OsrsThreatActor){p->current_attack, p->current_strength, p->current_ranged, p->current_magic, p->current_defence,
-        (OffensivePrayer)p->offensive_prayer, (FightStyle)p->fight_style};
+        (OffensivePrayer)p->offensive_prayer, (FightStyle)p->fight_style, p->soul_stacks};
 }
 
 /** The weapons of our bag that take an OURS slot after the wielded one: distinct, ascending by item index, at most RF_THREAT_OURS_SLOTS - 1. Feed every bag weapon to
@@ -135,6 +159,12 @@ static inline void riskfight_threat_note_bag_weapon(RiskfightBagWeapons* bag, ui
     for (int i = last; i > at; i--) bag->item[i] = bag->item[i - 1];
     bag->item[at] = item;
     if (bag->count < RF_THREAT_OURS_SLOTS - 1) bag->count++;
+}
+
+/** The two stack floats alone (the scripts read our own from them, see riskfight_write_script_observation). `out` is the start of the threat block. */
+static inline void riskfight_threat_write_stacks(const Player* p, const RiskfightThreat* t, float* out) {
+    out[RF_THREAT_STACKS_OFFSET] = (float)t->built_stacks / OSRS_SOUL_STACKS_MAX;
+    out[RF_THREAT_STACKS_OFFSET + 1] = (float)p->soul_stacks / OSRS_SOUL_STACKS_MAX;
 }
 
 /** Writes the RF_THREAT_SIZE floats of agent `p` against the other side `t` (its slots, its health bar). `bag` holds the weapons of p's inventory. */
@@ -156,7 +186,7 @@ static void riskfight_threat_write(const Player* p, const RiskfightBagWeapons* b
     }
     if (wielded != ITEM_NONE && (ITEM_DATABASE[wielded].effect_mask & OSRS_ITEM_EFFECT_DHAROK_PIECE)) dharok_armour--;
     OsrsDefenceRolls ours = osrs_defence_rolls_from(&worn, &us);
-    int his_hp_lower = -1;
+    int his_hp_lower = -1, his_hp_upper = -1;
     for (int i = 0; i < t->count; i++) {
         const RiskfightThreatSlot* s = &t->slots[i];
         const OsrsThreatWeapon* w = &s->w;
@@ -171,13 +201,13 @@ static void riskfight_threat_write(const Player* p, const RiskfightBagWeapons* b
             }
             max_hit = osrs_threat_max_hit_at(w, RF_THREAT_BASE_HITPOINTS, his_hp_lower);
         }
-        o[2] = (float)max_hit / RF_THREAT_DAMAGE_SCALE;
+        o[2] = (float)osrs_threat_effect_max(w, max_hit, p->current_hitpoints) / RF_THREAT_DAMAGE_SCALE;
         o[3] = osrs_threat_hit_chance(w, &ours);
         o[4] = (float)w->speed / RF_THREAT_SPEED_SCALE;
         o[4 + w->style] = 1; /* style 1..3 -> 5..7 */
-        if (w->spec_cost > 0) {
+        if (w->spec_hits > 0) {
             o[8] = w->spec_cost / 100.0f;
-            o[9] = (float)w->spec_max / RF_THREAT_DAMAGE_SCALE;
+            o[9] = (float)osrs_threat_effect_max(w, w->spec_max, p->current_hitpoints) / RF_THREAT_DAMAGE_SCALE;
             o[10] = osrs_threat_spec_hit_chance(w, &ours);
             o[11] = (float)w->spec_speed / RF_THREAT_SPEED_SCALE;
         }
@@ -189,14 +219,19 @@ static void riskfight_threat_write(const Player* p, const RiskfightBagWeapons* b
         OsrsThreatWeapon w = osrs_threat_weapon_swapped(&worn, dharok_armour, p->equipped, item, &us);
         float* o = block + i * RF_THREAT_OURS_WIDTH;
         o[0] = 1;
-        o[1] = (float)osrs_threat_max_hit_at(&w, RF_THREAT_BASE_HITPOINTS, p->current_hitpoints) / RF_THREAT_DAMAGE_SCALE;
+        if (w.style == ATTACK_STYLE_RANGED && his_hp_upper < 0) {
+            OsrsHealthBarRange bar = osrs_health_bar_range(bar_ratio, OSRS_PLAYER_HEALTH_BAR_SCALE, RF_THREAT_BASE_HITPOINTS, RF_THREAT_OVERHEAL_CAP);
+            his_hp_upper = bar.kind == OSRS_HEALTH_BAR_KNOWN ? bar.upper : RF_THREAT_OVERHEAL_CAP;
+        }
+        o[1] = (float)osrs_threat_effect_max(&w, osrs_threat_max_hit_at(&w, RF_THREAT_BASE_HITPOINTS, p->current_hitpoints), his_hp_upper) / RF_THREAT_DAMAGE_SCALE;
         o[2] = osrs_threat_hit_chance(&w, &t->his_defence);
         o[3] = (float)w.speed / RF_THREAT_SPEED_SCALE;
-        if (w.spec_cost > 0) {
+        if (w.spec_hits > 0) {
             o[4] = w.spec_cost / 100.0f;
-            o[5] = (float)w.spec_max / RF_THREAT_DAMAGE_SCALE;
+            o[5] = (float)osrs_threat_effect_max(&w, w.spec_max, his_hp_upper) / RF_THREAT_DAMAGE_SCALE;
             o[6] = osrs_threat_spec_hit_chance(&w, &t->his_defence);
         }
     }
+    riskfight_threat_write_stacks(p, t, out);
 }
 #endif

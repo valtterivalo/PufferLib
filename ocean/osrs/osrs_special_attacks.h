@@ -40,9 +40,10 @@ typedef struct {
     int freeze_ticks;
     int spec_cost;
     int attack_speed_override;  /* 0 = use weapon speed */
+    int landed;                 /* the accuracy roll passed (set by the specials whose follow-up needs it: Zaryte crossbow) */
 } SpecResult;
 
-/** Spec energy cost by weapon item index; 0 = the weapon has no special. */
+/** Spec energy cost by weapon item index; 0 = the weapon has no special (the Soulreaper axe has one that costs stacks, not energy: osrs_spec_is_stack_special). */
 static inline int osrs_spec_cost(int weapon_item_idx) {
     switch (weapon_item_idx) {
         case ITEM_AGS:                  return 50;
@@ -79,7 +80,7 @@ static inline SpecResult osrs_resolve_spec(
     int weapon_item_idx, int att_roll, int max_hit,
     int def_roll, int target_def_level, uint32_t* rng_state
 ) {
-    SpecResult r = {0, {0, 0, 0, 0}, 0, 0, 0, 0, 0, 0, 0, 0};
+    SpecResult r = {0, {0, 0, 0, 0}, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
     switch (weapon_item_idx) {
 
@@ -358,8 +359,10 @@ static inline SpecResult osrs_resolve_spec(
         int spec_att = att_roll * 2;
         r.spec_cost = 75;
         r.num_hits = 1;
-        if (encounter_roll_hit_chance(rng_state, spec_att, def_roll))
+        if (encounter_roll_hit_chance(rng_state, spec_att, def_roll)) {
+            r.landed = 1;
             r.damage[0] = encounter_rand_int(rng_state, max_hit + 1);
+        }
         r.total_damage = r.damage[0];
         break;
     }
@@ -427,7 +430,7 @@ static inline void osrs_spec_result_force_max(
     SpecResult* r, int weapon_item_idx, int max_hit, int target_def_level
 ) {
     assert(r != NULL);
-    SpecResult forced = {0, {0, 0, 0, 0}, 0, 0, 0, 0, 0, 0, 0, 0};
+    SpecResult forced = {0, {0, 0, 0, 0}, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     forced.spec_cost = osrs_spec_cost(weapon_item_idx);
 
     switch (weapon_item_idx) {
@@ -617,6 +620,50 @@ static inline OsrsSpecAccuracy osrs_spec_accuracy(int weapon_item_idx) {
         default: assert(!"osrs_spec_accuracy called for a non-special weapon");
     }
     return a;
+}
+
+/* ---- Soulreaper axe (wiki Soulreaper_axe, state of 22 July 2026).
+ * Soul stacks: every attack made with the axe, hit or miss, adds one after its damage is rolled (cap 5). Each stack is +6% on the Strength level, additive with the
+ * prayer multiplier (Piety 1.23 and 5 stacks: 1.53). A stack decays every 50 ticks without an attack with the axe; stacks stay when the weapon is switched
+ * and do nothing for other weapons. Gaining stacks costs no hitpoints now.
+ * Behead (special, no energy): consumes every stack; the strength bonus of the stacks is consumed first, then the swing gets +12% accuracy and +6% maximum and
+ * minimum damage per stack consumed, against the defence of the style in use (slash here). Not modelled: the healing a decayed stack gave in 2024 (the wiki
+ * leaves it unsaid after the 2026 change). Whether the minimum is 6% per stack of the unboosted maximum or of the boosted one is not stated: the unboosted is used. */
+enum { OSRS_SOUL_STACKS_MAX = 5, OSRS_SOUL_DECAY_TICKS = 50 };
+
+static inline int osrs_spec_is_stack_special(int weapon_item_idx) { return weapon_item_idx == ITEM_SOULREAPER_AXE; }
+
+static inline float osrs_soul_strength_mult(float prayer_mult, int stacks) { return prayer_mult + 0.06f * (float)stacks; }
+
+/** An attack with the axe was made: a normal one adds a stack, Behead has consumed them all. */
+static inline void osrs_soul_attacked(Player* p, int behead) {
+    p->soul_stacks = behead ? 0 : (p->soul_stacks < OSRS_SOUL_STACKS_MAX ? p->soul_stacks + 1 : OSRS_SOUL_STACKS_MAX);
+    p->soul_decay_ticks = OSRS_SOUL_DECAY_TICKS;
+}
+
+/** One tick passed. */
+static inline void osrs_soul_tick(Player* p) {
+    if (p->soul_stacks > 0 && --p->soul_decay_ticks <= 0) {
+        p->soul_stacks--;
+        p->soul_decay_ticks = OSRS_SOUL_DECAY_TICKS;
+    }
+}
+
+static inline int osrs_behead_max(int base_max_hit, int stacks) { return base_max_hit * (100 + 6 * stacks) / 100; }
+static inline int osrs_behead_min(int base_max_hit, int stacks) { return base_max_hit * 6 * stacks / 100; }
+
+/** Behead: `att_roll` is the plain slash attack roll, `base_max_hit` the max hit with the stacks' strength bonus consumed. */
+static inline SpecResult osrs_resolve_behead(int att_roll, int base_max_hit, int def_roll, int stacks, uint32_t* rng_state) {
+    SpecResult r = {0, {0, 0, 0, 0}, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    r.num_hits = 1;
+    int spec_att = att_roll * (100 + 12 * stacks) / 100;
+    if (encounter_roll_hit_chance(rng_state, spec_att, def_roll)) {
+        int lo = osrs_behead_min(base_max_hit, stacks), hi = osrs_behead_max(base_max_hit, stacks);
+        r.landed = 1;
+        r.damage[0] = lo + encounter_rand_int(rng_state, hi - lo + 1);
+    }
+    r.total_damage = r.damage[0];
+    return r;
 }
 
 #endif /* OSRS_SPECIAL_ATTACKS_H */

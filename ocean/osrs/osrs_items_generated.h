@@ -395,7 +395,7 @@ static Item ITEM_DATABASE[NUM_ITEMS + OSRS_STAT_ITEM_SLOTS] = {
     },
     [ITEM_ZARYTE_CROSSBOW] = {
         .item_id = 26374, .name = "Zaryte crossbow", .slot = SLOT_WEAPON,
-        .attack_speed = 6, .attack_range = 7,
+        .attack_speed = 6, .attack_range = 8, /* wiki Zaryte_crossbow: attack range 8 (longrange +2) */
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
         .attack_magic = 0, .attack_ranged = 110,
         .defence_stab = 14, .defence_slash = 14, .defence_crush = 12,
@@ -1132,7 +1132,7 @@ static Item ITEM_DATABASE[NUM_ITEMS + OSRS_STAT_ITEM_SLOTS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 121, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
+        .melee_strength = 125, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE /* wiki Soulreaper_axe: +125 since the 22 July 2026 update (was 121) */
     },
     [ITEM_TORVA_FULL_HELM] = {
         .item_id = 26382, .name = "Torva full helm", .slot = SLOT_HEAD,

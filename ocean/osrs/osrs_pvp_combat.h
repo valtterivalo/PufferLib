@@ -145,6 +145,7 @@ static int calculate_effective_strength(Player* p, AttackStyle style) {
             base_level = p->current_strength;
             if (p->offensive_prayer == OFFENSIVE_PRAYER_PIETY) prayer_mult = 1.23f;
             else if (p->offensive_prayer == OFFENSIVE_PRAYER_MELEE_LOW) prayer_mult = 1.15f;
+            if (p->equipped[GEAR_SLOT_WEAPON] == ITEM_SOULREAPER_AXE) prayer_mult = osrs_soul_strength_mult(prayer_mult, p->soul_stacks);
             break;
         case ATTACK_STYLE_RANGED:
             base_level = p->current_ranged;
@@ -971,7 +972,11 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
         int def_roll = eff_defence * (defence_bonus + 64);
 
         int magic_base_hit = 30;
+        /* Behead: the stacks' strength bonus is consumed first, so the max hit it works from has none of it (osrs_special_attacks.h). */
+        int behead_stacks = spec_item_idx == ITEM_SOULREAPER_AXE ? attacker->soul_stacks : 0;
+        if (behead_stacks) attacker->soul_stacks = 0;
         int max_hit = calculate_max_hit(attacker, style, 1.0f, magic_base_hit);
+        if (behead_stacks) attacker->soul_stacks = behead_stacks;
 
         if (env->pvp_runtime.attack_chance_observer && (spec_item_idx == ITEM_VOIDWAKER || spec_item_idx == ITEM_GRANITE_MAUL ||
                 spec_item_idx == ITEM_GRANITE_MAUL_ORNATE)) {
@@ -983,10 +988,19 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
                 voidwaker ? ATTACK_STYLE_MAGIC : style);
         }
 
-        SpecResult sr = osrs_resolve_spec(
-            spec_item_idx, att_roll, max_hit, def_roll,
-            defender->current_defence, &env->rng_state
-        );
+        SpecResult sr = spec_item_idx == ITEM_SOULREAPER_AXE ?
+            osrs_resolve_behead(att_roll, max_hit, def_roll, behead_stacks, &env->rng_state) :
+            osrs_resolve_spec(spec_item_idx, att_roll, max_hit, def_roll, defender->current_defence, &env->rng_state);
+        /* Evoke: the bolt effect is certain once the accuracy roll landed, with the crossbow's boosted numbers. */
+        if (spec_item_idx == ITEM_ZARYTE_CROSSBOW) {
+            BoltProcResult bp = osrs_resolve_bolt_proc(attacker->equipped[GEAR_SLOT_AMMO], sr.damage[0], sr.landed, max_hit, attacker->current_ranged,
+                defender->current_hitpoints, attacker->current_hitpoints, 1, 1, &env->rng_state);
+            if (bp.proc_triggered) {
+                sr.damage[0] = bp.modified_damage;
+                sr.total_damage = bp.modified_damage;
+                attacker->current_hitpoints -= bp.attacker_hp_cost;
+            }
+        }
 
         int total_damage = sr.total_damage;
         int hit_delay;
@@ -1105,12 +1119,13 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
                 BoltProcResult bp = osrs_resolve_bolt_proc(
                     ammo_item, damage, hit_success, max_hit,
                     attacker->current_ranged,
-                    defender->current_hitpoints,
-                    0, &env->rng_state
+                    defender->current_hitpoints, attacker->current_hitpoints,
+                    attacker->equipped[GEAR_SLOT_WEAPON] == ITEM_ZARYTE_CROSSBOW, 0, &env->rng_state
                 );
                 if (bp.proc_triggered) {
                     damage = bp.modified_damage;
                     hit_success = 1;
+                    attacker->current_hitpoints -= bp.attacker_hp_cost;
                 }
             }
 
@@ -1142,6 +1157,8 @@ post_attack:
                 is_in_wilderness(attacker->x, attacker->y)), env->tick);
     env->pvp_runtime.maul[attacker_idx] = osrs_granite_maul_record_attack(
         env->pvp_runtime.maul[attacker_idx], env->tick, defender_idx);
+    if (attacker->equipped[GEAR_SLOT_WEAPON] == ITEM_SOULREAPER_AXE && style == ATTACK_STYLE_MELEE)
+        osrs_soul_attacked(attacker, is_special && spec_item_idx == ITEM_SOULREAPER_AXE);
     attacker->just_attacked = 1;
     attacker->last_attack_style = (is_special && spec_item_idx == ITEM_VOIDWAKER) ? ATTACK_STYLE_MAGIC : style;
     attacker->attack_style_this_tick = attacker->last_attack_style;
