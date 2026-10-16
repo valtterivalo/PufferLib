@@ -7,12 +7,13 @@
  * READY <warm_micros> continue;no new clicks;rl POLICY rl:<checkpoint file> OBS
  * Request: `LA id tick [OBS]` ... `END`, the lookahead request (tags B K F O Q W G SHIELD ARMOR PS RA P R; R and Q are ignored) plus the tags
  *   FIGHT start_tick        a line before the first request of a fight: clears the visible-opponent history, the consume estimates and the recurrent state
- *   V swing_raw swing_style hit_landed hit_damage veng_cast consuming bar_ratio bar_scale veng_text
+ *   V swing_raw swing_style hit_landed hit_damage veng_cast consuming bar_ratio bar_scale veng_text [swing_spec]
  *       what the client showed of him on this tick. swing_raw: raw id of his weapon when his attack animation started this tick, else -1; swing_style: that
  *       attack's AttackStyle number (0 none, 1 melee, 2 ranged, 3 magic; 0 when swing_raw is -1); hit_landed: 1 when any hitsplat appeared on him this tick
  *       (damage or block, any source); hit_damage: the damage of those hitsplats added up; veng_cast: his Vengeance cast graphic this tick; consuming: a meal or
  *       potion animation of his this tick; bar_ratio/bar_scale: his health bar as displayed now (-1 -1 when hidden); veng_text: "Taste vengeance!" over his
- *       head this tick.
+ *       head this tick. swing_spec (optional, 0 when absent): 1 when that attack animation was a special attack animation (VW 11275, maul 1667, ...); it feeds the
+ *       session observation's estimate of his special energy, which stays at 100 on a wire that does not send it.
  * Every tick of a fight must reach the server with the full request body: the server owns the history ring, the consume estimates and the recurrent state.
  * A tick gap above 2 or a tick that does not advance starts a new fight. On a decision tick the response is `R id micros 2 <3 x "feasible kill death value worlds">
  * A n <n x "due kind arg timing">` (best_index 2 = replace the remainder with these clicks, due = tick + 1); on an `OBS` tick it is `O id`. UNAVAILABLE as in the
@@ -35,7 +36,7 @@ typedef struct {
 
 static RtFight g_fight;
 
-typedef struct { int swing_raw, swing_style, hit_landed, hit_damage, veng_cast, consuming, bar_ratio, bar_scale, veng_text; } RtSeen;
+typedef struct { int swing_raw, swing_style, hit_landed, hit_damage, veng_cast, consuming, bar_ratio, bar_scale, veng_text, swing_spec; } RtSeen;
 
 static void rt_fight_reset(RtFight* f, int start_tick) {
     RfNet* net = f->net;
@@ -51,6 +52,7 @@ static void rt_fight_reset(RtFight* f, int start_tick) {
     v->last_cast_tick = v->last_proc_tick = -1000;
     v->last_attack_tick = -1;
     v->pending_consume_tick = -1;
+    v->spec_est = 100;
     v->health_bar = OSRS_PLAYER_HEALTH_BAR_SCALE; /* a fight starts at a full bar, as the sim's first observation */
     f->land_pending[0] = f->land_pending[1] = f->last_land = -1;
 }
@@ -58,6 +60,7 @@ static void rt_fight_reset(RtFight* f, int start_tick) {
 /* What riskfight_observe_visible does after a sim tick, from what the client showed instead of the sim's players. `n` is the fight tick after this one. */
 static void rt_observe(RiskfightVisibleOpponent* v, const RtSeen* seen, int n, const Request* q) {
     int bar_before = v->health_bar;
+    riskfight_spec_est_regen(v);
     float* event = v->events[(n - 1) % RF_HISTORY_TICKS];
     memset(event, 0, RT_EVENT_WIDTH * sizeof(float));
     if (seen->swing_raw != -1 || seen->swing_style != 0) {
@@ -65,6 +68,7 @@ static void rt_observe(RiskfightVisibleOpponent* v, const RtSeen* seen, int n, c
         event[0] = 1;
         event[1] = item == ITEM_NONE ? 0 : item;
         event[2] = seen->swing_style;
+        if (seen->swing_spec && item != ITEM_NONE) riskfight_spec_est_seen(v, osrs_spec_cost(item));
         /* The maul special is instant: the sim logs the hits but does not move his swing clock. */
         if (item == ITEM_NONE || !pvp_is_maul(item)) {
             v->last_attack_tick = n - 1;
@@ -199,6 +203,8 @@ static double rt_decide(Request* q, const RtSeen* seen, int new_fight, int fight
     /* Stakes: K him us in gp; the price of our death in units of his. */
     s->death_price = q->him > 0 && q->us > 0 ? fminf(RF_PRICE_MAX_X10 / 10.0f, fmaxf(0.1f, (float)((double)q->us / (double)q->him))) : 1.0f;
     s->inventory_use[0].divine_combat_ticks = OSRS_DIVINE_DURATION > n ? OSRS_DIVINE_DURATION - n : 0;
+    /* A live session has no budget: the end of the session is never near (the session block reads 1 for "plenty of time left"). */
+    s->session_ticks_left = RF_SESSION_OPEN;
     float obs[RF_OBS_SIZE];
     unsigned char mask[RF_MASK_SIZE];
     int actions[RF_HEADS];
@@ -213,7 +219,7 @@ static int rt_parse(FILE* in, Request* q, RtSeen* seen, int* new_fight, int* fig
     static char text[1 << 16];
     size_t used = 0;
     char line[4096];
-    *seen = (RtSeen){-1, 0, 0, 0, 0, 0, -1, -1, 0};
+    *seen = (RtSeen){-1, 0, 0, 0, 0, 0, -1, -1, 0, 0};
     *new_fight = 0;
     *obs_only = 0;
     int header = 0;
@@ -228,8 +234,9 @@ static int rt_parse(FILE* in, Request* q, RtSeen* seen, int* new_fight, int* fig
             *new_fight = 1;
             assert(sscanf(line + 6, "%d", fight_start) == 1);
         } else if (!strncmp(line, "V ", 2)) {
-            assert(sscanf(line + 2, "%d %d %d %d %d %d %d %d %d", &seen->swing_raw, &seen->swing_style, &seen->hit_landed, &seen->hit_damage, &seen->veng_cast,
-                &seen->consuming, &seen->bar_ratio, &seen->bar_scale, &seen->veng_text) == 9);
+            int fields = sscanf(line + 2, "%d %d %d %d %d %d %d %d %d %d", &seen->swing_raw, &seen->swing_style, &seen->hit_landed, &seen->hit_damage, &seen->veng_cast,
+                &seen->consuming, &seen->bar_ratio, &seen->bar_scale, &seen->veng_text, &seen->swing_spec);
+            assert(fields == 9 || fields == 10);
         } else {
             assert(header && "request must start with LA");
             used += (size_t)snprintf(text + used, sizeof(text) - used, "%s", line);

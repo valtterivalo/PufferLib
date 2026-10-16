@@ -83,6 +83,7 @@ int main(int argc, char** argv) {
         if (new_fight) printf("== FIGHT %d\n", fight_start);
         printf("%d %s hp %d lock %d B %d-%d bar %d atk %d W %s S %s", q.tick, obs_only ? "OBS" : "DEC", us->current_hitpoints, us->pvp_overheal_block, q.belief.hp_low, q.belief.hp_high,
             g_fight.vis.health_bar, osrs_interaction_active(&us->interaction), rx_item(us->equipped[GEAR_SLOT_WEAPON]), rx_item(us->equipped[GEAR_SLOT_SHIELD]));
+        printf(" spec us %d him~%d", us->special_energy, g_fight.vis.spec_est);
         float pr[512];
         rx_probs(g_fight.net, mask, RF_PRIMARY, pr);
         printf(" | prim none %.2f atk %.2f stop %.2f tp %.2f", pr[0], pr[RF_ATTACK], pr[RF_STOP], pr[RF_TELEPORT]);

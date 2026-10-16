@@ -1,6 +1,7 @@
 #ifndef OSRS_RISKFIGHT_MODEL_H
 #define OSRS_RISKFIGHT_MODEL_H
 
+#include <limits.h>
 #include "../../osrs_env.h"
 #include "../../osrs_health_bar.h"
 #include "../../osrs_player_inventory_use.h"
@@ -9,6 +10,9 @@
 #include "../../tests/riskfight_motor.h"
 
 enum { RF_PRICE_MAX_X10 = 25 };
+/* Every reward leaves the env divided by this ONE constant, the largest supported death price: a kill is 1 / Pmax, a death -price / Pmax, so PufferLib's clamp to
+ * [-1, 1] never bites. It is global on purpose: scaling per fight would reweight fights against each other inside a session. */
+#define RF_REWARD_SCALE (10.0f / RF_PRICE_MAX_X10)
 typedef enum { RISKFIGHT_HUMAN, RISKFIGHT_HUMAN_HELDOUT, RISKFIGHT_ALL_IN, RISKFIGHT_ESCAPER, RISKFIGHT_OPPONENTS } RiskfightOpponent;
 enum { RISKFIGHT_CONSUME_BANDS = 5, RISKFIGHT_AXE_BANDS = 3, RISKFIGHT_TAB_SUPPLY_BANDS = 3, RISKFIGHT_TAB_SUPPLY_TICKS = 8 };
 /** Per-mille rates of one scripted fighter. Consume bands split own HP at 40, 65, 73 and 90,
@@ -64,8 +68,16 @@ enum {
     RF_OPPONENT_START = RF_EQUIPPED_START + NUM_GEAR_SLOTS,
     RF_HISTORY_START = RF_OPPONENT_START + NUM_GEAR_SLOTS + 14,
     RF_PRICE = RF_HISTORY_START + RF_HISTORY_TICKS * RF_EVENT_WIDTH,   /* death price: what our death costs us over what his kill wins us, scaled by 1 / RF_PRICE_MAX */
-    RF_OBS_SIZE = RF_PRICE + 1,
+    /* Session block, appended behind everything else (riskfight_write_session_observation): [0] session ticks left over RF_SESSION_HORIZON_TICKS, capped at 1;
+     * [1] his special energy as a player counts it (100 minus the specs seen, plus the regeneration since), over 100. */
+    RF_SESSION_START = RF_PRICE + 1,
+    RF_SESSION_SIZE = 2,
+    RF_OBS_SIZE = RF_SESSION_START + RF_SESSION_SIZE,
 };
+/* Ticks left beyond which the end of the session no longer changes what is worth doing: several fight cycles. */
+enum { RF_SESSION_HORIZON_TICKS = 1500 };
+/* Ticks left of a session whose end is not modelled: what riskfight_reset leaves and the live server keeps (a live session has no budget). */
+enum { RF_SESSION_OPEN = INT_MAX };
 #define RF_ACTION_DIMS_INIT {30,30,30,29,29,29,2,2,3,28,5,4,30,30,30,30,30,30,30,30,7}
 static const int RF_ACTION_DIMS[RF_HEADS] = RF_ACTION_DIMS_INIT;
 static const int RF_GEAR_SLOT_BY_HEAD[RF_HEADS] = {
@@ -86,6 +98,8 @@ typedef struct {
     int pending_consume_tick, pending_bar_before, pending_damage_since;
     int last_cast_tick, last_proc_tick;
     float events[RF_HISTORY_TICKS][RF_EVENT_WIDTH];
+    /* His special energy as a player counts it: starts at 100, loses the cost of every special swing seen, regenerates 10 every 50 ticks once below 100. */
+    int spec_est, spec_regen_phase;
 } RiskfightVisibleOpponent;
 
 typedef struct {
@@ -113,7 +127,6 @@ typedef struct {
     float damage_rewards[2];
     float direct_ko_chance_mass[2];
     float chance_rewards[2];
-    float teleport_penalties[2];
     int drink_brew[2];
     int drink_sanfew[2];
     int drink_combat[2];
@@ -133,6 +146,9 @@ typedef struct {
     int opp_ring[4][RF_HEADS];
     /* Stakes: the death price us/him (Stakes.ratio is him/us) of this fight; the reward of a death is minus this, of a kill 1. */
     float death_price;
+    /* Specials each side used this fight (any weapon), and the session ticks left (RF_SESSION_OPEN outside a session). */
+    int specs_used[2];
+    int session_ticks_left;
 } RiskfightState;
 typedef struct {
     uint8_t equipment[NUM_GEAR_SLOTS];
@@ -158,7 +174,6 @@ typedef struct {
     int human_player;
     float damage_reward_coeff;
     float chance_reward_coeff;
-    float teleport_penalty;
     RiskfightMotor motor;
     /* His actions from a fitted policy instead of the script: opp_hook fills them for the tick about to be processed, opp_after sees the tick that ran. */
     void* opp_user;
@@ -325,6 +340,20 @@ static void riskfight_classify_consume_heal(int lo, int hi,
     *food = f; *potion = po; *karam = k; *delay = d;
 }
 
+/** One tick of the regeneration of his special energy as a player counts it (the sim's own clock: +OSRS_SPEC_REGEN_AMOUNT every OSRS_SPEC_REGEN_INTERVAL ticks below 100). */
+static inline void riskfight_spec_est_regen(RiskfightVisibleOpponent* v) {
+    if (v->spec_est >= 100) { v->spec_regen_phase = 0; return; }
+    if (++v->spec_regen_phase < OSRS_SPEC_REGEN_INTERVAL) return;
+    v->spec_regen_phase = 0;
+    v->spec_est = v->spec_est + OSRS_SPEC_REGEN_AMOUNT > 100 ? 100 : v->spec_est + OSRS_SPEC_REGEN_AMOUNT;
+}
+
+/** A special swing of his was seen: it costs `cost` of the estimate, and the regeneration clock starts when the estimate leaves 100. */
+static inline void riskfight_spec_est_seen(RiskfightVisibleOpponent* v, int cost) {
+    if (v->spec_est >= 100) v->spec_regen_phase = 0;
+    v->spec_est = v->spec_est > cost ? v->spec_est - cost : 0;
+}
+
 static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) {
     const Player* opponent = &s->env.players[1 - viewer];
     RiskfightVisibleOpponent* v = &s->visible[viewer];
@@ -344,6 +373,8 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
     }
     if (reset) {
         v->last_cast_tick = v->last_proc_tick = -1000;
+        v->spec_est = 100;
+        v->spec_regen_phase = 0;
         v->last_attack_tick = -1;
         v->consume_food_est = 0; v->consume_potion_est = 0;
         v->consume_karam_est = 0; v->consume_delay_est = 0;
@@ -409,6 +440,7 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
     memset(s, 0, sizeof(*s));
     s->env.rng_state = rng;
     s->death_price = 1;
+    s->session_ticks_left = RF_SESSION_OPEN;
     s->env.winner = -1;
     s->env.pvp_runtime.teleport_world = OSRS_TELEPORT_WORLD_PVP;
     pvp_reset_priority(&s->env, OSRS_PRIORITY_PVP_WORLD);

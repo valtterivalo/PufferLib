@@ -5,7 +5,7 @@ typedef struct {
     uint64_t omission_decay_ticks;
     float midfight_probability;
     int midfight_max_ticks;
-    int session_rounds;
+    int session_ticks; /* game ticks of one session (episode): fights plus the time between them */
     float curveball_probability;
     int randomize;
     float death_price; /* 0: drawn per fight, log-uniform in [0.4, 2.5]; else fixed */
@@ -30,9 +30,9 @@ static RiskfightTrainingConfig riskfight_training_config(Dict* kwargs) {
     const char* names[] = {"scripted_probability", "scripted_omission_initial",
         "scripted_omission_decay_ticks", "midfight_probability", "midfight_max_ticks"};
     double values[5] = {0};
-    DictItem* rounds = dict_find(kwargs, "session_rounds");
-    assert(rounds && rounds->value >= 1 && rounds->value == floor(rounds->value));
-    config.session_rounds = (int)rounds->value;
+    DictItem* ticks = dict_find(kwargs, "session_ticks");
+    assert(ticks && ticks->value >= 1 && ticks->value <= INT_MAX && ticks->value == floor(ticks->value));
+    config.session_ticks = (int)ticks->value;
     DictItem* curveball = dict_find(kwargs, "curveball_probability");
     assert(curveball && curveball->value >= 0 && curveball->value <= 1);
     config.curveball_probability = (float)curveball->value;
@@ -77,7 +77,6 @@ static void riskfight_training_clear_returns(RiskfightState* state) {
     memset(state->damage_rewards, 0, sizeof(state->damage_rewards));
     memset(state->direct_ko_chance_mass, 0, sizeof(state->direct_ko_chance_mass));
     memset(state->chance_rewards, 0, sizeof(state->chance_rewards));
-    memset(state->teleport_penalties, 0, sizeof(state->teleport_penalties));
 }
 
 /** A scripted session opponent: a training human, or a synthetic curveball. */
@@ -143,15 +142,6 @@ static void riskfight_training_randomize(RiskfightTraining* training, RiskfightS
         if ((kind == OSRS_CONSUMABLE_ANGLERFISH || kind == OSRS_CONSUMABLE_KARAMBWAN) && riskfight_dr_pick(training, 100) < 35)
             p->inventory_cells[slot] = osrs_inventory_cell_from_content_code(0);
     }
-    /* Our side in the VW kit starts from a bag the fight has already emptied in places: meals gone leave several empty slots, as live. */
-    if (context->loadout[0] == &RISKFIGHT_VW_LOADOUT) {
-        Player* us = &state->env.players[0];
-        for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
-            OsrsConsumableKind kind = (OsrsConsumableKind)osrs_inventory_cell_metadata(&us->inventory_cells[slot])->consumable_kind;
-            if ((kind == OSRS_CONSUMABLE_ANGLERFISH || kind == OSRS_CONSUMABLE_KARAMBWAN) && riskfight_dr_pick(training, 100) < 25)
-                us->inventory_cells[slot] = osrs_inventory_cell_from_content_code(0);
-        }
-    }
     state->opp_lag = riskfight_dr_pick(training, 4);
     RiskfightProfile* profile = &training->profile;
     *profile = *state->opponent_profile;
@@ -163,10 +153,10 @@ static void riskfight_training_randomize(RiskfightTraining* training, RiskfightS
     state->opponent_profile = profile;
 }
 
-static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* training,
-    RiskfightState* state, RiskfightContext* context, int frozen_policy) {
-    if (context->kit_mix) context->loadout[0] = encounter_rand_int(&training->rng, 2) ? &RISKFIGHT_VW_LOADOUT : &RISKFIGHT_LIVE_LOADOUT;
-    riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
+/** A new opponent steps up to a freshly reset fight: his price, who plays him (learned, or a scripted human or curveball), and his randomized side. A
+ * midfight start (a scaffold that is off by default) happens only at the first fight of a session. */
+static RiskfightTrainingStart riskfight_training_new_opponent(RiskfightTraining* training, RiskfightState* state,
+    RiskfightContext* context, int frozen_policy, int allow_midfight) {
     state->death_price = training->config.death_price > 0 ? training->config.death_price :
         0.4f * powf(RF_PRICE_MAX_X10 / 4.0f, encounter_rand_float(&training->rng));
     training->opponent = RF_TRAIN_LEARNED;
@@ -176,7 +166,7 @@ static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* traini
         scripted = riskfight_training_profile(training);
     }
     RiskfightTrainingStart start = RF_START_FRESH;
-    if (riskfight_training_draw(training, training->config.midfight_probability)) {
+    if (allow_midfight && riskfight_training_draw(training, training->config.midfight_probability)) {
         const RiskfightProfile* first = riskfight_training_profile(training);
         const RiskfightProfile* second = riskfight_training_profile(training);
         int ticks = 1 + encounter_rand_int(&training->rng, training->config.midfight_max_ticks);
@@ -184,21 +174,39 @@ static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* traini
     }
     if (scripted) state->opponent_profile = scripted;
     riskfight_training_randomize(training, state, context);
+    return start;
+}
+
+/** The first fight of a session: our kit (drawn once per session), full supplies on both sides, a new opponent. */
+static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* training,
+    RiskfightState* state, RiskfightContext* context, int frozen_policy) {
+    if (context->kit_mix) context->loadout[0] = encounter_rand_int(&training->rng, 2) ? &RISKFIGHT_VW_LOADOUT : &RISKFIGHT_LIVE_LOADOUT;
+    riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
+    RiskfightTrainingStart start = riskfight_training_new_opponent(training, state, context, frozen_policy, 1);
     training->start_tick = state->env.tick;
     training->start = start;
     training->omissions = 0;
     return start;
 }
 
-/** Fresh round against the same opponent after an escape: full supplies, new priorities and script seeds. */
-static void riskfight_training_next_round(RiskfightTraining* training,
-    RiskfightState* state, RiskfightContext* context) {
+/** The next fight of the session after the transition `t`: our supplies persist unless we died or teleported; the opponent persists, with his supplies, only in a
+ * rematch, otherwise a new one (and a new price) steps up. */
+static void riskfight_training_next_fight(RiskfightTraining* training, RiskfightState* state,
+    RiskfightContext* context, const RiskfightTransition* t, int frozen_policy) {
+    RiskfightCarry carry[2];
+    for (int side = 0; side < 2; side++) riskfight_carry_save(state, side, &carry[side]);
     const RiskfightProfile* profile = state->opponent_profile;
     float price = state->death_price;
+    int opp_lag = state->opp_lag;
     riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
-    state->opponent_profile = profile;
-    state->death_price = price;
+    riskfight_session_begin_fight(state, carry, t);
+    if (t->rematch) {
+        state->opponent_profile = profile;
+        state->death_price = price;
+        state->opp_lag = opp_lag;
+    } else riskfight_training_new_opponent(training, state, context, frozen_policy, 0);
     training->start_tick = 0;
+    training->start = RF_START_FRESH;
 }
 
 static int riskfight_training_actions(RiskfightTraining* training,
