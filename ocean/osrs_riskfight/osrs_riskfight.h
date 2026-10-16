@@ -24,10 +24,12 @@ typedef float obs_t;
 struct Log {
     float episode_return, episode_length;
     float policy_0_score, draw_rate;
-    float damage_reward, teleport_penalty, direct_ko_chance_mass, chance_reward;
+    float damage_reward, direct_ko_chance_mass, chance_reward;
     float kills, deaths, escapes, mutual_deaths, timeouts, net_stake, rounds, n;
     float scripted_ticks, scripted_omissions, midfight_ticks, prefix_terminal;
     float self_teleports, opponent_teleports, both_teleports;
+    float rude_teleports, rematches, tp_self_spec, tp_opp_spec, tp_both_spec, tp_opp_could_spec, tp_hp, tp_fight_tick;
+    float tp_food, tp_potion_doses, tp_self_no_special;
     float self_escape_healing[4], self_escape_no_boost, self_escape_both_no_special;
     float drink_brew, drink_sanfew, drink_combat;
     float eat_marlin, eat_halibut, eat_pie;
@@ -43,14 +45,17 @@ struct Env {
     int num_agents;
     unsigned int rng;
     Agent agents[2];
-    int tag, boundary_reached, round;
+    int tag, boundary_reached;
+    int session_elapsed, session_fights; /* game ticks spent so far (fights and delays), fights ended */
+    float session_stake;                 /* kills minus price times deaths so far, in kill units */
     RiskfightState state;
     RiskfightContext context;
     RiskfightTraining training;
     RiskfightAlign align;
     void* oppfit;
     float oppfit_probability;
-    float teleport_penalty_start, teleport_penalty_final, teleport_penalty_ticks;
+    int oppfit_active;
+    uint32_t oppfit_seed;
 #ifdef OSRS_PUFFER_RENDER
     void* renderer;
 #endif
@@ -66,10 +71,6 @@ void puf_init(Env* env, Dict* kwargs) {
     env->oppfit_probability = oppfit_p ? (float)oppfit_p->value : 0;
     assert(env->oppfit_probability >= 0 && env->oppfit_probability <= 1);
     env->oppfit = env->oppfit_probability > 0 ? oppfit_create() : NULL;
-    DictItem* tp_final = dict_find(kwargs, "teleport_penalty_final");
-    DictItem* tp_ticks = dict_find(kwargs, "teleport_penalty_ticks");
-    env->teleport_penalty_final = tp_final ? (float)tp_final->value : -1;
-    env->teleport_penalty_ticks = tp_ticks ? (float)tp_ticks->value : 0;
     DictItem* motor = dict_find(kwargs, "motor");
     if (motor) riskfight_put_int((EncounterState*)&env->state, (EncounterContext*)&env->context, "motor", (int)motor->value);
     DictItem* deployable = dict_find(kwargs, "deployable");
@@ -79,13 +80,12 @@ void puf_init(Env* env, Dict* kwargs) {
     DictItem* pool = dict_find(kwargs, "opponent_pool");
     if (pool) riskfight_put_int((EncounterState*)&env->state, (EncounterContext*)&env->context, "opponent_pool", (int)pool->value);
     assert(!env->context.opponent_pool || !dict_get(kwargs, "self_play")); /* pool kits are played by the script or OppFit */
-    const char* reward_keys[] = {"damage_reward_coeff", "teleport_penalty", "chance_reward_coeff"};
-    for (int i = 0; i < 3; i++) {
+    const char* reward_keys[] = {"damage_reward_coeff", "chance_reward_coeff"};
+    for (int i = 0; i < 2; i++) {
         DictItem* item = dict_find(kwargs, reward_keys[i]);
         if (item) riskfight_put_float((EncounterState*)&env->state,
             (EncounterContext*)&env->context, reward_keys[i], (float)item->value);
     }
-    env->teleport_penalty_start = env->context.teleport_penalty;
     env->num_agents = env->context.self_play ? 2 : 1;
     for (int i = 0; i < env->num_agents; i++) env->agents[i].policy = i;
     env->state.env.rng_state = osrs_env_seed((uint32_t)env->rng, 0);
@@ -95,7 +95,8 @@ void puf_init(Env* env, Dict* kwargs) {
     assert(env->context.self_play || (env->training.config.scripted_probability == 0 &&
         env->training.config.midfight_probability == 0));
     memset(&env->log, 0, sizeof(env->log));
-    env->round = 0;
+    env->session_elapsed = env->session_fights = 0;
+    env->session_stake = 0;
     riskfight_finalize_context((EncounterState*)&env->state, (EncounterContext*)&env->context);
 }
 static inline void puf_set_bot_policy(Env* env, int bot_policy) {
@@ -116,6 +117,7 @@ static inline void riskfight_obs_store(obs_t* out, const float* obs) {
 #endif
 }
 static void riskfight_native_observe(Env* env) {
+    env->state.session_ticks_left = env->training.config.session_ticks - env->session_elapsed;
     for (int i = 0; i < env->num_agents; i++) {
         float obs[RF_OBS_SIZE];
         riskfight_write_observation(&env->state, i, obs);
@@ -123,19 +125,30 @@ static void riskfight_native_observe(Env* env) {
         riskfight_write_action_mask(&env->state, i, env->agents[i].action_mask);
     }
 }
-static void riskfight_native_reset(Env* env) {
-    riskfight_align_reset(&env->align);
-    riskfight_training_reset(&env->training, &env->state, &env->context, env->tag);
+/** Who plays the opponent of a fight just reset: the fitted human with probability oppfit_probability, drawn per opponent (a rematch keeps the draw and the seed). */
+static void riskfight_native_opponent_hooks(Env* env, int new_opponent) {
     env->context.opp_hook = NULL;
     env->context.opp_after = NULL;
     env->context.opp_user = NULL;
-    /* OppFit plays the melee kits whose specials it was fitted on (VW, maul, AGS, claws); every other pool kit is left to the script. */
-    if (env->oppfit && (!env->context.opp_kit || env->context.opp_kit->oppfit_ok) && encounter_rand_float(&env->training.rng) < env->oppfit_probability) {
-        oppfit_reset(env->oppfit, &env->state, xorshift32(&env->training.rng) | 1);
-        env->context.opp_user = env->oppfit;
-        env->context.opp_hook = oppfit_actions;
-        env->context.opp_after = oppfit_after;
+    if (!env->oppfit) return;
+    if (new_opponent) {
+        /* OppFit plays the melee kits whose specials it was fitted on (VW, maul, AGS, claws); every other pool kit is left to the script. */
+        env->oppfit_active = (!env->context.opp_kit || env->context.opp_kit->oppfit_ok) && encounter_rand_float(&env->training.rng) < env->oppfit_probability;
+        if (env->oppfit_active) env->oppfit_seed = xorshift32(&env->training.rng) | 1;
     }
+    if (!env->oppfit_active) return;
+    oppfit_reset(env->oppfit, &env->state, env->oppfit_seed);
+    env->context.opp_user = env->oppfit;
+    env->context.opp_hook = oppfit_actions;
+    env->context.opp_after = oppfit_after;
+}
+/** A new session: full supplies, the first opponent, the whole budget. */
+static void riskfight_native_reset(Env* env) {
+    riskfight_align_reset(&env->align);
+    riskfight_training_reset(&env->training, &env->state, &env->context, env->tag);
+    riskfight_native_opponent_hooks(env, 1);
+    env->session_elapsed = env->session_fights = 0;
+    env->session_stake = 0;
 }
 void puf_reset(Env* env) {
     riskfight_native_reset(env);
@@ -145,7 +158,7 @@ void puf_reset(Env* env) {
         env->agents[i].terminals[0] = 0;
     }
 }
-/** Adds one finished round's tallies to the log. Outcome tallies wait for the session end. */
+/** Adds one finished fight's tallies to the log; the session totals (n, rounds, net_stake) are added when the session ends. */
 static void riskfight_native_log_round(Env* env) {
     const RiskfightState* s = &env->state;
     env->log.self_teleports += s->escaped[0];
@@ -157,8 +170,19 @@ static void riskfight_native_log_round(Env* env) {
         env->log.self_escape_no_boost += osrs_escape_no_boost(supplies);
         env->log.self_escape_both_no_special += osrs_escape_no_special(supplies) &&
             osrs_escape_no_special(&s->escape_supplies[0][1]);
+        env->log.rude_teleports += riskfight_rude_teleport(s);
+        /* Specials each side had used when we teleported, and whether he could still spec (by his true energy), our hitpoints and the fight tick. */
+        env->log.tp_self_spec += s->specs_used[0] > 0;
+        env->log.tp_opp_spec += s->specs_used[1] > 0;
+        env->log.tp_both_spec += s->specs_used[0] > 0 && s->specs_used[1] > 0;
+        env->log.tp_opp_could_spec += !osrs_escape_no_special(&s->escape_supplies[0][1]);
+        env->log.tp_hp += supplies->hp;
+        env->log.tp_food += supplies->food;
+        env->log.tp_potion_doses += supplies->potion_doses;
+        env->log.tp_self_no_special += osrs_escape_no_special(supplies);
+        env->log.tp_fight_tick += s->escape_tick[0];
     }
-    if (env->round == 0) {
+    if (env->session_fights == 0) {
         env->log.midfight_ticks += env->training.start_tick;
         env->log.prefix_terminal += env->training.start == RF_START_PREFIX_TERMINAL;
     }
@@ -166,7 +190,18 @@ static void riskfight_native_log_round(Env* env) {
     env->log.damage_reward += s->damage_rewards[0];
     env->log.direct_ko_chance_mass += s->direct_ko_chance_mass[0];
     env->log.chance_reward += s->chance_rewards[0];
-    env->log.teleport_penalty += s->teleport_penalties[0];
+    {
+        RiskfightOutcome outcome = s->outcome[0];
+        env->log.kills += outcome == RISKFIGHT_KILL;
+        env->log.deaths += outcome == RISKFIGHT_DEATH;
+        env->log.escapes += outcome == RISKFIGHT_ESCAPE;
+        env->log.mutual_deaths += outcome == RISKFIGHT_MUTUAL_DEATH;
+        env->log.timeouts += outcome == RISKFIGHT_TIMEOUT;
+        float stake = riskfight_outcome_reward(outcome, s->death_price);
+        env->log.policy_0_score += 0.5f * (riskfight_outcome_reward(outcome, 1) + 1.0f);
+        env->log.draw_rate += stake == 0;
+        env->session_stake += stake;
+    }
     env->log.episode_length += s->env.tick - env->training.start_tick;
     if (env->training.opponent == RF_TRAIN_SCRIPTED)
         env->log.scripted_ticks += s->env.tick - env->training.start_tick;
@@ -206,10 +241,6 @@ void puf_step(Env* env) {
     env->training.omissions += riskfight_training_actions(&env->training,
         &env->state, env->tag, actions);
     env->training.ticks++;
-    if (env->teleport_penalty_final >= 0 && env->teleport_penalty_ticks > 0) {
-        float f = env->training.ticks >= env->teleport_penalty_ticks ? 1.0f : (float)env->training.ticks / env->teleport_penalty_ticks;
-        env->context.teleport_penalty = env->teleport_penalty_start + (env->teleport_penalty_final - env->teleport_penalty_start) * f;
-    }
     riskfight_step((EncounterState*)&env->state, (EncounterContext*)&env->context, actions);
     riskfight_align_observe(&env->state, 0, stop_issued, &env->align);
     env->log.ticks_tentacle += env->state.ticks_tentacle[0];
@@ -224,38 +255,37 @@ void puf_step(Env* env) {
     env->state.ticks_voidwaker[1] = env->state.ticks_maul[1] = 0;
     env->state.combat_opp[0] = env->state.maul_opp[0] = 0;
     env->state.combat_opp[1] = env->state.maul_opp[1] = 0;
-    for (int i = 0; i < env->num_agents; i++) {
-        env->agents[i].rewards[0] = env->state.rewards[i];
-        env->agents[i].terminals[0] = env->state.env.episode_over;
-    }
+    for (int i = 0; i < env->num_agents; i++) env->agents[i].rewards[0] = env->state.rewards[i];
+    const int budget = env->training.config.session_ticks;
+    env->session_elapsed++;
     if (env->state.env.episode_over) {
         riskfight_native_log_round(env);
-        RiskfightOutcome outcome = env->state.outcome[0];
-        if (outcome == RISKFIGHT_ESCAPE && ++env->round < env->training.config.session_rounds) {
-            for (int i = 0; i < env->num_agents; i++) env->agents[i].terminals[0] = 0;
-            riskfight_align_reset(&env->align);
-            riskfight_training_next_round(&env->training, &env->state, &env->context);
-        } else {
-            env->log.kills += outcome == RISKFIGHT_KILL;
-            env->log.deaths += outcome == RISKFIGHT_DEATH;
-            env->log.escapes += outcome == RISKFIGHT_ESCAPE;
-            env->log.mutual_deaths += outcome == RISKFIGHT_MUTUAL_DEATH;
-            env->log.timeouts += outcome == RISKFIGHT_TIMEOUT;
-            float net_stake = riskfight_outcome_reward(outcome, 1);
-            env->log.policy_0_score += 0.5f * (net_stake + 1.0f);
-            env->log.draw_rate += net_stake == 0;
-            env->log.net_stake += net_stake;
-            env->log.rounds += env->round + (outcome != RISKFIGHT_ESCAPE);
-            env->log.scripted_omissions += env->training.omissions;
-            env->log.n++;
-            env->round = 0;
-#ifdef OSRS_PUFFER_RENDER
-            if (!env->renderer)
-                riskfight_native_reset(env);
-#else
-            riskfight_native_reset(env);
-#endif
+        env->session_fights++;
+        if (env->session_elapsed < budget) {
+            RiskfightTransition t = riskfight_session_transition(&env->state, &env->training.rng);
+            env->session_elapsed += t.delay;
+            if (env->session_elapsed < budget) {
+                env->log.rematches += t.rematch;
+                riskfight_align_reset(&env->align);
+                riskfight_training_next_fight(&env->training, &env->state, &env->context, &t, env->tag);
+                riskfight_native_opponent_hooks(env, !t.rematch);
+            }
         }
+    }
+    int session_over = env->session_elapsed >= budget;
+    for (int i = 0; i < env->num_agents; i++) env->agents[i].terminals[0] = session_over;
+    if (session_over) {
+        env->log.rounds += env->session_fights;
+        /* kills minus price times deaths per hour of session, so sessions of different length score alike */
+        env->log.net_stake += env->session_stake * (RF_TICKS_PER_HOUR / (float)budget);
+        env->log.scripted_omissions += env->training.omissions;
+        env->log.n++;
+#ifdef OSRS_PUFFER_RENDER
+        if (!env->renderer) riskfight_native_reset(env);
+        else env->state.env.episode_over = 1;
+#else
+        riskfight_native_reset(env);
+#endif
     }
     riskfight_native_observe(env);
 }
@@ -318,7 +348,17 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "damage_reward", log->damage_reward);
     dict_set(out, "direct_ko_chance_mass", log->direct_ko_chance_mass);
     dict_set(out, "chance_reward", log->chance_reward);
-    dict_set(out, "teleport_penalty", log->teleport_penalty);
+    dict_set(out, "rude_teleports", log->rude_teleports);
+    dict_set(out, "rematches", log->rematches);
+    dict_set(out, "tp_self_spec", log->tp_self_spec);
+    dict_set(out, "tp_opp_spec", log->tp_opp_spec);
+    dict_set(out, "tp_both_spec", log->tp_both_spec);
+    dict_set(out, "tp_opp_could_spec", log->tp_opp_could_spec);
+    dict_set(out, "tp_hp", log->tp_hp);
+    dict_set(out, "tp_fight_tick", log->tp_fight_tick);
+    dict_set(out, "tp_food", log->tp_food);
+    dict_set(out, "tp_potion_doses", log->tp_potion_doses);
+    dict_set(out, "tp_self_no_special", log->tp_self_no_special);
     dict_set(out, "score", log->net_stake);
     dict_set(out, "perf", log->net_stake);
     dict_set(out, "scripted_ticks", log->scripted_ticks);

@@ -33,6 +33,15 @@ __attribute__((constructor)) static void riskfight_build_inventory_rows(void) {
     }
 }
 
+/** The session block (RF_SESSION_START). [0] session ticks left over RF_SESSION_HORIZON_TICKS, capped at 1: what a fight is worth depends on the time left only
+ * through how many more fights fit, which stops mattering a few fight cycles out, so an open-ended session (live) reads 1, the value most of a training
+ * session shows too. [1] his special energy as a player counts it: whether he can still spec decides whether leaving after our own spec is rude. */
+static void riskfight_write_session_observation(const RiskfightState* s, int agent, float* obs) {
+    float* out = obs + RF_SESSION_START;
+    out[0] = s->session_ticks_left >= RF_SESSION_HORIZON_TICKS ? 1.0f : fmaxf(0.0f, (float)s->session_ticks_left / RF_SESSION_HORIZON_TICKS);
+    out[1] = s->visible[agent].spec_est / 100.0f;
+}
+
 /** The observation up to the price, and the weapons of the agent's bag when `bag_weapons` is given (the threat block needs them). */
 static void riskfight_write_observation_core(const RiskfightState* s, int agent, float* obs, RiskfightBagWeapons* bag_weapons) {
     const Player* p = &s->env.players[agent];
@@ -110,11 +119,12 @@ static void riskfight_write_script_observation(const RiskfightState* s, int agen
     riskfight_write_observation_core(s, agent, obs, NULL);
 }
 
-/** The full observation: the base, then the appended blocks in order (threat features). */
+/** The full observation: the base, then the appended blocks in order (threat features, session). */
 static void riskfight_write_observation(const RiskfightState* s, int agent, float* obs) {
     RiskfightBagWeapons bag_weapons = {{0}, 0};
     riskfight_write_observation_core(s, agent, obs, &bag_weapons);
     riskfight_threat_write(&s->env.players[agent], &bag_weapons, &s->visible[agent].threat, s->visible[agent].health_bar, obs + RF_THREAT_START);
+    riskfight_write_session_observation(s, agent, obs);
 }
 
 /** Head offsets into the mask, and the mask every state starts from: action 0 of every head and all

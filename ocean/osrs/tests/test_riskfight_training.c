@@ -40,7 +40,7 @@ static const RiskfightProfile STEADY = {{1000, 1000, 1000, 1000, 1000}, 0, 0, {0
 int main(void) {
     DictItem items[] = {
         {.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 1},
-        {.key = "session_rounds", .value = 1}, {.key = "curveball_probability", .value = 0},
+        {.key = "session_ticks", .value = 100000}, {.key = "curveball_probability", .value = 0},
         {.key = "scripted_probability", .value = 1},
         {.key = "scripted_omission_initial", .value = 1},
         {.key = "scripted_omission_decay_ticks", .value = 10},
@@ -91,7 +91,7 @@ int main(void) {
     assert(teacher->env.log.n == 0 && teacher->env.log.scripted_ticks == 0);
     teacher->actions[0][RF_PRIMARY] = RF_TELEPORT;
     puf_step(&teacher->env);
-    assert(teacher->terminals[0] == 1 && teacher->env.log.scripted_ticks == 2);
+    assert(teacher->terminals[0] == 0 && teacher->env.log.escapes == 1 && teacher->env.log.scripted_ticks == 2);
     destroy(teacher);
 
     Fixture* generated = fixture(&baseline, 1);

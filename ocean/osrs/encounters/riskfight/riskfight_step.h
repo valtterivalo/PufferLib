@@ -26,8 +26,15 @@ static void riskfight_record_attack(RiskfightState* s, int agent, int hits, int 
         visible->last_attack_speed = get_slot_gear_bonuses(p)->attack_speed;
     }
 }
+/* A special attack of `agent` with `weapon`: counted, and seen by the other side, whose estimate of his special energy pays the cost. */
+static void riskfight_special_used(RiskfightState* s, int agent, int weapon) {
+    s->specs_used[agent]++;
+    riskfight_spec_est_seen(&s->visible[1 - agent], osrs_spec_cost(weapon));
+}
 static void riskfight_count_maul_spec(RiskfightState* s, int agent, int hits) {
-    if (hits > 0) s->spec_maul[agent]++;
+    if (hits <= 0) return;
+    s->spec_maul[agent]++;
+    riskfight_special_used(s, agent, s->env.players[agent].equipped[GEAR_SLOT_WEAPON]);
 }
 
 static void riskfight_attack(RiskfightState* s, RiskfightContext* ctx, int agent) {
@@ -54,6 +61,7 @@ static void riskfight_attack(RiskfightState* s, RiskfightContext* ctx, int agent
             s->env.tick, agent, 1 - agent);
         abort();
     }
+    if (special) riskfight_special_used(s, agent, weapon);
     if (special && weapon == ITEM_VOIDWAKER) s->spec_voidwaker[agent]++;
     perform_attack(&s->env, agent, 1 - agent, style, special, 0, distance);
     riskfight_record_attack(s, agent, 1, 0);
@@ -407,6 +415,7 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         p->hit_landed_this_tick = 0;
         update_player_timers(p, encounter_player_prayer_bonus(p));
         if (p->pvp_overheal_block > 0) p->pvp_overheal_block--;
+        riskfight_spec_est_regen(&s->visible[1 - i]);
         osrs_poison_tick_immunity(&s->poison[i]);
     }
     /* Inputs of both actors (meals, casts, equips, clicks) resolve before either actor's incoming hits: a meal heals before the damage landing on
@@ -507,12 +516,11 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
     for (int i = 0; i < 2; i++) {
         float chance_reward = ctx->chance_reward_coeff * (s->direct_ko_chance_mass[i] - previous_chance[i]);
         float damage_reward = ctx->damage_reward_coeff * reward_observer.direct_hitpoints_lost[i];
-        float teleport_penalty = s->escaped[i] ? ctx->teleport_penalty : 0;
-        s->rewards[i] += damage_reward + chance_reward - teleport_penalty;
-        s->episode_returns[i] += s->rewards[i];
+        float stake = s->rewards[i] + damage_reward + chance_reward;
+        s->rewards[i] = stake * RF_REWARD_SCALE;
+        s->episode_returns[i] += stake;
         s->damage_rewards[i] += damage_reward;
         s->chance_rewards[i] += chance_reward;
-        s->teleport_penalties[i] += teleport_penalty;
         riskfight_observe_visible(s, i, 0);
     }
 }
