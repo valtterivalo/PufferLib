@@ -5,7 +5,7 @@
  *             net-played seat 1 is a pool kit with selfplay_pool_probability, else one of ours (live_loadout 3); the script and OppFit always take a pool kit.
  *   rematch   keeps seat 1's player, his kit and his price; a new opponent draws all three again.
  *   symmetry  the observation and the mask are one function of a seat's own view: swapping the seats of a state swaps the two views, so a copy of one net
- *             in either seat is shown the mirrored fight. The session rules (rude teleport, rematch, refills, delays, idle eating) treat both seats alike.
+ *             in either seat is shown the mirrored fight. The session rules (rude teleport, rematch, regear, delays) treat both seats alike.
  * OppFit needs RF_OPPFIT_MODEL and RF_OPPFIT_EAT; the OppFit share is tested when they are set. */
 #include "../../osrs_riskfight/osrs_riskfight.h"
 #include <assert.h>
@@ -20,8 +20,9 @@ static unsigned char masks[2][RF_MASK_SIZE];
 static Env* make_env(const DictItem* extra, int extra_count, int tag, unsigned rng) {
     DictItem items[24] = {{.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 1}, {.key = "session_ticks", .value = 3000},
         {.key = "curveball_probability", .value = 0}, {.key = "death_price", .value = 0}, {.key = "live_loadout", .value = 3},
-        {.key = "opponent_pool", .value = 1}, {.key = "domain_randomization", .value = 1}, {.key = "deployable", .value = 1}};
-    int count = 9;
+        {.key = "opponent_pool", .value = 1}, {.key = "domain_randomization", .value = 1}, {.key = "deployable", .value = 1},
+        {.key = "rep_start_probability", .value = 0}}; /* the shares below are those of a session without a reputation (a ragger is the script whatever the mix) */
+    int count = 10;
     for (int i = 0; i < extra_count; i++) {
         int replaced = 0;
         for (int j = 0; j < count; j++)
@@ -318,10 +319,9 @@ static void test_session_rules_are_symmetric(void) {
             RiskfightState s = teleport_state(leaver, cases[c].specs, cases[c].energy);
             uint32_t rng = 7 + 100 * (uint32_t)c;
             for (int i = 0; i < trials; i++) {
-                RiskfightTransition t = riskfight_session_transition(&s, &rng);
+                RiskfightTransition t = riskfight_session_transition(&s, &rng, 0);
                 rematches[leaver][c] += t.rematch;
                 rudes[leaver][c] += t.rude;
-                assert(t.refill[leaver] == 1 && t.refill[1 - leaver] == 0);
                 assert(t.delay >= 0);
                 if (t.rematch) assert(t.delay >= RF_DELAY_REMATCH.ticks[0] && t.delay <= RF_DELAY_REMATCH.ticks[RF_DELAY_DECILES - 1]);
             }
@@ -330,7 +330,7 @@ static void test_session_rules_are_symmetric(void) {
         assert(rudes[leaver][0] == trials && rematches[leaver][0] == 0);                  /* a rude teleport loses the opponent, whoever leaves */
         for (int c = 1; c < 3; c++) assert(rudes[leaver][c] == 0 && within(rematches[leaver][c], trials, RF_REMATCH_PROBABILITY));
     }
-    /* Both leave: rude if either was; refilled both. */
+    /* Both leave: rude if either was. */
     RiskfightState both = teleport_state(0, 0, 100);
     both.escaped[1] = 1;
     both.specs_used[1] = 1;
@@ -338,14 +338,14 @@ static void test_session_rules_are_symmetric(void) {
     both.escape_supplies[1][0].minimum_spec_cost = 50;
     uint32_t rng = 3;
     for (int i = 0; i < 300; i++) {
-        RiskfightTransition t = riskfight_session_transition(&both, &rng);
-        assert(t.rude && !t.rematch && t.refill[0] && t.refill[1]);
+        RiskfightTransition t = riskfight_session_transition(&both, &rng, 0);
+        assert(t.rude && !t.rematch);
     }
     printf("session rules: rematch rate %.3f / %.3f after a polite teleport of seat 0 / seat 1 (%.2f); a rude one never rematches\n",
         (double)rematches[0][1] / trials, (double)rematches[1][1] / trials, RF_REMATCH_PROBABILITY);
 }
 
-/* Supplies and idle eating: the side that stays eats back up during the wait and its food is spent, whichever seat it is; the side that left is refilled. */
+/* Every fight starts after a regear, whichever seat left and whichever side stayed: both seats full supplies, special energy 100, 121 hitpoints. */
 static int count_food(const Player* p) {
     int n = 0;
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
@@ -353,36 +353,34 @@ static int count_food(const Player* p) {
     return n;
 }
 
-static void test_rematch_carries_both_seats_alike(void) {
-    for (int leaver = 0; leaver < 2; leaver++) {
-        DictItem knobs[] = {{.key = "scripted_probability", .value = 0}, {.key = "selfplay_pool_probability", .value = 0}, {.key = "domain_randomization", .value = 0}};
-        Env* env = make_env(knobs, 3, 0, 61 + (unsigned)leaver);
-        RiskfightState* s = &env->state;
-        int stayer = 1 - leaver;
-        int full_food[2] = {count_food(&s->env.players[0]), count_food(&s->env.players[1])};
-        /* The stayer is hurt with a lighter bag, the leaver too. */
-        for (int side = 0; side < 2; side++) {
-            s->env.players[side].current_hitpoints = 50;
-            s->env.players[side].special_energy = 30;
-            s->env.players[side].spec_regen_active = 1;
-            for (int slot = 0; slot < 3; slot++) s->env.players[side].inventory_cells[slot] = osrs_inventory_cell_from_content_code(0);
+static void test_every_fight_is_a_regear(void) {
+    for (int rematch = 0; rematch < 2; rematch++)
+        for (int leaver = 0; leaver < 2; leaver++) {
+            DictItem knobs[] = {{.key = "scripted_probability", .value = 0}, {.key = "selfplay_pool_probability", .value = 0}, {.key = "domain_randomization", .value = 0}};
+            Env* env = make_env(knobs, 3, 0, 61 + (unsigned)leaver);
+            RiskfightState* s = &env->state;
+            int full_food[2] = {count_food(&s->env.players[0]), count_food(&s->env.players[1])};
+            for (int side = 0; side < 2; side++) {
+                s->env.players[side].current_hitpoints = 50;
+                s->env.players[side].special_energy = 30;
+                s->env.players[side].current_attack = 90;
+                s->env.players[side].current_prayer = 3;
+                s->inventory_use[side].vengeance_sacks = 4;
+                for (int slot = 0; slot < 3; slot++) s->env.players[side].inventory_cells[slot] = osrs_inventory_cell_from_content_code(0);
+            }
+            s->outcome[0] = s->outcome[1] = RISKFIGHT_ESCAPE;
+            s->escaped[leaver] = 1;
+            RiskfightTransition t = {.delay = 300, .rematch = rematch};
+            riskfight_training_next_fight(&env->training, s, &env->context, &t, env->tag);
+            for (int side = 0; side < 2; side++) {
+                const Player* p = &s->env.players[side];
+                /* Seat 1 wears whatever kit steps up (a pool kit may carry less food or start at 22 hitpoints); seat 0 is our own kit. */
+                assert(p->special_energy == 100 && p->current_attack > 99 && p->current_prayer == 99);
+                assert(side == 1 ? p->current_hitpoints <= 121 : p->current_hitpoints == 121 && count_food(p) == full_food[0] && s->inventory_use[0].vengeance_sacks > 4);
+            }
+            destroy(env);
         }
-        int food_before[2] = {count_food(&s->env.players[0]), count_food(&s->env.players[1])};
-        s->outcome[0] = s->outcome[1] = RISKFIGHT_ESCAPE;
-        s->escaped[leaver] = 1;
-        RiskfightTransition t = {.delay = 300, .rematch = 1};
-        t.refill[leaver] = 1;
-        riskfight_training_next_fight(&env->training, s, &env->context, &t, env->tag);
-        const Player* stays = &s->env.players[stayer];
-        const Player* left = &s->env.players[leaver];
-        /* The one that stayed ate back to full in the wait and is a meal lighter, its special energy regenerated a little; the one that left is refilled. */
-        assert(stays->current_hitpoints >= stays->base_hitpoints);
-        assert(count_food(stays) < food_before[stayer]);
-        assert(stays->special_energy > 30 && stays->special_energy < 100);
-        assert(count_food(left) == full_food[leaver] && left->special_energy == 100);
-        destroy(env);
-    }
-    puts("rematch: the side that stayed eats up and keeps its bag, the one that left is refilled, seat 0 or seat 1 alike");
+    puts("regear: both seats start every fight, rematch or not, at 121 hitpoints with full supplies, special energy and prayer");
 }
 
 int main(void) {
@@ -393,7 +391,7 @@ int main(void) {
     test_swapped_seats_see_mirrored_observations();
     test_start_views_mirror();
     test_session_rules_are_symmetric();
-    test_rematch_carries_both_seats_alike();
+    test_every_fight_is_a_regear();
     puts("riskfight mix and seat symmetry passed");
     return 0;
 }

@@ -46,9 +46,9 @@ int main(int argc, char** argv) {
         hard ? "argmax" : "sample", oppfit, session_ticks, pool, 100.0 * env->log.wait_ticks / steps);
     const Log* l = &env->log;
     double fights = l->rounds, tp = l->self_teleports;
-    printf("per session: fights %.2f kills %.2f deaths %.2f mutual %.2f our_teleports %.2f his_teleports %.2f timeouts %.2f rematches %.2f rude %.2f net_stake/h %.3f\n",
+    printf("per session: fights %.2f kills %.2f deaths %.2f mutual %.2f our_teleports %.2f his_teleports %.2f timeouts %.2f rematches %.2f rude %.2f ragged %.2f net_stake/h %.3f\n",
         fights / sessions, l->kills / sessions, l->deaths / sessions, l->mutual_deaths / sessions, tp / sessions, l->opponent_teleports / sessions,
-        l->timeouts / sessions, l->rematches / sessions, l->rude_teleports / sessions, l->net_stake / sessions);
+        l->timeouts / sessions, l->rematches / sessions, l->rude_teleports / sessions, l->ragged / sessions, l->net_stake / sessions);
     printf("fight length %.1f ticks\n", l->episode_length / (fights > 0 ? fights : 1));
     if (tp > 0) {
         printf("at our teleports (n=%.0f): our special used %.3f, his used %.3f, both %.3f, his energy could spec %.3f, we could not spec any more %.3f, rude %.3f\n", tp,

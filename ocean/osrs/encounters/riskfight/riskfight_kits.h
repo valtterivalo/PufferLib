@@ -19,6 +19,23 @@ typedef enum { RF_BAG_MELEE, RF_BAG_RANGED, RF_BAG_BARE } RiskfightBag;
 enum { RF_KIT_TAPE_WEIGHT = 10, RF_KIT_RANGED_START = 4, RF_KIT_LIVE_SACKS = 27 };
 static const float RF_POOL_MASS[3] = {0.70f, 0.22f, 0.08f}; /* empirical, archetype, edge */
 
+/** A ragger's kit: drawn by weight among the pool's kits that start with a ranged weapon (the sim cannot cast, so a ragging mage or ranger turns into one of them). */
+static int riskfight_kit_starts_ranged(const RiskfightKit* k) { return k->equipment[GEAR_SLOT_WEAPON] != ITEM_NONE && get_item_attack_style(k->equipment[GEAR_SLOT_WEAPON]) == ATTACK_STYLE_RANGED; }
+static const RiskfightKit* riskfight_pool_pick_ranged(float roll) {
+    float total = 0;
+    for (int i = 0; i < RISKFIGHT_POOL_COUNT; i++) if (riskfight_kit_starts_ranged(&RISKFIGHT_POOL[i])) total += RISKFIGHT_POOL[i].weight;
+    assert(total > 0 && roll >= 0 && roll < 1);
+    float at = roll * total, sum = 0;
+    const RiskfightKit* last = NULL;
+    for (int i = 0; i < RISKFIGHT_POOL_COUNT; i++) {
+        if (!riskfight_kit_starts_ranged(&RISKFIGHT_POOL[i])) continue;
+        last = &RISKFIGHT_POOL[i];
+        sum += last->weight;
+        if (at < sum) return last;
+    }
+    return last;
+}
+
 static RiskfightLoadout RISKFIGHT_POOL_LOADOUT[RF_POOL_MAX];
 static int RISKFIGHT_POOL_EXCLUDED_ROWS, RISKFIGHT_POOL_EXCLUDED_FIGHTS, RISKFIGHT_POOL_EXCLUDED_MAGIC_ROWS;
 

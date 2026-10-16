@@ -9,6 +9,7 @@ typedef struct {
     float curveball_probability;
     int randomize;
     float death_price; /* 0: drawn per fight, log-uniform in [0.4, 2.5]; else fixed */
+    float rep_start_probability; /* the share of sessions that start with a reputation (RF_REP_START_PROBABILITY unless rep_start_probability is set) */
     float pool_probability; /* self-play: the share of net-played opponents that wear a pool kit instead of one of our kits (needs opponent_pool) */
 } RiskfightTrainingConfig;
 
@@ -25,6 +26,7 @@ typedef struct {
     RiskfightTrainingStart start;
     int start_tick;
     int omissions;
+    float rep; /* our reputation in this session (riskfight_session.h): rude teleports, decaying; read at every new opponent and by the observation */
 } RiskfightTraining;
 
 static RiskfightTrainingConfig riskfight_training_config(Dict* kwargs) {
@@ -44,6 +46,9 @@ static RiskfightTrainingConfig riskfight_training_config(Dict* kwargs) {
     DictItem* randomize = dict_find(kwargs, "domain_randomization");
     config.randomize = randomize ? (int)randomize->value : 0;
     assert(config.randomize == 0 || config.randomize == 1);
+    DictItem* rep_start = dict_find(kwargs, "rep_start_probability");
+    config.rep_start_probability = rep_start ? (float)rep_start->value : RF_REP_START_PROBABILITY;
+    assert(config.rep_start_probability >= 0 && config.rep_start_probability <= 1);
     DictItem* pool_share = dict_find(kwargs, "selfplay_pool_probability");
     config.pool_probability = pool_share ? (float)pool_share->value : 0;
     assert(config.pool_probability >= 0 && config.pool_probability <= 1);
@@ -132,7 +137,7 @@ static uint16_t riskfight_dr_scale(RiskfightTraining* training, uint16_t rate) {
     return (uint16_t)(scaled > 1000 ? 1000 : scaled);
 }
 
-/** Domain randomization of his side after a reset: levels, hitpoints, defender, legs, body, amulet, food count, reaction lag and the
+/** Domain randomization of his side after a reset: levels, defender, legs, body, amulet, food count, reaction lag and the
  * per-mille rates of his profile. Gear is varied only for the live loadout, whose slots all have fitted alternatives. */
 static void riskfight_training_randomize(RiskfightTraining* training, RiskfightState* state, const RiskfightContext* context) {
     if (!training->config.randomize) return;
@@ -140,8 +145,7 @@ static void riskfight_training_randomize(RiskfightTraining* training, RiskfightS
     p->current_attack = 100 + riskfight_dr_pick(training, 19);
     p->current_strength = 100 + riskfight_dr_pick(training, 19);
     p->current_defence = 90 + riskfight_dr_pick(training, 21);
-    /* A pool kit keeps the hitpoints it starts with when they are below the account's 99 (the low-hitpoints Dharok's); a ranger's level varies below the boosted 112. */
-    if (!context->opp_kit || context->opp_kit->hitpoints >= 99) p->current_hitpoints = 99 + riskfight_dr_pick(training, 23);
+    /* Hitpoints are not randomized: everyone starts a fight at 121 after the anglerfish overheal at the bank (a pool kit that starts lower, the low-hitpoints Dharok's, keeps it); a ranger's level varies below the boosted 112. */
     if (context->opp_kit && context->opp_kit->ranged_level) p->current_ranged = 100 + riskfight_dr_pick(training, 13);
     if (context->loadout[1] == &RISKFIGHT_LIVE_LOADOUT) {
         static const uint8_t shields[] = {ITEM_AVERNIC_DEFENDER, ITEM_DRAGON_DEFENDER, ITEM_RUNE_DEFENDER};
@@ -178,7 +182,12 @@ static void riskfight_training_randomize(RiskfightTraining* training, RiskfightS
 static void riskfight_training_draw_opponent(RiskfightTraining* training, RiskfightContext* context, int frozen_policy) {
     training->opponent = RF_TRAIN_LEARNED;
     training->scripted = NULL;
-    if (frozen_policy > 0 && riskfight_training_draw(training, training->config.scripted_probability)) {
+    /* A ragger is always the script, in any seat 1: he wears a ranged pool kit, so the pool has to be on. */
+    context->opp_ragger = context->opponent_pool && riskfight_training_draw(training, riskfight_rag_probability(training->rep));
+    if (context->opp_ragger) {
+        training->opponent = RF_TRAIN_SCRIPTED;
+        training->scripted = riskfight_training_profile(training);
+    } else if (frozen_policy > 0 && riskfight_training_draw(training, training->config.scripted_probability)) {
         training->opponent = RF_TRAIN_SCRIPTED;
         training->scripted = riskfight_training_profile(training);
     }
@@ -206,6 +215,8 @@ static RiskfightTrainingStart riskfight_training_new_opponent(RiskfightTraining*
         start = riskfight_training_prefix(state, context, first, second, ticks);
     }
     if (training->scripted) state->opponent_profile = training->scripted;
+    state->ragger = context->opp_ragger;
+    if (state->ragger) state->ragger_limit = RF_RAGGER_MIN_SWINGS + encounter_rand_int(&training->rng, RF_RAGGER_MAX_SWINGS - RF_RAGGER_MIN_SWINGS + 1);
     riskfight_training_randomize(training, state, context);
     return start;
 }
@@ -214,6 +225,7 @@ static RiskfightTrainingStart riskfight_training_new_opponent(RiskfightTraining*
 static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* training,
     RiskfightState* state, RiskfightContext* context, int frozen_policy) {
     if (context->kit_mix) context->loadout[0] = encounter_rand_int(&training->rng, 2) ? &RISKFIGHT_VW_LOADOUT : &RISKFIGHT_LIVE_LOADOUT;
+    training->rep = riskfight_training_draw(training, training->config.rep_start_probability) ? RF_REP_START_MAX * (1.0f - encounter_rand_float(&training->rng)) : 0;
     riskfight_training_draw_opponent(training, context, frozen_policy);
     riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
     RiskfightTrainingStart start = riskfight_training_new_opponent(training, state, context, 1);
@@ -223,12 +235,10 @@ static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* traini
     return start;
 }
 
-/** The next fight of the session after the transition `t`: our supplies persist unless we died or teleported; the opponent persists, with his kit and
- * supplies, only in a rematch, otherwise a new one steps up (a new kit, a new price, a new player). */
+/** The next fight of the session after the transition `t`: a regear at the bank for both sides (a fresh reset), the same opponent with his kit, profile and
+ * price in a rematch, otherwise a new one steps up (a new kit, a new price, a new player; a ragger with the probability the reputation gives). */
 static void riskfight_training_next_fight(RiskfightTraining* training, RiskfightState* state,
     RiskfightContext* context, const RiskfightTransition* t, int frozen_policy) {
-    RiskfightCarry carry[2];
-    for (int side = 0; side < 2; side++) riskfight_carry_save(state, side, &carry[side]);
     const RiskfightProfile* profile = state->opponent_profile;
     float price = state->death_price;
     int opp_lag = state->opp_lag;
@@ -236,7 +246,6 @@ static void riskfight_training_next_fight(RiskfightTraining* training, Riskfight
     context->keep_opp_kit = t->rematch; /* a rematch keeps his kit and ring; a new opponent draws a new pool kit */
     riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
     context->keep_opp_kit = 0;
-    riskfight_session_begin_fight(state, carry, t);
     if (t->rematch) {
         state->opponent_profile = profile;
         state->death_price = price;

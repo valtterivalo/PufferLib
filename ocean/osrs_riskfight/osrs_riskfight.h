@@ -25,7 +25,7 @@ struct Log {
     float episode_return, episode_length;
     float policy_0_score, draw_rate;
     float damage_reward, direct_ko_chance_mass, chance_reward;
-    float kills, deaths, escapes, mutual_deaths, timeouts, net_stake, rounds, n;
+    float kills, deaths, escapes, mutual_deaths, timeouts, ragged, ragger_fights, net_stake, rounds, n; /* timeouts: fights that hit the round limit (a draw); ragged: ragger fights that ended with his teleport */
     float scripted_ticks, scripted_omissions, midfight_ticks, prefix_terminal;
     float self_teleports, opponent_teleports, both_teleports;
     float rude_teleports, rematches, tp_self_spec, tp_opp_spec, tp_both_spec, tp_opp_could_spec, tp_hp, tp_fight_tick;
@@ -95,8 +95,10 @@ void puf_init(Env* env, Dict* kwargs) {
     env->training = (RiskfightTraining){0};
     env->training.config = riskfight_training_config(kwargs);
     env->training.rng = osrs_env_seed((uint32_t)env->rng, 1);
-    assert(env->context.self_play || (env->training.config.scripted_probability == 0 &&
-        env->training.config.midfight_probability == 0));
+    /* Without a second seat every opponent is already the script or OppFit, so scripted_probability (the scripted share of the frozen seats) has nothing to
+     * choose: a sweep that also searches env.self_play carries a value for it in the self_play 0 trials. Midfight starts need the second seat. */
+    if (!env->context.self_play) env->training.config.scripted_probability = 0;
+    assert(env->context.self_play || env->training.config.midfight_probability == 0);
     memset(&env->log, 0, sizeof(env->log));
     env->session_elapsed = env->session_fights = 0;
     env->session_stake = 0;
@@ -122,6 +124,7 @@ static inline void riskfight_obs_store(obs_t* out, const float* obs) {
 static void riskfight_native_observe(Env* env) {
     env->state.session_ticks_left = env->training.config.session_ticks - env->session_elapsed;
     env->state.session_wait_left = env->wait_left;
+    env->state.session_rep = env->training.rep;
     for (int i = 0; i < env->num_agents; i++) {
         float obs[RF_OBS_SIZE];
         riskfight_write_observation(&env->state, i, obs);
@@ -206,6 +209,8 @@ static void riskfight_native_log_round(Env* env) {
         env->log.escapes += outcome == RISKFIGHT_ESCAPE;
         env->log.mutual_deaths += outcome == RISKFIGHT_MUTUAL_DEATH;
         env->log.timeouts += outcome == RISKFIGHT_TIMEOUT;
+        env->log.ragged += outcome == RISKFIGHT_RAGGED;
+        env->log.ragger_fights += s->ragger;
         float stake = riskfight_outcome_reward(outcome, s->death_price);
         env->log.policy_0_score += 0.5f * (riskfight_outcome_reward(outcome, 1) + 1.0f);
         env->log.draw_rate += stake == 0;
@@ -249,6 +254,7 @@ static void riskfight_native_next_fight(Env* env) {
 }
 /** The end of a step of either kind: the terminals, and the session's totals and a fresh session when its budget is spent. */
 static void riskfight_native_finish_step(Env* env) {
+    env->training.rep = riskfight_rep_decay(env->training.rep);
     const int budget = env->training.config.session_ticks;
     int session_over = env->session_elapsed >= budget;
     for (int i = 0; i < env->num_agents; i++) env->agents[i].terminals[0] = session_over;
@@ -317,7 +323,8 @@ void puf_step(Env* env) {
         riskfight_native_log_round(env);
         env->session_fights++;
         if (env->session_elapsed < budget) {
-            env->wait_transition = riskfight_session_transition(&env->state, &env->training.rng);
+            env->training.rep += riskfight_rude_teleport(&env->state); /* each rude teleport of ours is remembered */
+            env->wait_transition = riskfight_session_transition(&env->state, &env->training.rng, env->training.rep);
             env->wait_left = env->wait_transition.delay;
             if (env->wait_left == 0) riskfight_native_next_fight(env);
         }
@@ -346,6 +353,8 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "escapes", log->escapes);
     dict_set(out, "mutual_deaths", log->mutual_deaths);
     dict_set(out, "timeouts", log->timeouts);
+    dict_set(out, "ragged", log->ragged);
+    dict_set(out, "ragger_fights", log->ragger_fights);
     dict_set(out, "net_stake", log->net_stake);
     dict_set(out, "episode_length", log->episode_length);
     dict_set(out, "oppfit_episodes", log->oppfit_episodes);

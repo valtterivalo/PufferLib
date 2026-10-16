@@ -220,6 +220,8 @@ static double rt_decide(Request* q, const RtSeen* seen, int new_fight, int fight
     s->inventory_use[0].divine_combat_ticks = OSRS_DIVINE_DURATION > n ? OSRS_DIVINE_DURATION - n : 0;
     /* A live session has no budget: the end of the session is never near (the session block reads 1 for "plenty of time left"). */
     s->session_ticks_left = RF_SESSION_OPEN;
+    /* The wire does not carry our reputation (rude teleports of the session), so it reads as none: the session block's last float is 0. */
+    s->session_rep = 0;
     float obs[RF_OBS_SIZE];
     unsigned char mask[RF_MASK_SIZE];
     int actions[RF_HEADS];

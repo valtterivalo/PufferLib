@@ -44,7 +44,8 @@ static const RiskfightProfile* riskfight_pick_profile(RiskfightOpponent pool, ui
     return NULL;
 }
 typedef enum { RISKFIGHT_ONGOING, RISKFIGHT_KILL, RISKFIGHT_DEATH,
-    RISKFIGHT_ESCAPE, RISKFIGHT_MUTUAL_DEATH, RISKFIGHT_TIMEOUT } RiskfightOutcome;
+    RISKFIGHT_ESCAPE, RISKFIGHT_MUTUAL_DEATH, RISKFIGHT_TIMEOUT,
+    RISKFIGHT_RAGGED /* a ragger (riskfight_session.h) harassed us and teleported away: no stake, and we regear */ } RiskfightOutcome;
 enum { RISKFIGHT_ROUND_TICKS = 500 };
 enum {
     RF_WEAPON, RF_SHIELD, RF_RING, RF_FOOD, RF_DRINK, RF_COMBO,
@@ -73,15 +74,18 @@ enum {
     RF_THREAT_START = RF_PRICE + 1,
     /* Session block (riskfight_write_session_observation): [0] session ticks left over RF_SESSION_HORIZON_TICKS, capped at 1;
      * [1] his special energy as a player counts it (100 minus the specs seen, plus the regeneration since), over 100; [2] 1 while the session is waiting between
-     * fights (every tick of the wait is a step of no choice, the mask allows only the no-op), [3] the ticks of the wait left over RF_WAIT_SCALE_TICKS, capped at 1. */
+     * fights (every tick of the wait is a step of no choice, the mask allows only the no-op), [3] the ticks of the wait left over RF_WAIT_SCALE_TICKS, capped at 1,
+     * [4] our reputation (rude teleports of this session, decaying) over RF_REP_OBS_SCALE, capped at 1. */
     RF_SESSION_START = RF_THREAT_START + RF_THREAT_SIZE,
-    RF_SESSION_SIZE = 4,
+    RF_SESSION_SIZE = 5,
     RF_OBS_SIZE = RF_SESSION_START + RF_SESSION_SIZE,
 };
 /* Ticks left beyond which the end of the session no longer changes what is worth doing: several fight cycles. */
 enum { RF_SESSION_HORIZON_TICKS = 1500 };
-/* The longest waits (the respawn delay) are about 1000 ticks: the scale of the wait-left feature. */
+/* The regear delay is 250 ticks at its median and 640 at its 90th percentile, more with a reputation: waits beyond 1000 ticks read 1 in the wait-left feature. */
 enum { RF_WAIT_SCALE_TICKS = 1000 };
+/* The reputation that reads 1 in the session block (riskfight_session.h): the user's account of how a few rude teleports weigh. */
+#define RF_REP_OBS_SCALE 4.0f
 /* Ticks left of a session whose end is not modelled: what riskfight_reset leaves and the live server keeps (a live session has no budget). */
 enum { RF_SESSION_OPEN = INT_MAX };
 #define RF_ACTION_DIMS_INIT {30,30,30,29,29,29,2,2,3,28,5,4,30,30,30,30,30,30,30,30,7}
@@ -159,6 +163,9 @@ typedef struct {
     int specs_used[2];
     int session_ticks_left;
     int session_wait_left; /* ticks of the wait between two fights still to pass (0 in a fight); the state is the one the last fight ended in */
+    float session_rep;     /* our reputation as the session holds it (riskfight_session.h); 0 where the session is not modelled (the live server) */
+    /* A ragger (riskfight_session.h): the pool's ranged kit in seat 1 that swings ragger_limit times and teleports away. */
+    int ragger, ragger_limit, ragger_swings;
 } RiskfightState;
 typedef struct {
     uint8_t equipment[NUM_GEAR_SLOTS];
@@ -182,6 +189,7 @@ typedef struct {
     int kit_mix; /* training resets draw our kit between RISKFIGHT_LIVE_LOADOUT and RISKFIGHT_VW_LOADOUT (live_loadout=3) */
     const RiskfightLoadout* opp_default; /* his kit when he takes no pool kit, as live_loadout set it */
     int opponent_pool; /* a reset draws his kit from the opponent pool (riskfight_kits.h) unless opp_plain; the script, OppFit or a net may play him */
+    int opp_ragger;    /* the next new opponent is a ragger: a ranged pool kit (needs opponent_pool) */
     int opp_plain;     /* the next new opponent keeps loadout[1] as the caller set it instead of drawing a pool kit (a net-played seat 1 draws one of our kits) */
     const RiskfightKit* opp_kit; /* the kit of this fight, NULL outside the pool */
     uint32_t opp_roll;           /* the draw of his unseen ring, kept with the kit across the rounds of a session */
@@ -462,7 +470,8 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
     if (!ctx->opponent_pool) ctx->opp_kit = NULL;
     else {
         if (!ctx->keep_opp_kit) {
-            ctx->opp_kit = ctx->opp_plain ? NULL : riskfight_pool_pick((float)(osrs_lowbias32(rng ^ 0x6b697473u) >> 8) / 16777216.0f);
+            float roll = (float)(osrs_lowbias32(rng ^ 0x6b697473u) >> 8) / 16777216.0f;
+            ctx->opp_kit = ctx->opp_plain ? NULL : ctx->opp_ragger ? riskfight_pool_pick_ranged(roll) : riskfight_pool_pick(roll);
             ctx->opp_roll = osrs_lowbias32(rng ^ 0x72696e67u);
         }
         if (ctx->opp_kit) ctx->loadout[1] = &RISKFIGHT_POOL_LOADOUT[ctx->opp_kit - RISKFIGHT_POOL];

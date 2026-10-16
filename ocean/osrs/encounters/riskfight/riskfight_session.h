@@ -2,26 +2,52 @@
 #define OSRS_RISKFIGHT_SESSION_H
 #include "riskfight_step.h"
 
-/* A session is a fixed budget of game ticks spent on fights and on the time between them. What follows a fight is a consequence in the world, not a reward term:
- *   kill      we keep our supplies, a new opponent arrives after a search delay S
- *   death     the price is paid, we refill, a respawn and regear delay D passes, a new opponent
- *   teleport  the fight ends and the side that left refills. Unless the teleport was rude (a side's own, after its own special, while the other still had
- *             special energy for his) the pair meets again with probability RF_REMATCH_PROBABILITY, after M, each side with the supplies it had left (the one
- *             that teleported refilled). Otherwise (a rude teleport, or no rematch) he is gone and the next fight is with a new opponent: after the restock
- *             delay R when we left, which as measured (teleport to the next fight with a new opponent) already holds the search, after S when he left.
- *   a timeout a draw (reward 0, no price); he is gone, a new opponent after S, our supplies kept, the session clock runs on
- * Both seats follow these rules (a second agent's teleport is as rude as ours); only the clock is ours, as the session is seat 0's.
- * Supplies are everything in the inventory, the worn gear, boosted levels, special energy (regenerating over the time passed) and Vengeance. Hitpoints
- * persist as what the player eats back during the wait (riskfight_idle_eat), at the cost of the food. */
+/* A session is a fixed budget of game ticks spent on fights and on the time between them. What follows a fight is a consequence in the world, not a reward term.
+ * Every fight starts after a regear at the bank (the user's account: everyone regears): both sides full supplies, special energy 100, prayer and stats restored,
+ * 121 hitpoints (an anglerfish overheal), nothing carried over. The time between two fights is one regear delay:
+ *   rematch   after a teleport that was not rude, with probability RF_REMATCH_PROBABILITY: the same opponent (his kit, profile, price) after M, the measured rematch
+ *             delay. A rude teleport (a side's own, after its own special, while the other still had special energy for his) is never followed by a rematch, and
+ *             neither is a fight against a ragger.
+ *   otherwise a new opponent after R, the measured new-opponent delay, times (1 + RF_REP_SEARCH * rep): after a kill, a death, a teleport without a rematch, a
+ *             timeout, a ragger leaving.
+ *   timeout   a draw (reward 0, no price), counted in the logs; the session clock runs on.
+ * Reputation (the user's account: how people treat him): a session-level `rep`. Each rude teleport of ours adds 1; it halves every RF_REP_HALF_LIFE_TICKS. A session
+ * starts with rep 0 in most cases and up to RF_REP_START_MAX in the rest, so the whole range is seen within a horizon. It lengthens the search for a new opponent
+ * and, with probability min(RF_REP_RAG_CAP, RF_REP_RAG * rep), the next new opponent is a ragger. The constants are not measurable: they are chosen so that one rude
+ * teleport costs a visible share of a session (rep 1: searches 1.5x, 15% of new opponents rag) and three cost most of it (searches 2.5x, 45% rag).
+ * Ragger: a ranged kit of the pool (the sim does not cast, so a ragging mage is played as a ranger) played by the script, who swings RF_RAGGER_MIN_SWINGS to
+ * RF_RAGGER_MAX_SWINGS times and teleports away. That fight is RISKFIGHT_RAGGED: no stake, and we pay the regear R like after any other end. He is fought as a normal
+ * opponent: a kill still wins his gear and we can teleport out ourselves.
+ * Both seats follow the rules of teleporting (a second agent's rude teleport is as rude as ours); only the clock and the reputation are the session's, seat 0's. */
 
 /* Game ticks of an hour (0.6 s each): sessions are scored in kills minus price times deaths per hour. */
 enum { RF_TICKS_PER_HOUR = 6000 };
 enum { RF_DELAY_DECILES = 11 };
-/** A delay in game ticks as its deciles (minimum, 10th percentile ... maximum); a draw interpolates linearly between them. */
+/** A delay in game ticks as its deciles (minimum, 10th percentile ... maximum). */
 typedef struct { uint16_t ticks[RF_DELAY_DECILES]; } RiskfightDelay;
 
 #include "riskfight_delays.h"
 
+/* The user's account of the session world; none of these is measurable. */
+enum { RF_REP_HALF_LIFE_TICKS = 1500 };       /* rep halves over half a session */
+static const float RF_REP_SEARCH = 0.5f;       /* the search for a new opponent takes R * (1 + RF_REP_SEARCH * rep) */
+static const float RF_REP_RAG = 0.15f;         /* probability that a new opponent is a ragger, per point of rep ... */
+static const float RF_REP_RAG_CAP = 0.6f;      /* ... up to this */
+static const float RF_REP_START_PROBABILITY = 0.3f; /* a session starts with a reputation in this share of the cases ... */
+static const float RF_REP_START_MAX = 3.0f;    /* ... drawn uniformly from (0, RF_REP_START_MAX] */
+enum { RF_RAGGER_MIN_SWINGS = 3, RF_RAGGER_MAX_SWINGS = 6 };
+
+/** The reputation after one tick of decay. */
+static inline float riskfight_rep_decay(float rep) {
+    return rep * 0.99953773f; /* 2^(-1 / RF_REP_HALF_LIFE_TICKS) */
+}
+
+/** The probability that a new opponent drawn at reputation `rep` is a ragger. */
+static inline float riskfight_rag_probability(float rep) {
+    return fminf(RF_REP_RAG_CAP, RF_REP_RAG * rep);
+}
+
+/** A delay in game ticks as its deciles (minimum, 10th percentile ... maximum); a draw interpolates linearly between them. */
 static int riskfight_delay_draw(const RiskfightDelay* delay, uint32_t* rng) {
     float position = (RF_DELAY_DECILES - 1) * ((xorshift32(rng) >> 8) / 16777216.0f);
     int below = (int)position;
@@ -38,126 +64,22 @@ static int riskfight_rude_teleport(const RiskfightState* s) { return riskfight_r
 
 typedef struct {
     int delay;     /* ticks of the session spent before the next fight starts */
-    int refill[2]; /* the side restocks: it died or teleported */
     int rematch;   /* the same opponent (his profile, price and kit) comes back */
     int rude;      /* a rude teleport by either side ended the fight: no rematch */
 } RiskfightTransition;
 
-/** What follows the fight that just ended, drawing the delays and the rematch from `rng`. The rules treat the seats alike: whoever leaves rudely, or dies, or
- * teleports, is restocked, and a pair that parted politely meets again with probability RF_REMATCH_PROBABILITY, each side carrying what it had left (the
- * side that restocked comes back refilled). The clock is the session's: it is seat 0's, the one that carries the session, so the delay is the one seat 0
- * waits (a new opponent replaces seat 1, he has no session of his own to wait out). */
-static RiskfightTransition riskfight_session_transition(const RiskfightState* s, uint32_t* rng) {
+/** What follows the fight that just ended, drawing the delay and the rematch from `rng`; `rep` is our reputation after this fight. */
+static RiskfightTransition riskfight_session_transition(const RiskfightState* s, uint32_t* rng, float rep) {
     RiskfightTransition t = {0};
-    switch (s->outcome[0]) {
-        case RISKFIGHT_KILL:
-        case RISKFIGHT_TIMEOUT:
-            t.delay = riskfight_delay_draw(&RF_DELAY_SEARCH, rng);
-            break;
-        case RISKFIGHT_DEATH:
-        case RISKFIGHT_MUTUAL_DEATH:
-            t.refill[0] = 1;
-            t.delay = riskfight_delay_draw(&RF_DELAY_RESPAWN, rng);
-            break;
-        case RISKFIGHT_ESCAPE: {
-            for (int side = 0; side < 2; side++) t.refill[side] = s->escaped[side];
-            t.rude = riskfight_rude_teleport_of(s, 0) || riskfight_rude_teleport_of(s, 1);
-            int rematch = encounter_rand_float(rng) < RF_REMATCH_PROBABILITY;
-            t.rematch = rematch && !t.rude;
-            t.delay = riskfight_delay_draw(t.rematch ? &RF_DELAY_REMATCH : s->escaped[0] ? &RF_DELAY_RESTOCK : &RF_DELAY_SEARCH, rng);
-            break;
-        }
-        case RISKFIGHT_ONGOING:
-            abort();
+    if (s->outcome[0] == RISKFIGHT_ONGOING) abort();
+    if (s->outcome[0] == RISKFIGHT_ESCAPE) {
+        t.rude = riskfight_rude_teleport_of(s, 0) || riskfight_rude_teleport_of(s, 1);
+        int rematch = encounter_rand_float(rng) < RF_REMATCH_PROBABILITY;
+        t.rematch = rematch && !t.rude && !s->ragger;
     }
+    t.delay = t.rematch ? riskfight_delay_draw(&RF_DELAY_REMATCH, rng) :
+        (int)(riskfight_delay_draw(&RF_DELAY_RESTOCK, rng) * (1.0f + RF_REP_SEARCH * rep) + 0.5f);
     return t;
 }
 
-/** One side as the fight left it. */
-typedef struct {
-    Player player;
-    OsrsInventoryUseState use;
-    int seen_spec_est, seen_spec_phase; /* the other side's estimate of this side's special energy */
-} RiskfightCarry;
-
-static void riskfight_carry_save(const RiskfightState* s, int side, RiskfightCarry* carry) {
-    carry->player = s->env.players[side];
-    carry->use = s->inventory_use[side];
-    carry->seen_spec_est = s->visible[1 - side].spec_est;
-    carry->seen_spec_phase = s->visible[1 - side].spec_regen_phase;
-}
-
-/** Between fights a player eats back up to his full hitpoints: his bar is full again in 69% of the measured rematches (55 pairs), he eats in 98% of the gaps
- * (41 pairs inside one recording), and we ate in the gaps where we did not restock (scripts/measure_session_delays.py, section J). The food he eats is gone,
- * so what persists is what the session has spent; hitpoints do not carry a fight's damage over a gap. */
-static void riskfight_idle_eat(Player* p, OsrsInventoryUseState* use, const OsrsTeleportState* teleport, int tick) {
-    if (p->current_hitpoints >= p->base_hitpoints || p->food_timer > 0) return;
-    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
-        const OsrsItemContentMetadata* meta = osrs_inventory_cell_metadata(&p->inventory_cells[slot]);
-        if (meta->click_action != OSRS_CLICK_EAT || !osrs_can_eat_consumable_kind(p, (OsrsConsumableKind)meta->consumable_kind)) continue;
-        if (osrs_player_use_inventory_with_food_clock(p, use, teleport, slot, tick, OSRS_FOOD_CONTINUOUS_CLOCK) == OSRS_INVENTORY_USE_CONSUMED) return;
-    }
-}
-
-/** Puts a side's supplies back into a freshly reset fight and lets `idle_ticks` of the session pass over them: special energy regenerates, boosts and
- * overheal drift, the Vengeance cooldown runs, he eats (riskfight_idle_eat). Positions, timers, queues and the fight's own state stay as the reset made them. */
-static void riskfight_carry_restore(RiskfightState* s, int side, const RiskfightCarry* carry, int idle_ticks) {
-    Player* p = &s->env.players[side];
-    const Player* kept = &carry->player;
-    memcpy(p->inventory_cells, kept->inventory_cells, sizeof(p->inventory_cells));
-    memcpy(p->equipped, kept->equipped, sizeof(p->equipped));
-    p->current_hitpoints = kept->current_hitpoints;
-    p->current_attack = kept->current_attack;
-    p->current_strength = kept->current_strength;
-    p->current_defence = kept->current_defence;
-    p->current_ranged = kept->current_ranged;
-    p->current_magic = kept->current_magic;
-    p->current_prayer = kept->current_prayer;
-    p->special_energy = kept->special_energy;
-    p->spec_regen_active = kept->spec_regen_active;
-    p->veng_active = kept->veng_active;
-    p->veng_cooldown = kept->veng_cooldown;
-    osrs_refresh_player_equipment(p);
-    pvp_refresh_visible_gear(p);
-    p->item_effect_state = kept->item_effect_state;
-    const int has_attack_timer = p->has_attack_timer, attack_timer = p->attack_timer, attack_timer_uncapped = p->attack_timer_uncapped;
-    OsrsInventoryUseState* use = &s->inventory_use[side];
-    use->vengeance_sacks = carry->use.vengeance_sacks;
-    use->divine_combat_ticks = carry->use.divine_combat_ticks;
-    use->stat_drift_timer = carry->use.stat_drift_timer;
-    for (int tick = 0; tick < idle_ticks; tick++) {
-        if (p->food_timer > 0) p->food_timer--;
-        if (p->potion_timer > 0) p->potion_timer--;
-        if (p->karambwan_timer > 0) p->karambwan_timer--;
-        if (p->veng_cooldown > 0) p->veng_cooldown--;
-        if (p->spec_regen_active && p->special_energy < 100) osrs_tick_special_regen(p);
-        else p->item_effect_state.special_regen_ticks = 0;
-        osrs_player_inventory_tick(p, use);
-        riskfight_idle_eat(p, use, &s->env.pvp_runtime.teleport[side], tick - idle_ticks);
-    }
-    /* The wait is over: nothing of it lingers into tick 0 of the fight. */
-    p->food_timer = p->potion_timer = p->karambwan_timer = 0;
-    p->has_attack_timer = has_attack_timer;
-    p->attack_timer = attack_timer;
-    p->attack_timer_uncapped = attack_timer_uncapped;
-    use->potion_animation_tick_plus_one = 0;
-    reset_tick_flags(p);
-}
-
-/** Starts the next fight of a session from a reset state: the sides the transition keeps get their supplies back, aged by the delay. The estimate each
- * side holds of the other's special energy follows the other side's supplies, aged the same way. Observations of the gear are retaken. */
-static void riskfight_session_begin_fight(RiskfightState* s, const RiskfightCarry carry[2], const RiskfightTransition* t) {
-    int keep[2] = {!t->refill[0], t->rematch && !t->refill[1]};
-    for (int side = 0; side < 2; side++)
-        if (keep[side]) riskfight_carry_restore(s, side, &carry[side], t->delay);
-    riskfight_observe_visible(s, 0, 1);
-    riskfight_observe_visible(s, 1, 1);
-    for (int side = 0; side < 2; side++) {
-        if (!keep[side]) continue;
-        RiskfightVisibleOpponent* seen = &s->visible[1 - side];
-        seen->spec_est = carry[side].seen_spec_est;
-        seen->spec_regen_phase = carry[side].seen_spec_phase;
-        for (int tick = 0; tick < t->delay; tick++) riskfight_spec_est_regen(seen);
-    }
-}
 #endif

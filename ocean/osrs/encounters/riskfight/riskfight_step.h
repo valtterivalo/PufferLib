@@ -21,6 +21,7 @@ static void riskfight_record_attack(RiskfightState* s, int agent, int hits, int 
     event[1] = weapon;
     event[2] = p->attack_style_this_tick;
     riskfight_threat_note_swing(&visible->threat, (uint8_t)weapon, s->env.tick, p->used_special_this_tick);
+    if (agent == 1) s->ragger_swings++;
     if (!instant) {
         visible->last_attack_tick = s->env.tick;
         visible->last_attack_speed = get_slot_gear_bonuses(p)->attack_speed;
@@ -324,7 +325,7 @@ static void riskfight_finish(RiskfightState* s) {
         s->outcome[i] = !s->env.episode_over ? RISKFIGHT_ONGOING :
             dead[0] && dead[1] ? RISKFIGHT_MUTUAL_DEATH :
             dead[i] ? RISKFIGHT_DEATH : dead[1 - i] ? RISKFIGHT_KILL :
-            escaped ? RISKFIGHT_ESCAPE : RISKFIGHT_TIMEOUT;
+            s->ragger && s->escaped[1] && !s->escaped[0] ? RISKFIGHT_RAGGED : escaped ? RISKFIGHT_ESCAPE : RISKFIGHT_TIMEOUT;
         s->rewards[i] = riskfight_outcome_reward(s->outcome[i], s->death_price);
     }
     s->env.winner = s->outcome[0] == RISKFIGHT_KILL ? 0 :
@@ -540,6 +541,11 @@ static void riskfight_step(EncounterState* state, EncounterContext* context, con
             riskfight_script(obs, s->opponent_profile, s->script_seed[1], s->consume_ticks[1], opponent_actions);
         }
         if (ctx->opp_omit) memset(opponent_actions, 0, sizeof(opponent_actions));
+        /* A ragger has swung his share: he leaves. */
+        if (s->ragger && s->ragger_swings >= s->ragger_limit) {
+            memset(opponent_actions, 0, sizeof(opponent_actions));
+            opponent_actions[RF_PRIMARY] = RF_TELEPORT;
+        }
         if (s->opp_lag > 0) {
             for (int k = 3; k > 0; k--) memcpy(s->opp_ring[k], s->opp_ring[k - 1], sizeof(s->opp_ring[k]));
             memcpy(s->opp_ring[0], opponent_actions, sizeof(s->opp_ring[0]));

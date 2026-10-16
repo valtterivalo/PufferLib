@@ -1,5 +1,5 @@
-/* Session contracts: supplies persist across a fight boundary, a teleport refills and costs time, a rude teleport loses the opponent, rewards stay in [-1, 1]
- * at the largest price, and a session of N ticks ends. Self-play env, both agents driven by the test (agent 1 idles), so every outcome is forced. */
+/* Session contracts: every fight starts after a regear, one regear delay follows every end (a rematch the measured M, anything else R scaled by the reputation), a
+ * rude teleport loses the opponent and costs reputation, a ragger rags and leaves, rewards stay in [-1, 1] at the largest price, and a session of N ticks ends. Self-play env, both agents driven by the test (agent 1 idles), so every outcome is forced. */
 #include "../../osrs_riskfight/osrs_riskfight.h"
 #include <assert.h>
 #include <stdio.h>
@@ -10,10 +10,10 @@ static float actions[2][RF_HEADS];
 static float rewards[2], terminals[2];
 static unsigned char masks[2][RF_MASK_SIZE];
 
-static Env* make_env(int session_ticks, double price, unsigned rng) {
+static Env* make_pool_env(int session_ticks, double price, unsigned rng, int pool) {
     DictItem items[] = {{.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 1},
         {.key = "session_ticks", .value = session_ticks}, {.key = "curveball_probability", .value = 0},
-        {.key = "death_price", .value = price}};
+        {.key = "death_price", .value = price}, {.key = "opponent_pool", .value = pool}};
     Dict kwargs = {.items = items, .size = sizeof(items) / sizeof(*items)};
     Env* e = (Env*)calloc(1, sizeof(*e));
     e->rng = rng;
@@ -22,9 +22,12 @@ static Env* make_env(int session_ticks, double price, unsigned rng) {
         .observations = observations[i], .actions = actions[i], .rewards = &rewards[i],
         .terminals = &terminals[i], .action_mask = masks[i], .policy = i};
     puf_reset(e);
+    e->training.rep = 0; /* a session that starts with a reputation is tested below */
+    riskfight_native_observe(e);
     memset(actions, 0, sizeof(actions));
     return e;
 }
+static Env* make_env(int session_ticks, double price, unsigned rng) { return make_pool_env(session_ticks, price, rng, 0); }
 
 static void destroy(void) { puf_close(env); free(env); env = NULL; }
 
@@ -65,23 +68,17 @@ static void empty_slots(Player* p, int from, int count) {
     for (int slot = from; slot < from + count; slot++) p->inventory_cells[slot] = osrs_inventory_cell_from_content_code(0);
 }
 
-/* A kill: he dies on the next tick, we keep everything we had. */
-static void test_supplies_persist_across_a_fight_boundary(void) {
+/* A kill: he dies on the next tick; the next fight is a regear for both, after R. */
+static void test_every_fight_starts_regeared(void) {
     env = make_env(6000, 1, 7);
     Player* us = &env->state.env.players[0];
     int full_food = count_food(us);
     empty_slots(us, 4, 3);
-    int food = count_food(us);
-    assert(food < full_food);
-    uint16_t bag[OSRS_INVENTORY_SIZE];
-    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) bag[i] = us->inventory_cells[i].content_code;
+    assert(count_food(us) < full_food);
     us->current_hitpoints = 99;
     us->special_energy = 40;
-    us->spec_regen_active = 1;
-    us->item_effect_state.special_regen_ticks = 0;
     us->current_attack = 113;
     env->state.inventory_use[0].vengeance_sacks = 5;
-    env->state.inventory_use[0].divine_combat_ticks = 480;
     env->state.env.players[1].current_hitpoints = 0;
     int before = env->session_elapsed;
     puf_step(env);
@@ -90,51 +87,19 @@ static void test_supplies_persist_across_a_fight_boundary(void) {
     assert(env->wait_left > 0 && env->state.env.episode_over); /* the wait: the fight's last state stays, the clock runs */
     int delay = wait_out();
     assert(env->session_elapsed - before == 1 + delay);
-    assert(delay >= delay_min(&RF_DELAY_SEARCH) && delay <= delay_max(&RF_DELAY_SEARCH));
-    us = &env->state.env.players[0];
+    assert(delay >= delay_min(&RF_DELAY_RESTOCK) && delay <= delay_max(&RF_DELAY_RESTOCK));
     assert(env->state.env.tick == 0 && !env->state.env.episode_over);
-    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) assert(us->inventory_cells[i].content_code == bag[i]);
-    assert(count_food(us) == food);
-    assert(us->current_hitpoints == 99);
-    /* The kill tick itself is one more tick of the session than the delay. */
-    int aged = delay + 1;
-    assert(us->special_energy == (40 + 10 * (aged / 50) > 100 ? 100 : 40 + 10 * (aged / 50)));
-    assert(env->state.inventory_use[0].vengeance_sacks == 5);
-    assert(env->state.inventory_use[0].divine_combat_ticks == (480 > aged ? 480 - aged : 0));
-    /* A new opponent: full supplies, full hitpoints, his own price. */
-    const Player* him = &env->state.env.players[1];
-    assert(him->current_hitpoints > 0 && count_food(him) == full_food && him->special_energy == 100);
+    for (int side = 0; side < 2; side++) {
+        const Player* p = &env->state.env.players[side];
+        assert(count_food(p) == full_food && p->current_hitpoints == 121 && p->special_energy == 100 && p->current_attack > 99);
+        assert(env->state.inventory_use[side].vengeance_sacks > 5);
+    }
     assert(env->state.session_ticks_left == 6000 - env->session_elapsed);
     destroy();
 }
 
-/* The wait between fights is not spent bleeding: a player eats back up to full hitpoints, and the food is gone from his bag. */
-static void test_the_gap_is_spent_eating(void) {
-    env = make_env(6000, 1, 8);
-    Player* us = &env->state.env.players[0];
-    int food = count_food(us);
-    us->current_hitpoints = 80;
-    env->state.env.players[1].current_hitpoints = 0;
-    puf_step(env);
-    wait_out();
-    us = &env->state.env.players[0];
-    assert(us->current_hitpoints >= us->base_hitpoints && count_food(us) < food && count_food(us) >= food - 3);
-    assert(us->food_timer == 0 && us->attack_timer == 0 && !us->ate_food_this_tick);
-    destroy();
-    /* Without food he cannot: the hitpoints stay where the fight left them. */
-    env = make_env(6000, 1, 8);
-    us = &env->state.env.players[0];
-    empty_slots(us, 0, OSRS_INVENTORY_SIZE);
-    us->current_hitpoints = 80;
-    env->state.env.players[1].current_hitpoints = 0;
-    puf_step(env);
-    wait_out();
-    assert(env->state.env.players[0].current_hitpoints <= 88); /* natural regeneration only */
-    destroy();
-}
-
-/* A death: the price is paid, everything is refilled, the respawn delay D passes, a new opponent. */
-static void test_death_refills_and_pays_the_respawn(void) {
+/* A death: the price is paid, the same regear and the same delay as after a kill. */
+static void test_death_is_a_regear_like_any_end(void) {
     env = make_env(6000, 1, 9);
     Player* us = &env->state.env.players[0];
     int full_food = count_food(us);
@@ -146,7 +111,7 @@ static void test_death_refills_and_pays_the_respawn(void) {
     assert(terminals[0] == 0 && env->log.deaths == 1);
     int delay = wait_out();
     assert(env->session_elapsed - before == 1 + delay);
-    assert(delay >= delay_min(&RF_DELAY_RESPAWN) && delay <= delay_max(&RF_DELAY_RESPAWN));
+    assert(delay >= delay_min(&RF_DELAY_RESTOCK) && delay <= delay_max(&RF_DELAY_RESTOCK));
     us = &env->state.env.players[0];
     assert(count_food(us) == full_food && us->special_energy == 100 && us->current_hitpoints == RISKFIGHT_DEFAULT_LOADOUT.hitpoints);
     destroy();
@@ -158,12 +123,12 @@ static int expected_teleport_delay(uint32_t rng, int* rematch) {
     memset(&tmp, 0, sizeof(tmp));
     tmp.outcome[0] = RISKFIGHT_ESCAPE;
     tmp.escaped[0] = 1;
-    RiskfightTransition t = riskfight_session_transition(&tmp, &rng);
+    RiskfightTransition t = riskfight_session_transition(&tmp, &rng, 0);
     *rematch = t.rematch;
     return t.delay;
 }
 
-static void test_teleport_refills_and_costs_the_restock(void) {
+static void test_teleport_costs_a_regear(void) {
     env = make_env(6000, 1, 11);
     Player* us = &env->state.env.players[0];
     int full_food = count_food(us);
@@ -189,13 +154,13 @@ static void test_teleport_refills_and_costs_the_restock(void) {
     destroy();
 }
 
-/* Many teleports: after a rude one (ours after our special, while he can still spec) the opponent never returns; after others he does, with what he had left
- * (or, when he teleported too, refilled). */
+/* Many teleports: after a rude one (ours after our special, while he can still spec) the opponent never returns; after others he does, the same player with the
+ * same kit and profile, regeared. */
 static void teleports(int our_specs, int his_energy, int he_teleports, int trials, int* rematches, int* rudes) {
     *rematches = *rudes = 0;
     for (int trial = 0; trial < trials; trial++) {
         env = make_env(6000, 1, 100 + trial);
-        int his_food = count_food(&env->state.env.players[1]);
+        const RiskfightProfile* his_profile = env->state.opponent_profile;
         env->state.env.players[1].current_hitpoints = 77;
         env->state.env.players[1].special_energy = his_energy;
         env->state.specs_used[0] = our_specs;
@@ -206,11 +171,10 @@ static void teleports(int our_specs, int his_energy, int he_teleports, int trial
         assert(env->log.self_teleports == 1);
         *rudes += env->log.rude_teleports == 1;
         *rematches += env->log.rematches == 1;
-        /* The opponent who is back is the one who was left: he ate up in the gap, so his bag is lighter than a fresh one; if he teleported he is fresh. */
+        /* The opponent who is back is the one who was left, regeared like us. */
         const Player* him = &env->state.env.players[1];
-        int back = count_food(him) < his_food;
-        assert(back == (env->log.rematches == 1 && !he_teleports));
-        if (back) assert(him->current_hitpoints >= him->base_hitpoints);
+        if (env->log.rematches == 1) assert(env->state.opponent_profile == his_profile);
+        assert(him->current_hitpoints == 121 && him->special_energy == 100);
         destroy();
     }
 }
@@ -225,7 +189,7 @@ static void test_rude_teleport_loses_the_opponent(void) {
     teleports(1, 0, 0, 300, &rematches, &rudes);   /* he has nothing left to spec with: polite */
     assert(rudes == 0 && rematches > 0);
     assert(polite > 300 * RF_REMATCH_PROBABILITY / 2 && polite < 300 * (1 + RF_REMATCH_PROBABILITY) / 2 + 1);
-    teleports(0, 100, 1, 300, &rematches, &rudes); /* both teleport: he comes back refilled, as often */
+    teleports(0, 100, 1, 300, &rematches, &rudes); /* both teleport: he comes back as often */
     assert(rudes == 0 && rematches > 300 * RF_REMATCH_PROBABILITY / 2);
     /* The rule at its source. */
     RiskfightState s;
@@ -248,8 +212,141 @@ static void test_rude_teleport_loses_the_opponent(void) {
     uint32_t rng = 1;
     for (int i = 0; i < 200; i++) {
         s.escaped[0] = 1; s.escaped[1] = 0;
-        assert(!riskfight_session_transition(&s, &rng).rematch);
+        assert(!riskfight_session_transition(&s, &rng, 0).rematch);
     }
+}
+
+static int near_share(double count, double n, double p) { return fabs(count - n * p) <= 4.5 * sqrt(n * p * (1 - p)) + 1; }
+
+/* One regear delay for every end of a fight: a rematch takes the measured M, anything else the measured R times (1 + RF_REP_SEARCH * rep). */
+static void test_one_regear_delay_and_reputation(void) {
+    const RiskfightOutcome ends[] = {RISKFIGHT_KILL, RISKFIGHT_DEATH, RISKFIGHT_MUTUAL_DEATH, RISKFIGHT_TIMEOUT, RISKFIGHT_RAGGED};
+    const float reps[] = {0, 1, 3};
+    for (size_t e = 0; e < sizeof(ends) / sizeof(*ends); e++)
+        for (size_t r = 0; r < 3; r++) {
+            RiskfightState s;
+            memset(&s, 0, sizeof(s));
+            s.outcome[0] = ends[e];
+            for (int trial = 0; trial < 50; trial++) {
+                uint32_t a = 5 + 1000 * (uint32_t)trial + (uint32_t)e, b = a;
+                RiskfightTransition plain = riskfight_session_transition(&s, &a, 0), scaled = riskfight_session_transition(&s, &b, reps[r]);
+                assert(!plain.rematch && !scaled.rematch && !plain.rude);
+                assert(plain.delay >= delay_min(&RF_DELAY_RESTOCK) && plain.delay <= delay_max(&RF_DELAY_RESTOCK));
+                assert(scaled.delay == (int)(plain.delay * (1.0f + RF_REP_SEARCH * reps[r]) + 0.5f));
+            }
+        }
+    /* A polite teleport: a rematch (M, unscaled) with the measured probability, else a new opponent after R scaled; a ragger is never rematched. */
+    RiskfightState s;
+    memset(&s, 0, sizeof(s));
+    s.outcome[0] = RISKFIGHT_ESCAPE;
+    s.escaped[0] = 1;
+    uint32_t rng = 11;
+    int rematches = 0, trials = 2000;
+    for (int i = 0; i < trials; i++) {
+        RiskfightTransition t = riskfight_session_transition(&s, &rng, 3);
+        rematches += t.rematch;
+        if (t.rematch) assert(t.delay >= delay_min(&RF_DELAY_REMATCH) && t.delay <= delay_max(&RF_DELAY_REMATCH));
+        else assert(t.delay >= (int)(delay_min(&RF_DELAY_RESTOCK) * (1.0f + RF_REP_SEARCH * 3) + 0.5f) && t.delay <= (int)(delay_max(&RF_DELAY_RESTOCK) * (1.0f + RF_REP_SEARCH * 3) + 0.5f));
+    }
+    assert(near_share(rematches, trials, RF_REMATCH_PROBABILITY));
+    s.ragger = 1;
+    for (int i = 0; i < 200; i++) assert(!riskfight_session_transition(&s, &rng, 0).rematch);
+    /* The ragging probability: nothing without a reputation, RF_REP_RAG per point, capped. */
+    assert(riskfight_rag_probability(0) == 0 && riskfight_rag_probability(1) == RF_REP_RAG && riskfight_rag_probability(100) == RF_REP_RAG_CAP);
+    assert(riskfight_outcome_reward(RISKFIGHT_RAGGED, 2.5f) == 0 && riskfight_outcome_reward(RISKFIGHT_TIMEOUT, 2.5f) == 0);
+}
+
+/* Reputation: a session starts with none in most cases and up to RF_REP_START_MAX otherwise; our rude teleports add 1 each, polite ones nothing; it halves over
+ * RF_REP_HALF_LIFE_TICKS; the policy sees it in the last float of the session block. */
+static void test_rude_teleports_build_reputation(void) {
+    env = make_env(6000, 1, 81);
+    int started = 0, sessions = 3000;
+    float most = 0;
+    for (int i = 0; i < sessions; i++) {
+        puf_reset(env);
+        assert(env->training.rep >= 0 && env->training.rep <= RF_REP_START_MAX);
+        started += env->training.rep > 0;
+        if (env->training.rep > most) most = env->training.rep;
+        assert(observations[0][RF_SESSION_START + 4] == env->training.rep / RF_REP_OBS_SCALE);
+    }
+    assert(near_share(started, sessions, RF_REP_START_PROBABILITY) && most > 2.5f);
+    destroy();
+    /* A polite teleport leaves it as it is, a rude one (after our special, he could still spec) adds 1. */
+    for (int rude = 0; rude < 2; rude++) {
+        env = make_env(6000, 1, 82);
+        env->state.specs_used[0] = rude;
+        env->state.env.players[1].special_energy = 100;
+        actions[0][RF_PRIMARY] = RF_TELEPORT;
+        puf_step(env);
+        assert(env->log.rude_teleports == rude);
+        assert(fabsf(env->training.rep - (float)rude) < 2e-3f);
+        assert(fabsf(observations[0][RF_SESSION_START + 4] - rude / RF_REP_OBS_SCALE) < 1e-3f);
+        destroy();
+    }
+    float rep = 2;
+    for (int tick = 0; tick < RF_REP_HALF_LIFE_TICKS; tick++) rep = riskfight_rep_decay(rep);
+    assert(fabsf(rep - 1) < 2e-3f);
+    /* The observation saturates at RF_REP_OBS_SCALE. */
+    env = make_env(6000, 1, 83);
+    env->training.rep = 10;
+    riskfight_native_observe(env);
+    assert(observations[0][RF_SESSION_START + 4] == 1 && observations[1][RF_SESSION_START + 4] == 1);
+    destroy();
+}
+
+/* A ragger: with the reputation's probability a new opponent is a ranged pool kit played by the script who swings a few times and teleports away. The fight is
+ * RISKFIGHT_RAGGED: no stake, no rematch, and the wait is the regear R scaled by the reputation. */
+static void test_ragger_rags_and_leaves(void) {
+    env = make_pool_env(6000, 1, 71, 1);
+    env->training.rep = 10; /* the cap: RF_REP_RAG_CAP */
+    int n = 2000, ragged = 0;
+    for (int i = 0; i < n; i++) {
+        RiskfightTransition t = {.delay = 100};
+        riskfight_training_next_fight(&env->training, &env->state, &env->context, &t, 0);
+        ragged += env->state.ragger;
+        if (!env->state.ragger) continue;
+        assert(env->context.opp_driven && env->context.opp_kit);
+        assert(get_item_attack_style(env->state.env.players[1].equipped[GEAR_SLOT_WEAPON]) == ATTACK_STYLE_RANGED);
+        assert(env->state.ragger_limit >= RF_RAGGER_MIN_SWINGS && env->state.ragger_limit <= RF_RAGGER_MAX_SWINGS);
+    }
+    assert(near_share(ragged, n, RF_REP_RAG_CAP));
+    destroy();
+    /* Without the pool there is no ranged kit to wear: nobody rags. */
+    env = make_pool_env(6000, 1, 72, 0);
+    env->training.rep = 10;
+    for (int i = 0; i < 300; i++) {
+        RiskfightTransition t = {.delay = 100};
+        riskfight_training_next_fight(&env->training, &env->state, &env->context, &t, 0);
+        assert(!env->state.ragger);
+    }
+    destroy();
+    /* The fight itself: we stand idle, he swings his share and leaves. */
+    env = make_pool_env(6000, 1, 73, 1);
+    env->training.rep = 10;
+    for (int i = 0; !env->state.ragger; i++) {
+        assert(i < 200);
+        RiskfightTransition t = {.delay = 100};
+        riskfight_training_next_fight(&env->training, &env->state, &env->context, &t, 0);
+    }
+    riskfight_native_observe(env);
+    int limit = env->state.ragger_limit;
+    float stake = env->session_stake;
+    int steps = 0;
+    while (!env->state.env.episode_over) {
+        assert(++steps < RISKFIGHT_ROUND_TICKS);
+        puf_step(env);
+        assert(terminals[0] == 0);
+    }
+    assert(env->state.outcome[0] == RISKFIGHT_RAGGED && env->state.outcome[1] == RISKFIGHT_RAGGED);
+    assert(rewards[0] == 0 && rewards[1] == 0 && env->session_stake == stake);
+    assert(env->state.ragger_swings >= limit && env->state.escaped[1] && !env->state.escaped[0]);
+    assert(env->log.ragged == 1 && env->log.ragger_fights == 1 && env->log.kills == 0 && env->log.deaths == 0 && env->log.escapes == 0 && env->log.timeouts == 0);
+    float rep_at_end = env->training.rep / 0.99953773f;
+    assert(!env->wait_transition.rematch);
+    assert(env->wait_left >= (int)(delay_min(&RF_DELAY_RESTOCK) * (1.0f + RF_REP_SEARCH * rep_at_end) - 1) &&
+        env->wait_left <= (int)(delay_max(&RF_DELAY_RESTOCK) * (1.0f + RF_REP_SEARCH * rep_at_end) + 2));
+    printf("ragger: swung %d of %d, left; ragged outcome, no stake, wait %d ticks at rep %.2f\n", env->state.ragger_swings, limit, env->wait_left, rep_at_end);
+    destroy();
 }
 
 static void test_reward_scale_stays_within_one(void) {
@@ -314,7 +411,7 @@ static void test_session_of_n_ticks_ends(void) {
     /* A delay that outruns the budget ends the session at the fight's end: no further fight is started. */
     env = make_env(budget, 1, 33);
     env->session_elapsed = budget - 2;
-    assert(delay_min(&RF_DELAY_SEARCH) >= 1);
+    assert(delay_min(&RF_DELAY_RESTOCK) >= 1);
     env->state.env.players[1].current_hitpoints = 0;
     puf_step(env);
     assert(terminals[0] == 0 && env->wait_left > 0 && env->log.kills == 1);
@@ -370,7 +467,7 @@ static void test_session_observation(void) {
     env = make_env(6000, 1, 41);
     float* block = observations[0] + RF_SESSION_START;
     assert(RF_OBS_SIZE == RF_SESSION_START + RF_SESSION_SIZE);
-    assert(block[0] == 1 && block[1] == 1 && block[2] == 0 && block[3] == 0);
+    assert(block[0] == 1 && block[1] == 1 && block[2] == 0 && block[3] == 0 && block[4] == 0);
     env->session_elapsed = 6000 - RF_SESSION_HORIZON_TICKS / 2;
     puf_step(env);
     assert(fabsf(block[0] - (RF_SESSION_HORIZON_TICKS / 2 - 1) / (float)RF_SESSION_HORIZON_TICKS) < 1e-3f);
@@ -393,10 +490,12 @@ static void test_session_observation(void) {
 }
 
 int main(void) {
-    test_supplies_persist_across_a_fight_boundary();
-    test_the_gap_is_spent_eating();
-    test_death_refills_and_pays_the_respawn();
-    test_teleport_refills_and_costs_the_restock();
+    test_every_fight_starts_regeared();
+    test_death_is_a_regear_like_any_end();
+    test_teleport_costs_a_regear();
+    test_one_regear_delay_and_reputation();
+    test_rude_teleports_build_reputation();
+    test_ragger_rags_and_leaves();
     test_rude_teleport_loses_the_opponent();
     test_reward_scale_stays_within_one();
     test_session_of_n_ticks_ends();

@@ -2504,7 +2504,7 @@ typedef struct {
     float perf;
     float draw;
     int games;
-    double kills_rate, deaths_rate, escapes_rate;
+    double kills_rate, deaths_rate, escapes_rate, timeouts_rate, ragged_rate; /* timeouts and ragged are optional: 0 when the env does not log them */
     int has_outcomes;
 } EvalResult;
 
@@ -2972,6 +2972,10 @@ static EvalResult eval_loop(Ini* ini, PuffeRL* p, int mode, int verbose,
             result.kills_rate = kills->value;
             result.deaths_rate = deaths->value;
             result.escapes_rate = escapes->value;
+            DictItem* timeouts = dict_find(&el, "env/timeouts");
+            DictItem* ragged = dict_find(&el, "env/ragged");
+            result.timeouts_rate = timeouts ? timeouts->value : 0;
+            result.ragged_rate = ragged ? ragged->value : 0;
         }
         dict_clear(&el);
         return result;
@@ -3074,7 +3078,7 @@ static float run_bot_ladder(Ini* ini, TrainContext* ctx, Dict* log) {
     // One PuffeRL for the whole ladder. close_pufferl frees nothing, so a
     // trainer per rung is a leak. Swap bot_policy and restart instead.
     PuffeRL* ep = eval_make(ini, ctx, EVAL_SCORE, 0);
-    float sum = 0;
+    float sum = 0, timeouts_sum = 0;
     for (int i = 0; i < rungs; i++) {
         if (PUF_BACKEND != PUF_GPU) {
             for (int e = 0; e < ep->vec->size; e++) {
@@ -3084,9 +3088,10 @@ static float run_bot_ladder(Ini* ini, TrainContext* ctx, Dict* log) {
         env_restart(ep);
         EvalResult r = eval_loop(ini, ep, EVAL_SCORE, 0, 0, bot_games, NULL, 0);
         sum += r.perf;
+        timeouts_sum += r.timeouts_rate;
         printf("LADDER_EVAL bot=%d games=%d perf=%.9g", (int)ladder[i], r.games, r.perf);
-        if (r.has_outcomes) printf(" kills_rate=%.9g deaths_rate=%.9g escapes_rate=%.9g",
-            r.kills_rate, r.deaths_rate, r.escapes_rate);
+        if (r.has_outcomes) printf(" kills_rate=%.9g deaths_rate=%.9g escapes_rate=%.9g timeouts_rate=%.9g ragged_rate=%.9g",
+            r.kills_rate, r.deaths_rate, r.escapes_rate, r.timeouts_rate, r.ragged_rate);
         printf("\n");
         if (log) {
             char key[128];
@@ -3094,12 +3099,18 @@ static float run_bot_ladder(Ini* ini, TrainContext* ctx, Dict* log) {
             dict_set(log, key, r.perf);
             snprintf(key, sizeof(key), "selfplay/bot_%d_games", (int)ladder[i]);
             dict_set(log, key, r.games);
+            /* Fights that hit the round limit per session: a policy that stalls to dodge a loss shows here, not in the score. */
+            snprintf(key, sizeof(key), "selfplay/bot_%d_timeouts", (int)ladder[i]);
+            dict_set(log, key, r.timeouts_rate);
         }
     }
     close_pufferl(ep);
     float mean = sum / rungs;
     printf("LADDER_EVAL mean_perf=%.9g rungs=%d\n", mean, rungs);
-    if (log) dict_set(log, "selfplay/bot_ladder_perf", mean);
+    if (log) {
+        dict_set(log, "selfplay/bot_ladder_perf", mean);
+        dict_set(log, "selfplay/bot_ladder_timeouts", timeouts_sum / rungs);
+    }
     return mean;
 }
 
@@ -3128,6 +3139,8 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
     if (!use_selfplay) {
         puf_ini_put(ini, "vec.num_policies", "1");
         puf_ini_put(ini, "vec.hist_policy_percent", "0");
+        /* One policy has no second seat to play: an env that has a self_play switch runs with it off. */
+        if (dict_find(puf_ini_section(ini, "env", 0), "self_play")) puf_ini_put(ini, "env.self_play", "0");
     } else {
         int npol = puf_ini_get(ini, "vec", "num_policies");
         assert(npol >= 2 && npol <= SELFPLAY_MAX_HIST + 1
@@ -3396,10 +3409,10 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
         result.step_points[points - 1] = result.steps;
     }
 
-    long bot_games = use_selfplay ? puf_ini_get(ini, "selfplay", "eval_bot_games") : 0;
+    long bot_games = puf_ini_get(ini, "selfplay", "eval_bot_games");
     int max_opp = use_selfplay ? puf_ini_get(ini, "selfplay", "eval_pool_size") : 0;
     long pool_games = use_selfplay ? puf_ini_get(ini, "selfplay", "eval_games") : 0;
-    int bot_ladder = use_selfplay && bot_games > 0 && final_checkpoint[0];
+    int bot_ladder = bot_games > 0 && final_checkpoint[0];
     int pool_eval = !bot_ladder && use_selfplay && max_opp > 0
         && pool_games > 0 && final_checkpoint[0];
     long eval_episodes = puf_ini_get(ini, "base", "eval_episodes");
