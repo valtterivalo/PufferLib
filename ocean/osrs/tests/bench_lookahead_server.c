@@ -5,7 +5,9 @@
  *
  * REQUESTS.txt holds requests (LA ... END, protocol v2); they are replayed in a cycle for COUNT requests, each written with one write() and answered
  * by one line (R ... or UNAVAILABLE ...). Reports spawn-to-READY, the first (cold) request, and p50/p99/max over all requests including the first,
- * for answered (R) requests and for all requests. */
+ * for answered (R) requests and for all requests, how many answers ended in the server's `BUDGET exceeded` note, and the worlds the `continue` macro
+ * (every answer's macro 0, always evaluated) was scored on. BENCH_GAP_MS=N waits N ms between a response and the next request (the plugin asks once per
+ * game tick, 600 ms apart; back to back is the harshest case for a server that finishes work after it has answered). */
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <poll.h>
@@ -111,8 +113,11 @@ int main(int argc, char** argv) {
     double* answered = malloc((size_t)count * sizeof(double));
     long answered_count = 0, unavailable = 0;
     double first = 0;
+    double gap = getenv("BENCH_GAP_MS") ? atof(getenv("BENCH_GAP_MS")) * 1e-3 : 0;
+    long overruns = 0, worlds_sum = 0, worlds_min = 1 << 30;
     for (long i = 0; i < count; i++) {
         int r = (int)(i % requests);
+        if (gap > 0) nanosleep(&(struct timespec){.tv_sec = (time_t)gap, .tv_nsec = (long)((gap - (time_t)gap) * 1e9)}, NULL);
         double t0 = now();
         size_t sent = 0;
         while (sent < length[r]) {
@@ -124,11 +129,21 @@ int main(int argc, char** argv) {
         double us = (now() - t0) * 1e6;
         if (i == 0) first = us;
         all[i] = us;
-        if (line[0] == 'R') answered[answered_count++] = us;
+        if (line[0] == 'R') {
+            answered[answered_count++] = us;
+            overruns += strstr(line, " BUDGET exceeded ") != NULL;
+            long worlds = 0; /* "R id micros best feasible kill death value worlds": the ninth token */
+            char* at = line;
+            for (int token = 0; token < 8; token++) { at = strchr(at, ' '); if (!at) { fprintf(stderr, "short response: %.80s\n", line); return 2; } at++; }
+            worlds = atol(at);
+            worlds_sum += worlds;
+            if (worlds < worlds_min) worlds_min = worlds;
+        }
         else if (!strncmp(line, "UNAVAILABLE", 11)) unavailable++;
         else { fprintf(stderr, "unexpected response: %.80s\n", line); return 2; }
     }
-    printf("first request (cold) %.0f us; %ld answered, %ld unavailable\n", first, answered_count, unavailable);
+    printf("first request (cold) %.0f us; %ld answered, %ld unavailable; %ld ended in BUDGET exceeded; continue scored on %.0f worlds on average, at least %ld\n", first, answered_count, unavailable,
+        overruns, answered_count ? (double)worlds_sum / (double)answered_count : 0, answered_count ? worlds_min : 0);
     report("answered", answered, answered_count);
     report("all", all, count);
     close(to_server[1]);

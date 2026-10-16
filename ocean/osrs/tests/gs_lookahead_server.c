@@ -1,10 +1,11 @@
 /* The lookahead as a process: protocol v2. One request per decision on stdin, one scored line per request on stdout.
  *
  *   cc -std=c11 -O2 -I. -o gs_lookahead_server ocean/osrs/tests/gs_lookahead_server.c -lm      (cwd = repo root: the .cmap maps under ocean/osrs/data are relative)
- *   gs_lookahead_server MODEL.fit EAT_MIXTURE.fit [WORLDS HORIZON [THREADS]]      defaults: 512 worlds, horizon 15, 8 threads
+ *   gs_lookahead_server MODEL.fit EAT_MIXTURE.fit [WORLDS HORIZON [THREADS]] [--budget-ms MS] [--min-worlds N]
+ *       defaults: 512 worlds, horizon 15, 6 threads, budget 12 ms, at least 64 worlds. --budget-ms 0 evaluates every world (deterministic).
  *
  * STARTUP: the server loads the fits, runs a synthetic decision stream through the whole path, then prints exactly one line
- *   READY <worst_warm_micros> <macro names joined with ';'>
+ *   READY <worst_warm_micros> <macro names joined with ';'> BUDGET <ms> <min_worlds>
  * before it reads stdin (worst_warm_micros = slowest decision after the first two cold ones). stderr carries one line per gear prior used.
  *
  * REQUEST: LA id tick, B belief, K stakes, F feasibility, O own state, W worn, G bag, SHIELD/ARMOR/Q/H/RA/PS observations, P pending hits, R plan, END.
@@ -34,6 +35,8 @@
  * Unavailable: `UNAVAILABLE id reason [raw]`, only for missing own-side observations (poison state, auto-retaliate, attack history interval).
  * Declared priors (request_declare_priors): `P UNKNOWN` is served as an empty queue and an UNKNOWN own attack clock as ready, and the response ends ` ASSUME n name...`
  * (pending_empty, own_attack_ready), so a tick the plugin could not observe fully still gets a decision and says what it assumed.
+ * Anytime budget (see la_evaluate): the evaluation stops sampling worlds MS after the request was read (never before the minimum); the `worlds` column says how many
+ * each macro got. When the minimum itself ran past the deadline the response ends ` BUDGET exceeded <micros past the deadline>`.
  *
  * Opponent weapon/shield/armor/ammo are never UNAVAILABLE: unknown/unsupported ids get declared priors (see request_gear_priors), the raw ids stay
  * in the request and in the stderr prior line, never silently dropped. */
@@ -46,7 +49,10 @@
 #undef assert
 #define assert(condition) do { if (!(condition)) { fprintf(stderr, "invalid lookahead request: %s\n", #condition); exit(2); } } while (0)
 
-enum { INERT_ID = 27281, SERVER_WORLDS = 512, SERVER_THREADS = 8 };
+enum { INERT_ID = 27281, SERVER_WORLDS = 512, SERVER_THREADS = 6, SERVER_MIN_WORLDS = 64 };
+#define SERVER_BUDGET_MS 12.0
+/* Anytime budget in milliseconds from the moment a request has been read; 0 = evaluate every world (deterministic, for tests and evaluators). */
+static double g_budget_ms = SERVER_BUDGET_MS;
 static const int CANONICAL_FROM[] = {24592, 24595, 24598, 24601, 24603, 24605, 22441, 20513, 28067, 28070, 21287};
 static const int CANONICAL_TO[] = {13441, 3144, 3024, 3026, 3028, 3030, 22322, 10551, 10551, 10828, 21295};
 static const int SIM_IDS[] = {13441, 3144, 3024, 3026, 3028, 3030, 6685, 6687, 6689, 6691, 12695, 12697, 12699, 12701, 23691, 23694, 8013, 24621, 24225, 27690, 12954,
@@ -662,9 +668,11 @@ static void snapshot_of(Request* q, RiskfightSnapshot* snap) {
 static Sim g_base;
 static LaDecision g_decision;
 
-/* One decision on the request already read: snapshot, load, macro scripts around the committed remainder, common-world rollouts. Returns micros. */
-static double server_decide(Request* q) {
-    double started = la_seconds();
+/* One decision on the request already read at `arrived`: snapshot, load, macro scripts around the committed remainder, common-world rollouts under the
+ * budget (deadline = arrived + g_budget_ms, see la_evaluate). Returns micros since `arrived`. */
+static double server_decide(Request* q, double arrived) {
+    double started = arrived;
+    g_la_deadline = g_budget_ms > 0 ? arrived + g_budget_ms * 1e-3 : 0;
     RiskfightSnapshot snap;
     snapshot_of(q, &snap);
     riskfight_load_state(&g_base.state, &g_base.context, &snap);
@@ -702,6 +710,7 @@ static void server_respond(FILE* out, const Request* q, double micros) {
         for (int i = 0; i < GS_ASSUME_COUNT; i++)
             if (q->assumed >> i & 1) fprintf(out, " %s", GS_ASSUME_NAME[i]);
     }
+    if (g_la_overrun > 0) fprintf(out, " BUDGET exceeded %.0f", ceil(g_la_overrun * 1e6)); /* the minimum worlds could not finish inside the budget */
     fprintf(out, "\n");
 }
 
@@ -729,13 +738,40 @@ static double server_warm(void) {
         q.id = i;
         const char* unavailable = server_unavailable(&q);
         if (unavailable) { fprintf(stderr, "warm-up request %d is unavailable: %s\n", i % WARM_REQUEST_COUNT, unavailable); exit(2); }
-        double micros = server_decide(&q);
+        double micros = server_decide(&q, la_seconds());
+        la_quiesce(); /* the next warm-up request is parsed (it rewrites the stat-item rows) only when no straggler of this one is left */
         if (i >= COLD && micros > worst) worst = micros;
     }
     return worst;
 }
 
+/* `--budget-ms MS` (also env GS_BUDGET_MS; the flag wins; 0 = no budget) and `--min-worlds N` may appear anywhere; the rest are the positional arguments. */
+static int server_options(int argc, char** argv, char** positional) {
+    if (getenv("GS_BUDGET_MS")) { char* end; g_budget_ms = strtod(getenv("GS_BUDGET_MS"), &end); assert(*end == 0 && g_budget_ms >= 0); }
+    int count = 0;
+    for (int i = 1; i < argc; i++) {
+        char* end;
+        if (!strcmp(argv[i], "--budget-ms")) {
+            assert(i + 1 < argc);
+            g_budget_ms = strtod(argv[++i], &end);
+            assert(*end == 0 && g_budget_ms >= 0);
+        } else if (!strcmp(argv[i], "--min-worlds")) {
+            assert(i + 1 < argc);
+            g_la_min_worlds = (int)strtol(argv[++i], &end, 10);
+            assert(*end == 0 && g_la_min_worlds >= 1);
+        } else {
+            assert(count < 5);
+            positional[count++] = argv[i];
+        }
+    }
+    return count;
+}
+
 int main(int argc, char** argv) {
+    char* args[6] = {argv[0]}; /* args[1..] = the positional arguments */
+    g_la_min_worlds = SERVER_MIN_WORLDS;
+    argc = server_options(argc, argv, args + 1) + 1;
+    argv = args;
     assert(argc >= 3 && argc <= 6);
     g_ablation.hp = HP_UNIFORM;
     g_ablation.escape_model = 1;
@@ -744,7 +780,9 @@ int main(int argc, char** argv) {
     g_ablation.panic_hp = 25;
     static OppFit fit;
     opp_load(argv[1], argv[2], &fit, &g_eat_model);
-    /* Defaults measured for this host class (bench_lookahead_server): 512 common worlds is the knee of decision regret, 8 threads keep the round trip ~2 ms. */
+    /* Defaults measured for this host class (bench_lookahead_server): 512 common worlds is the knee of decision regret (tests/test_lookahead_budget.c prefixes show what fewer cost).
+     * 6 threads: under contention (busy loops sharing the server's cores on pufferbox, budget 12 ms) 4 threads had a 20-25% worse p99 than 6 or 8 and 6 was marginally the best
+     * (see ENGINE_WIRE.md "Anytime budget"); it also leaves cores to the game client. */
     g_la_worlds = SERVER_WORLDS;
     g_la_threads = SERVER_THREADS;
     if (argc > 3) { char* arg = argv[3]; g_la_worlds = request_int(&arg); request_end(arg); }
@@ -762,12 +800,13 @@ int main(int argc, char** argv) {
     double worst = server_warm();
     printf("READY %.0f", worst);
     for (int m = 0; m < LA_MACROS; m++) printf("%c%s", m ? ';' : ' ', LA_NAME[m]);
-    printf("\n");
+    printf(" BUDGET %g %d\n", g_budget_ms, g_la_min_worlds);
     fflush(stdout);
     if (getenv("GS_SERVER_LOG")) g_log = fopen(getenv("GS_SERVER_LOG"), "w");
     static Request q;
     for (;;) {
         read_request(stdin, &q);
+        double arrived = la_seconds();
         request_declare_priors(&q);
         const char* unavailable = server_unavailable(&q);
         if (unavailable) {
@@ -776,9 +815,10 @@ int main(int argc, char** argv) {
             if (g_log) fflush(g_log);
             continue;
         }
-        double micros = server_decide(&q);
+        double micros = server_decide(&q, arrived);
         server_respond(stdout, &q, micros);
         fflush(stdout);
         if (g_log) fflush(g_log);
+        la_quiesce(); /* a helper the budgeted evaluation did not wait for (a descheduled thread) is still reading the item rows the next request rewrites: let it leave first */
     }
 }

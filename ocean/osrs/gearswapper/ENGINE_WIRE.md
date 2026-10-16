@@ -41,6 +41,9 @@ decision by tens of ms, so the evaluation is anytime with a wall-clock budget: `
 - A worker that has not published its world when the others are done is waited for ~150 us (3 mean world times) and then its world is recomputed by the answering thread (same pure function, same result); the late worker discards its copy.
   The helpers are not waited for after the answer is written either, but they must leave before the next request is parsed (the parser rewrites the stat-priced item rows the rollouts read): the server waits for them right after it has answered, while the plugin waits for the next game tick.
 - The plugin's own 50 ms deadline stays the hard failure; the budget is what keeps a normal answer far from it.
+- Threads: default 6 (was 8). Measured on pufferbox (32 threads shared with other jobs, about 2.5x slower per core than the Mac; server and 2..5 busy-loop processes pinned to the same 4 or 8 logical CPUs with `taskset`, budget 12 ms, 200..300 requests a run, 3..4 runs):
+  mean of the run p99 in ms over loads of 0 / 2 / 3 hogs on 4 CPUs and 0 / 3 / 5 hogs on 8 CPUs: 4 threads 14.0 24.5 30.9 / 13.6 22.8 21.5; 6 threads 14.8 20.2 25.5 / 12.6 15.8 18.8; 8 threads 15.6 19.1 32.4 / 14.5 16.5 21.7.
+  4 threads are 20-25% worse under contention, 6 and 8 are within the noise of each other with 6 ahead in 4 of 6 scenarios and leaving cores to the game client.
 
 ## The action list (what the plugin executes)
 `A` is a concrete, tick-indexed action list: each record is `due kind arg timing [count cand...]`, `kind` from `GsWireKind` (see header): clicks (slot, attack, spec, cast, unequip, equip, item),
@@ -90,7 +93,7 @@ and lays out the files `EngineBridge` expects (`~/.light2/opponent-loop` is the 
     RELEASE_DIR/home/ocean/osrs/data/wilderness.cmap          (the only data file the server reads; cwd of the child = RELEASE_DIR/home)
     RELEASE_DIR/BUILD                                         (git sha, date, compiler, platform)
 
-The script finishes by starting the server once with stdin at EOF and requires its `READY` line. The server takes `MODEL.fit EAT_MIXTURE.fit [WORLDS HORIZON [THREADS]]` (defaults 512 worlds, horizon 15, 8 threads).
+The script finishes by starting the server once with stdin at EOF and requires its `READY` line. The server takes `MODEL.fit EAT_MIXTURE.fit [WORLDS HORIZON [THREADS]] [--budget-ms MS] [--min-worlds N]` (defaults 512 worlds, horizon 15, 6 threads, budget 12 ms, minimum 64 worlds).
 The C suite is `ocean/osrs/tests/run_suite.sh [-j N] [-t SECONDS] [test_name ...]` (on Linux it needs `RAYLIB_INC`/`RAYLIB_LIB` for the render and model tests).
 
 Rule (Java executor): a policy plan (best_index >= 2) with `A 0` cancels the committed remainder, like macro 1. A policy plan answers `feasible 0 worlds 0` in its own score block when it has no estimate; the plugin accepts an infeasible best only for index >= 2 on a server that announced a non-lookahead POLICY.

@@ -1,6 +1,8 @@
 #ifndef RISKFIGHT_LOOKAHEAD_H
 #define RISKFIGHT_LOOKAHEAD_H
 #include <pthread.h>
+#include <sched.h>
+#include <time.h>
 #include "../gearswapper/gs_engine_wire.h"
 #include <stdatomic.h>
 
@@ -884,25 +886,145 @@ static void la_print_base(const RiskfightState* b) {
     fprintf(stderr, "pid %d visible bars %d %d\n", b->env.pid_holder, b->visible[0].health_bar, b->visible[1].health_bar);
 }
 
-/* World-parallel evaluation. Worlds (and worth tasks) are independent: each draws its own state from (salt, index), rolls every alive macro out with common
- * seeds and stores outcomes by world index, so scores are summed in world order and do not depend on the thread count. g_la_threads = 1 runs inline. */
-enum { LA_MAX_THREADS = 32 };
+/* World-parallel, ANYTIME evaluation.
+ *
+ * Tasks are independent and pure: world w draws its state from (salt, w), rolls every alive macro out with common seeds, and the outcomes are stored by
+ * world index and summed in world order, so a score depends only on WHICH worlds completed, never on the thread count or on who computed them.
+ * The evaluation runs in stages (worlds [0,16), [16,64), [64,256), ... , successive elimination between stages); one decision is one LaJob.
+ *
+ * Budget (g_la_deadline > 0, an absolute la_seconds() instant): no world with index >= min(g_la_min_worlds, g_la_worlds) is STARTED after it, and no new stage
+ * is begun after it once the minimum is complete. Claims are granted from one atomic counter in index order and the stage is frozen when the caller stops
+ * claiming, so the completed worlds are always the prefix [0, N): the decision is exactly what an unbudgeted evaluation with g_la_worlds = N returns.
+ * Below the minimum the deadline is ignored (correctness first); the evaluation then reports g_la_overrun = seconds past the deadline. g_la_deadline = 0 runs
+ * every world (tests, evaluators).
+ *
+ * Stragglers (only with a deadline set; without one the caller waits for every world, as it always did): a claimed world that has not been published when the
+ * caller runs out of claims is waited for only a short grace (3 mean world times, at least 150 us) and is then STOLEN: the caller recomputes that world itself
+ * (same pure function, same result). A descheduled helper therefore never delays the answer by more than one grace; when it returns it finds its world stolen
+ * and discards its copy. Publication is arbitrated per world with a state word (TODO -> WRITING -> DONE by the helper, TODO -> STOLEN -> DONE by the caller)
+ * so a late helper can never write into results the caller has used. The decision's own inputs (base state, history, belief, scripts, outcome buffers) live
+ * in the LaJob, a copy a helper pins while it is inside, so a straggler never reads what the caller changes next.
+ * What a straggler still reads is process-global simulation state the caller's NEXT request rewrites (the stat-priced item rows, cleared per request): the
+ * caller of an evaluation with a deadline MUST call la_quiesce() before it parses or loads the next request (the server does right after its answer is
+ * written, while the plugin waits for the next game tick); la_evaluate itself quiesces before it starts. g_la_threads = 1 runs inline. */
+enum { LA_MAX_THREADS = 32, LA_MAX_STAGES = 24 };
 static int g_la_threads = 1;
-typedef struct { void (*fn)(void*, Sim*); void* arg; } LaTask;
+static double g_la_deadline;   /* in: absolute la_seconds() deadline of the evaluation about to run, 0 = none */
+static int g_la_min_worlds = 64; /* in: worlds every surviving macro gets even when the deadline has passed */
+static double g_la_overrun;    /* out: seconds past the deadline the evaluation finished because the minimum was not complete, else 0 */
+static int g_la_completed;     /* out: worlds in the completed prefix of the last evaluation */
+static long g_la_stolen;       /* out: worlds the caller recomputed because a helper had not published them in time */
+static double g_la_task_seconds; /* mean seconds per task the caller measured (smoothed): sets the grace before a straggler's world is stolen */
+static unsigned g_la_helper_stall_us; /* test hook (tests/test_lookahead_budget.c): helpers sleep this long before publishing a world, standing in for a descheduled thread */
+
+enum { LA_WORTH_WORLDS = 16, LA_WORTH_TASKS = GS_MOST_TICKETS * LA_WORTH_WORLDS };
+enum { LA_TODO, LA_WRITING, LA_DONE, LA_STOLEN };
+typedef struct { int first, last, worth_tasks, total; atomic_int next; int alive[LA_MACROS]; } LaStage;
+typedef struct {
+    RiskfightState base; Hist base_hist; LaBelief belief;
+    int tick, trace, min_worlds;
+    uint32_t world_rng, worth_salt;
+    double deadline;
+    LaScript scripts[LA_MACROS];
+    LaScript greedy[GS_MOST_TICKETS + 1];  /* greedy[k] spends k tickets */
+    atomic_int users, forced;
+    atomic_int worth_state[LA_WORTH_TASKS];
+    double gain[LA_WORTH_TASKS];           /* [(k - 1) * LA_WORTH_WORLDS + world] */
+    atomic_int* state;                     /* per world */
+    LaOutcome* out;                        /* [world * LA_MACROS + macro] */
+    int capacity;                          /* worlds state/out hold */
+    LaStage stage[LA_MAX_STAGES];
+} LaJob;
+typedef struct { LaJob* job; int stage; } LaTask;
+typedef struct { LaOutcome o[LA_MACROS]; double gain; } LaResult;
+
+static LaJob g_la_job;
 static struct {
-    int workers, generation, pending;
+    int workers, generation;
     pthread_mutex_t lock;
-    pthread_cond_t wake, done;
+    pthread_cond_t wake;
     LaTask task;
     pthread_t thread[LA_MAX_THREADS];
     Sim* work[LA_MAX_THREADS]; /* 0 = the calling thread */
-} g_la_pool = {.lock = PTHREAD_MUTEX_INITIALIZER, .wake = PTHREAD_COND_INITIALIZER, .done = PTHREAD_COND_INITIALIZER};
+} g_la_pool = {.lock = PTHREAD_MUTEX_INITIALIZER, .wake = PTHREAD_COND_INITIALIZER};
 
 static Sim* la_new_sim(void) {
     Sim* sim = malloc(sizeof(Sim));
     if (!sim) { fprintf(stderr, "lookahead worker simulation allocation failed\n"); abort(); }
     sim_init(sim);
     return sim;
+}
+
+/* Finite executable one/two-ticket continuation prior (not global policy value): task t measures what spending k tickets gains over holding, in one world. */
+static double la_worth_one(const LaJob* job, int t, Sim* work, RiskfightState* world, Hist* hist) {
+    static const LaScript none;
+    int k = t / LA_WORTH_WORLDS + 1, w = t % LA_WORTH_WORLDS;
+    uint32_t draw = job->worth_salt ^ (uint32_t)(w * 2246822519u);
+    uint32_t wr = osrs_lowbias32(draw) | 1;
+    la_world(&job->base, &job->base_hist, &job->belief, job->tick, &wr, world, hist);
+    world->env.players[0].special_energy = GS_TICKET * k;
+    world->env.players[0].spec_armed = 0;
+    uint32_t seed = osrs_lowbias32(draw + 17);
+    return la_rollout(work, world, hist, job->tick, g_la_model, &job->greedy[k], seed).kill - la_rollout(work, world, hist, job->tick, g_la_model, &none, seed).kill;
+}
+
+/* Task t of a stage: the worth tasks first, then one world per task. A pure function of (job, stage, t). */
+static void la_task_compute(const LaJob* job, const LaStage* st, int t, Sim* work, LaResult* r) {
+    static _Thread_local RiskfightState world;
+    static _Thread_local Hist hist;
+    if (t < st->worth_tasks) { r->gain = la_worth_one(job, t, work, &world, &hist); return; }
+    int w = st->first + t - st->worth_tasks;
+    uint32_t draw = job->world_rng ^ (uint32_t)(w * 2246822519u);
+    uint32_t wr = osrs_lowbias32(draw) | 1;
+    la_world(&job->base, &job->base_hist, &job->belief, job->tick, &wr, &world, &hist);
+    if (job->trace) {
+        const Player* h = &world.env.players[1];
+        int vw = 0, mm = 0, food = 0;
+        for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) { uint8_t it = osrs_inventory_cell_metadata(&h->inventory_cells[i])->item_idx; vw += it == ITEM_VOIDWAKER; mm += is_maul_item(it); food += osrs_inventory_cell_metadata(&h->inventory_cells[i])->consumable_kind == OSRS_CONSUMABLE_ANGLERFISH; }
+        fprintf(stderr, "W hp %d en %d timer %d veng %d pid %d vw %d maul %d food %d eqw %d since %d warn %d\n", h->current_hitpoints, h->special_energy, h->attack_timer, h->veng_active, world.env.pid_holder, vw, mm, food, h->equipped[GEAR_SLOT_WEAPON], hist.since_eat, warning_since(&hist.warning));
+    }
+    uint32_t seed = osrs_lowbias32(draw + 17);
+    for (int m = 0; m < LA_MACROS; m++)
+        if (st->alive[m]) r->o[m] = la_rollout(work, &world, &hist, job->tick, g_la_model, &job->scripts[m], seed);
+}
+
+static atomic_int* la_task_state(LaJob* job, const LaStage* st, int t) {
+    return t < st->worth_tasks ? &job->worth_state[t] : &job->state[st->first + t - st->worth_tasks];
+}
+
+static void la_task_store(LaJob* job, const LaStage* st, int t, const LaResult* r) {
+    if (t < st->worth_tasks) job->gain[t] = r->gain;
+    else memcpy(&job->out[(size_t)(st->first + t - st->worth_tasks) * LA_MACROS], r->o, sizeof(r->o));
+}
+
+/* Next task of the stage, or -1. Grants are consecutive from one counter; once the deadline has passed no world at or beyond the minimum is granted. */
+static int la_claim(LaJob* job, LaStage* st) {
+    for (;;) {
+        int n = atomic_load(&st->next);
+        if (n >= st->total) return -1;
+        int expired = job->deadline > 0 && la_seconds() >= job->deadline;
+        if (expired && n >= st->worth_tasks && st->first + n - st->worth_tasks >= job->min_worlds) return -1;
+        if (atomic_compare_exchange_weak(&st->next, &n, n + 1)) {
+            if (expired) atomic_store(&job->forced, 1);
+            return n;
+        }
+    }
+}
+
+/* A helper's share of one stage: compute, then publish only if the caller has not stolen the task. */
+static void la_helper_stage(LaJob* job, int s, Sim* work) {
+    LaStage* st = &job->stage[s];
+    static _Thread_local LaResult result;
+    for (int t; (t = la_claim(job, st)) >= 0;) {
+        la_task_compute(job, st, t, work, &result);
+        if (g_la_helper_stall_us) nanosleep(&(struct timespec){.tv_nsec = (long)g_la_helper_stall_us * 1000L}, NULL);
+        atomic_int* state = la_task_state(job, st, t);
+        int expect = LA_TODO;
+        if (atomic_compare_exchange_strong(state, &expect, LA_WRITING)) {
+            la_task_store(job, st, t, &result);
+            atomic_store(state, LA_DONE);
+        }
+    }
 }
 
 static void* la_pool_main(void* arg) {
@@ -912,11 +1034,11 @@ static void* la_pool_main(void* arg) {
         while (g_la_pool.generation == seen) pthread_cond_wait(&g_la_pool.wake, &g_la_pool.lock);
         seen = g_la_pool.generation;
         LaTask task = g_la_pool.task;
+        if (task.job) atomic_fetch_add(&task.job->users, 1); /* pinned under the lock the caller picks job slots under */
         pthread_mutex_unlock(&g_la_pool.lock);
-        task.fn(task.arg, g_la_pool.work[index]);
-        pthread_mutex_lock(&g_la_pool.lock);
-        if (--g_la_pool.pending == 0) pthread_cond_signal(&g_la_pool.done);
-        pthread_mutex_unlock(&g_la_pool.lock);
+        if (!task.job) continue;
+        la_helper_stage(task.job, task.stage, g_la_pool.work[index]);
+        atomic_fetch_sub(&task.job->users, 1);
     }
     return NULL;
 }
@@ -932,107 +1054,117 @@ static void la_pool_start(void) {
     }
 }
 
-/* Runs fn on the caller and every helper; the task claims its own work items atomically. Returns when all have finished. */
-static void la_pool_run(void (*fn)(void*, Sim*), void* arg) {
-    la_pool_start();
-    if (g_la_pool.workers == 0) { fn(arg, g_la_pool.work[0]); return; }
-    pthread_mutex_lock(&g_la_pool.lock);
-    g_la_pool.task = (LaTask){fn, arg};
-    g_la_pool.pending = g_la_pool.workers;
-    g_la_pool.generation++;
-    pthread_cond_broadcast(&g_la_pool.wake);
-    pthread_mutex_unlock(&g_la_pool.lock);
-    fn(arg, g_la_pool.work[0]);
-    pthread_mutex_lock(&g_la_pool.lock);
-    while (g_la_pool.pending) pthread_cond_wait(&g_la_pool.done, &g_la_pool.lock);
-    pthread_mutex_unlock(&g_la_pool.lock);
+/* Waits until no helper is inside the job (it has finished the stage it held, claimed, or found its world stolen). A helper that has not yet entered finds the
+ * last stage frozen and touches nothing outside the job. */
+static void la_quiesce(void) {
+    while (atomic_load(&g_la_job.users) != 0) nanosleep(&(struct timespec){.tv_nsec = 50000}, NULL);
 }
 
-enum { LA_WORTH_WORLDS = 16, LA_WORTH_TASKS = GS_MOST_TICKETS * LA_WORTH_WORLDS };
-typedef struct {
-    const RiskfightState* base; const Hist* base_hist; const LaBelief* belief;
-    int tick, first, last, trace;
-    uint32_t world_rng;
-    const LaScript* scripts; const int* alive;
-    LaOutcome* out;
-    int worth_tasks;               /* LA_WORTH_TASKS in the first job when the ticket worth is measured, else 0 */
-    uint32_t worth_salt;
-    const LaScript* greedy;        /* greedy[k] spends k tickets */
-    double* gain;                  /* [(k - 1) * LA_WORTH_WORLDS + world] */
-    atomic_int next;
-} LaWorldJob;
-
-/* Finite executable one/two-ticket continuation prior (not global policy value): task t measures what spending k tickets gains over holding, in one world. */
-static void la_worth_one(LaWorldJob* job, int t, Sim* work, RiskfightState* world, Hist* hist) {
-    static const LaScript none;
-    int k = t / LA_WORTH_WORLDS + 1, w = t % LA_WORTH_WORLDS;
-    uint32_t draw = job->worth_salt ^ (uint32_t)(w * 2246822519u);
-    uint32_t wr = osrs_lowbias32(draw) | 1;
-    la_world(job->base, job->base_hist, job->belief, job->tick, &wr, world, hist);
-    world->env.players[0].special_energy = GS_TICKET * k;
-    world->env.players[0].spec_armed = 0;
-    uint32_t seed = osrs_lowbias32(draw + 17);
-    job->gain[t] = la_rollout(work, world, hist, job->tick, g_la_model, &job->greedy[k], seed).kill - la_rollout(work, world, hist, job->tick, g_la_model, &none, seed).kill;
-}
-
-static void la_world_task(void* arg, Sim* work) {
-    LaWorldJob* job = arg;
-    static _Thread_local RiskfightState world;
-    static _Thread_local Hist hist;
+/* The job, free of helpers and sized for `worlds`. The pool forgets its last task so a helper that wakes late cannot pin the job while it is refilled. */
+static LaJob* la_job_acquire(int worlds) {
+    LaJob* job = &g_la_job;
     for (;;) {
-        int t = atomic_fetch_add(&job->next, 1);
-        if (t < job->worth_tasks) { la_worth_one(job, t, work, &world, &hist); continue; }
-        int w = job->first + t - job->worth_tasks;
-        if (w >= job->last) return;
-        uint32_t draw = job->world_rng ^ (uint32_t)(w * 2246822519u);
-        uint32_t wr = osrs_lowbias32(draw) | 1;
-        la_world(job->base, job->base_hist, job->belief, job->tick, &wr, &world, &hist);
-        if (job->trace) {
-            const Player* h = &world.env.players[1];
-            int vw = 0, mm = 0, food = 0;
-            for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) { uint8_t it = osrs_inventory_cell_metadata(&h->inventory_cells[i])->item_idx; vw += it == ITEM_VOIDWAKER; mm += is_maul_item(it); food += osrs_inventory_cell_metadata(&h->inventory_cells[i])->consumable_kind == OSRS_CONSUMABLE_ANGLERFISH; }
-            fprintf(stderr, "W hp %d en %d timer %d veng %d pid %d vw %d maul %d food %d eqw %d since %d warn %d\n", h->current_hitpoints, h->special_energy, h->attack_timer, h->veng_active, world.env.pid_holder, vw, mm, food, h->equipped[GEAR_SLOT_WEAPON], hist.since_eat, warning_since(&hist.warning));
-        }
-        uint32_t seed = osrs_lowbias32(draw + 17);
-        for (int m = 0; m < LA_MACROS; m++)
-            if (job->alive[m]) job->out[(size_t)w * LA_MACROS + m] = la_rollout(work, &world, &hist, job->tick, g_la_model, &job->scripts[m], seed);
+        pthread_mutex_lock(&g_la_pool.lock);
+        if (atomic_load(&job->users) == 0) { g_la_pool.task.job = NULL; pthread_mutex_unlock(&g_la_pool.lock); break; }
+        pthread_mutex_unlock(&g_la_pool.lock);
+        nanosleep(&(struct timespec){.tv_nsec = 50000}, NULL);
     }
+    if (job->capacity < worlds) {
+        LaOutcome* out = realloc(job->out, (size_t)worlds * LA_MACROS * sizeof(LaOutcome));
+        if (out) job->out = out;
+        atomic_int* state = realloc((void*)job->state, (size_t)worlds * sizeof(atomic_int));
+        if (state) job->state = state;
+        if (!out || !state) { fprintf(stderr, "lookahead outcome allocation failed\n"); abort(); }
+        job->capacity = worlds;
+    }
+    return job;
+}
+
+/* Runs stage s on the caller and the helpers and returns how many of its tasks were granted (a prefix, all of them complete on return). */
+static int la_stage_run(LaJob* job, int s) {
+    LaStage* st = &job->stage[s];
+    Sim* work = g_la_pool.work[0];
+    static _Thread_local LaResult result;
+    if (g_la_pool.workers) {
+        pthread_mutex_lock(&g_la_pool.lock);
+        g_la_pool.task = (LaTask){job, s};
+        g_la_pool.generation++;
+        pthread_cond_broadcast(&g_la_pool.wake);
+        pthread_mutex_unlock(&g_la_pool.lock);
+    }
+    double busy = 0;
+    int mine = 0;
+    for (int t; (t = la_claim(job, st)) >= 0; mine++) {
+        double began = la_seconds();
+        la_task_compute(job, st, t, work, &result);
+        la_task_store(job, st, t, &result);
+        atomic_store(la_task_state(job, st, t), LA_DONE);
+        busy += la_seconds() - began;
+    }
+    int granted = atomic_exchange(&st->next, 1 << 30); /* freeze: nothing is granted after this, so the granted tasks are exactly [0, granted) */
+    if (mine) g_la_task_seconds = g_la_task_seconds > 0 ? 0.5 * (g_la_task_seconds + busy / mine) : busy / mine;
+    double grace = fmax(150e-6, 3 * g_la_task_seconds), since = la_seconds();
+    for (int t = 0; t < granted; t++) {
+        atomic_int* state = la_task_state(job, st, t);
+        while (atomic_load(state) != LA_DONE) {
+            int expect = LA_TODO;
+            if (job->deadline > 0 && la_seconds() - since >= grace && atomic_compare_exchange_strong(state, &expect, LA_STOLEN)) {
+                la_task_compute(job, st, t, work, &result);
+                la_task_store(job, st, t, &result);
+                atomic_store(state, LA_DONE);
+                g_la_stolen++;
+                break;
+            }
+            sched_yield();
+        }
+    }
+    return granted;
 }
 
 /* Successive elimination: after each stage a macro that trails the leader by more than g_la_prune (absolute) or by more than g_la_prune_z standard
  * errors of their per-world paired difference is dropped. The committed `continue` is the baseline and always stays. */
 static double g_la_prune_z = 3;
 
-/** Rolls every feasible macro out on worlds drawn from the belief and picks the best by value: `continue` (the committed remainder) unless another is strictly better. */
+/** Rolls every feasible macro out on worlds drawn from the belief and picks the best by value: `continue` (the committed remainder) unless another is strictly better.
+ * Runs every g_la_worlds world unless g_la_deadline stops it at a prefix (see the anytime notes above); score[m].worlds says how many each macro got. */
 static LaMacro la_evaluate(const RiskfightState* base, const Hist* base_hist, const LaBelief* belief, int tick, GsStakes stakes, uint32_t salt,
     const LaScript scripts[LA_MACROS], const int feasible[LA_MACROS], LaScore score[LA_MACROS], int alive[LA_MACROS]) {
     if (getenv("GS_LA_BASE")) la_print_base(base);
     if (getenv("GS_LA_SAVE")) { FILE* f = fopen(getenv("GS_LA_SAVE"), "wb"); fwrite(base, sizeof(*base), 1, f); fclose(f); }
-    static LaOutcome* outcomes;
     static double* values;
     static size_t capacity;
     size_t needed = (size_t)g_la_worlds * LA_MACROS;
     if (needed > capacity) {
-        LaOutcome* grown = realloc(outcomes, needed * sizeof(LaOutcome));
         double* grown_values = realloc(values, needed * sizeof(double));
-        if (!grown || !grown_values) { fprintf(stderr, "lookahead outcome allocation failed\n"); abort(); }
-        outcomes = grown;
+        if (!grown_values) { fprintf(stderr, "lookahead outcome allocation failed\n"); abort(); }
         values = grown_values;
         capacity = needed;
     }
+    if (g_la_deadline > 0 && g_la_min_worlds < 1) { fprintf(stderr, "lookahead minimum worlds %d must be at least 1\n", g_la_min_worlds); abort(); }
     uint32_t saved_seed = g_rollout_seed;
     double saved_scale = g_eat_scale;
     g_eat_scale = g_la_eat_scale_belief;
     uint32_t world_rng = osrs_lowbias32((uint32_t)tick * 40503u + salt) | 1;
     memset(score, 0, LA_MACROS * sizeof(LaScore));
-    static LaScript greedy[GS_MOST_TICKETS + 1];
-    static double gain[LA_WORTH_TASKS];
+    la_pool_start();
+    LaJob* job = la_job_acquire(g_la_worlds);
+    job->base = *base;
+    job->base_hist = *base_hist;
+    job->belief = *belief;
+    job->tick = tick;
+    job->trace = getenv("GS_LA_WORLDS") != NULL && g_la_threads == 1;
+    job->min_worlds = imin(g_la_min_worlds, g_la_worlds);
+    job->world_rng = world_rng;
+    job->worth_salt = world_rng ^ 0x5bd1e995u;
+    job->deadline = g_la_deadline;
+    atomic_init(&job->forced, 0);
+    for (int m = 0; m < LA_MACROS; m++) if (feasible[m]) job->scripts[m] = scripts[m];
     int measure_worth = g_la_worth_mode == 1;
     if (measure_worth) {
         for (int k = 1; k <= GS_MOST_TICKETS; k++) {
-            greedy[k] = (LaScript){.production = 1};
+            job->greedy[k] = (LaScript){.production = 1};
             if (la_has_voidwaker(&base->env.players[0]))
-                la_spec_program(&greedy[k], tick, tick + 1, 0, 0, k > 1, (world_rng ^ 0x5bd1e995u) | 1);
+                la_spec_program(&job->greedy[k], tick, tick + 1, 0, 0, k > 1, (world_rng ^ 0x5bd1e995u) | 1);
         }
     } else for (int k = 0; k <= GS_MOST_TICKETS; k++) g_la_w[k] = GS_CONTINUATION[k];
     for (int m = 0; m < LA_MACROS; m++) alive[m] = feasible[m];
@@ -1040,28 +1172,35 @@ static LaMacro la_evaluate(const RiskfightState* base, const Hist* base_hist, co
     int none_is_continue = feasible[LA_NONE] && feasible[LA_CONTINUE] && scripts[LA_NONE].n == 0 && scripts[LA_CONTINUE].n == 0;
     if (none_is_continue) alive[LA_NONE] = 0;
     double ratio = stakes.us > 0 ? (double)stakes.him / (double)stakes.us : 1;
-    int done = 0;
+    int done = 0, stage = 0;
     while (done < g_la_worlds) {
         int upto = g_la_worlds;
         for (long boundary = g_la_stage; boundary < g_la_worlds; boundary *= 4)
             if (boundary > done) { upto = (int)boundary; break; }
-        LaWorldJob job = {.base = base, .base_hist = base_hist, .belief = belief, .tick = tick, .first = done, .last = upto, .world_rng = world_rng,
-            .scripts = scripts, .alive = alive, .out = outcomes, .trace = getenv("GS_LA_WORLDS") != NULL && g_la_threads == 1,
-            .worth_tasks = measure_worth && done == 0 ? LA_WORTH_TASKS : 0, .worth_salt = world_rng ^ 0x5bd1e995u, .greedy = greedy, .gain = gain};
-        atomic_init(&job.next, 0);
-        la_pool_run(la_world_task, &job);
-        if (job.worth_tasks) {
+        if (stage == LA_MAX_STAGES) { fprintf(stderr, "lookahead: more than %d stages (g_la_stage %d, worlds %d)\n", LA_MAX_STAGES, g_la_stage, g_la_worlds); abort(); }
+        LaStage* st = &job->stage[stage++];
+        st->first = done;
+        st->last = upto;
+        st->worth_tasks = measure_worth && done == 0 ? LA_WORTH_TASKS : 0;
+        st->total = st->worth_tasks + upto - done;
+        atomic_init(&st->next, 0);
+        memcpy(st->alive, alive, sizeof(st->alive));
+        for (int t = 0; t < st->worth_tasks; t++) atomic_init(&job->worth_state[t], LA_TODO);
+        for (int w = done; w < upto; w++) atomic_init(&job->state[w], LA_TODO);
+        int granted = la_stage_run(job, stage - 1);
+        int ran = granted - st->worth_tasks; /* worlds [done, done + ran) completed; fewer than asked = the deadline cut the stage: the last one */
+        if (st->worth_tasks) {
             g_la_w[0] = 0;
             for (int k = 1; k <= GS_MOST_TICKETS; k++) {
                 double sum = 0;
-                for (int w = 0; w < LA_WORTH_WORLDS; w++) sum += gain[(k - 1) * LA_WORTH_WORLDS + w];
+                for (int w = 0; w < LA_WORTH_WORLDS; w++) sum += job->gain[(k - 1) * LA_WORTH_WORLDS + w];
                 g_la_w[k] = fmax(0, sum / LA_WORTH_WORLDS);
             }
         }
-        for (int w = done; w < upto; w++) {
+        for (int w = done; w < done + ran; w++) {
             for (int m = 0; m < LA_MACROS; m++) {
                 if (!alive[m]) continue;
-                LaOutcome o = outcomes[(size_t)w * LA_MACROS + m];
+                LaOutcome o = job->out[(size_t)w * LA_MACROS + m];
                 double continuation = !o.kill && !o.death ? la_tickets_worth(o.energy) : 0;
                 double value = o.kill * ratio - o.death + continuation * ratio;
                 values[(size_t)w * LA_MACROS + m] = value;
@@ -1073,8 +1212,10 @@ static LaMacro la_evaluate(const RiskfightState* base, const Hist* base_hist, co
                 g_la.rollouts++;
             }
         }
-        done = upto;
+        done += ran;
+        if (done < upto) break;
         if (done < g_la_worlds) {
+            if (job->deadline > 0 && done >= job->min_worlds && la_seconds() >= job->deadline) break; /* the prefix [0, done) is the answer */
             int leader = LA_CONTINUE;
             for (int m = 0; m < LA_MACROS; m++)
                 if (alive[m] && score[m].value / score[m].worlds > score[leader].value / score[leader].worlds) leader = m;
@@ -1093,6 +1234,8 @@ static LaMacro la_evaluate(const RiskfightState* base, const Hist* base_hist, co
             }
         }
     }
+    g_la_completed = done;
+    g_la_overrun = atomic_load(&job->forced) ? fmax(0, la_seconds() - job->deadline) : 0;
     if (none_is_continue) { score[LA_NONE] = score[LA_CONTINUE]; alive[LA_NONE] = 1; }
     LaMacro best = LA_CONTINUE;
     double top = score[LA_CONTINUE].value / score[LA_CONTINUE].worlds;
