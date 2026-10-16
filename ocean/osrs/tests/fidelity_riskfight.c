@@ -28,13 +28,17 @@ typedef enum { DIV_HP_US, DIV_LAND, DIV_ECHO, DIV_SWING, DIV_CONSUME, DIV_HIS_BA
 static const char* const DIV_NAME[DIV_KINDS] = {"hp_us", "landing", "echo", "swing", "consume", "his_band", "command"};
 static const char* const OUTCOME_NAME[OUTCOMES] = {"none", "kill", "death", "mutual", "his_escape", "our_escape"};
 
+/* Attack animations of the recordings: each of these starts a swing that lands a splat on the target (3,700 of 3,728 of ours with 390 and 1,803 of 1,814 of his, the
+ * others 97 to 100%). The list once lacked the spear, rapier, crossbow, hammer and halberd ones (2080, 2081, 5865, 1665, 8145, 4230, 386, 1378, 6600, 393, 10427: all 151
+ * occurrences coincide with a splat on the target), so a swing of his with those weapons was never driven and its landings read as unexplained. */
 static int is_attack_anim(int a) {
-    static const int list[] = {390, 1658, 2066, 2067, 10172, 10173, 376, 401, 1062, 7045, 7644, 11057, 426, 11275, 1060, 440, 1667, 7514, 7515, 3297, 3298, 3299, 3300};
+    static const int list[] = {390, 1658, 2066, 2067, 10172, 10173, 376, 401, 1062, 7045, 7644, 11057, 426, 11275, 1060, 440, 1667, 7514, 7515, 3297, 3298, 3299, 3300,
+        2080, 2081, 5865, 1665, 8145, 4230, 386, 1378, 6600, 393, 10427};
     for (size_t i = 0; i < sizeof(list) / sizeof(*list); i++) if (list[i] == a) return 1;
     return 0;
 }
 static int is_spec_anim(int a) {
-    static const int list[] = {11275, 1667, 7644, 7514, 7515, 1062, 1060, 3299, 3300};
+    static const int list[] = {11275, 1667, 7644, 7514, 7515, 1062, 1060, 3299, 3300, 1378};
     for (size_t i = 0; i < sizeof(list) / sizeof(*list); i++) if (list[i] == a) return 1;
     return 0;
 }
@@ -44,12 +48,15 @@ static int is_teleport_anim(int a) { return a == 4069 || a == 4071 || a == 714; 
 typedef struct { int n; int amount[MAXH]; char klass[MAXH]; } RecHits;
 typedef struct {
     RecHits attack[2], echo[2];
-    int swing[2], spec_swing[2];
+    int swing[2], spec_swing[2], attack_anim[2];
     int eat, veng_cast, teleport;
     int weapon_raw; /* his wielded raw id from the E row, -2 unobserved, -1 none */
     int act_first, act_count;
 } RecTick;
-/* pid[tick - lo]: the PID holder (0 us, 1 him) the echo timing of Fact 4 implies (nearest evidence tick), -1 without evidence in the fight. */
+/* pid[tick - lo]: the PID holder (0 us, 1 him) the recording implies (nearest evidence tick), -1 without evidence in the fight. Evidence (g_pid_mode): echo timing of Fact 4, and
+ * with -P 1/2 the landing tick of each melee or ranged swing (an attacker processed first lands a melee hit on its swing tick and a ranged one a tick later, a second one a tick
+ * after that): the PID shuffles during a fight and echoes are sparse. Mode 2 leaves the tick's own swing evidence out of its PID. */
+static int g_pid_mode = 2;
 typedef struct { const Tape* tape; RecTick* at; int8_t* pid; uint8_t* meal; } Rec;
 
 /* His meal kinds. The eat animation is the same for hard food (attack delay 3), karambwan (2) and a potion (0). Between two recorded swings s0, s1 of speed sp the
@@ -120,7 +127,7 @@ static void rec_build(Rec* rec, const Tape* tape) {
         if (a->tick < tape->lo || a->tick > tape->hi) continue;
         RecTick* r = &rec->at[a->tick - tape->lo];
         int side = a->side == SIDE_US ? 0 : 1;
-        if (is_attack_anim(a->anim)) { r->swing[side]++; r->spec_swing[side] += is_spec_anim(a->anim); }
+        if (is_attack_anim(a->anim)) { if (!r->swing[side]) r->attack_anim[side] = a->anim; r->swing[side]++; r->spec_swing[side] += is_spec_anim(a->anim); }
         if (side == 1) {
             r->eat += a->anim == ANIM_EAT;
             r->veng_cast += a->anim == ANIM_VENG_A || a->anim == ANIM_VENG_B;
@@ -158,14 +165,36 @@ static void rec_build(Rec* rec, const Tape* tape) {
                 }
             }
         }
+        int8_t* land = malloc((size_t)n);
+        if (!land) abort();
+        memset(land, -1, (size_t)n);
+        if (g_pid_mode > 0) {
+            for (int t = 0; t < n; t++) {
+                for (int a = 0; a < 2; a++) {
+                    const RecTick* at = &rec->at[t];
+                    int anim = at->attack_anim[a];
+                    if (at->swing[a] != 1 || at->spec_swing[a] || anim == 1667 || anim == 6600 || !is_attack_anim(anim)) continue;
+                    if ((t >= 1 && rec->at[t - 1].swing[a]) || (t >= 2 && rec->at[t - 2].swing[a])) continue;
+                    int ranged = anim == 426 || anim == 4230, offset = -1;
+                    for (int o = 0; o < 4 && t + o < n && offset < 0; o++) if (rec->at[t + o].attack[1 - a].n > 0) offset = o;
+                    if (offset < 0) continue;
+                    int first = ranged ? offset == 1 : offset == 0, second = ranged ? offset == 2 : offset == 1;
+                    if (first || second) land[t] = (int8_t)(first ? a : 1 - a);
+                }
+            }
+        }
         for (int t = 0; t < n; t++) {
             int best = -1;
             for (int d = 0; d < n && best < 0; d++) {
-                if (t - d >= 0 && evidence[t - d] >= 0) best = evidence[t - d];
-                else if (t + d < n && evidence[t + d] >= 0) best = evidence[t + d];
+                int early = t - d, late = t + d;
+                if (early >= 0 && evidence[early] >= 0) best = evidence[early];
+                else if (early >= 0 && land[early] >= 0 && (d > 0 || g_pid_mode == 1)) best = land[early];
+                else if (late < n && evidence[late] >= 0) best = evidence[late];
+                else if (late < n && land[late] >= 0 && (d > 0 || g_pid_mode == 1)) best = land[late];
             }
             rec->pid[t] = (int8_t)best;
         }
+        free(land);
         free(evidence);
     }
     for (int i = 0; i < tape->action_count; i++) {
@@ -379,6 +408,37 @@ static const char* const CH_NAME[CH_COUNT] = {"our hit points", "his hit points 
 static void chan(Run* r, int c, int ok) { r->ch_n[c]++; r->ch_ok[c] += ok; }
 static void chane(Run* r, int e, int rec, int sim) { r->ev_rec[e] += rec; r->ev_sim[e] += sim; r->ev_both[e] += rec < sim ? rec : sim; }
 
+/* Per-tick event rows of the teacher-forced pass (-m file), one tab-separated line per tick: what the recording and the sim show for landings, echoes, swings and weapons,
+ * read by tests/classify_fidelity.py. Lists are comma-separated; a recorded landing or echo is `class damage`, a simulated one `kind:damage`. */
+static FILE* g_events;
+static void dump_rec_hits(FILE* out, const RecHits* h) {
+    for (int i = 0; i < h->n; i++) fprintf(out, "%c%d,", h->klass[i], h->amount[i]);
+}
+static void dump_sim_hits(FILE* out, const Run* r, int from, int target, int echoes) {
+    for (int i = from; i < r->hit_count; i++) {
+        const SimHit* h = &r->hits[i];
+        if (h->target != target) continue;
+        if (echoes ? (h->kind == OSRS_HIT_RECOIL || h->kind == OSRS_HIT_VENGEANCE) : h->kind == OSRS_HIT_DIRECT) fprintf(out, "%d:%d,", h->kind, h->damage);
+    }
+}
+static void dump_tick_row(Run* r, int x, int k, RiskfightState* s, int hits_before) {
+    const Tape* tape = r->tape;
+    const RecTick* rt = &r->rec->at[x - tape->lo];
+    const TapeTick* row = tape_tick(tape, x);
+    FILE* out = g_events;
+    fprintf(out, "%s_%d\t%d\t%d\t%d", tape->session, tape->index, x, s->env.pid_holder, r->rec->pid[x - tape->lo]);
+    for (int d = 0; d < 2; d++) { fputc('\t', out); dump_rec_hits(out, &rt->attack[d]); }
+    for (int d = 0; d < 2; d++) { fputc('\t', out); dump_rec_hits(out, &rt->echo[d]); }
+    for (int d = 0; d < 2; d++) { fputc('\t', out); dump_sim_hits(out, r, hits_before, d, 0); }
+    for (int d = 0; d < 2; d++) { fputc('\t', out); dump_sim_hits(out, r, hits_before, d, 1); }
+    for (int a = 0; a < 2; a++) fprintf(out, "\t%d%s", rt->attack_anim[a], rt->spec_swing[a] ? "s" : "");
+    for (int a = 0; a < 2; a++) fprintf(out, "\t%d", r->swing[a][k]);
+    for (int a = 0; a < 2; a++) fprintf(out, "\t%d", ITEM_DATABASE[s->env.players[a].equipped[GEAR_SLOT_WEAPON]].item_id);
+    fprintf(out, "\t%d\t%d\t%d\t%d\t%d\t%d", rt->weapon_raw, s->env.players[0].veng_active, s->env.players[1].veng_active, row->veng_us, row->veng_him, rt->eat);
+    for (int a = 0; a < 2; a++) fprintf(out, "\t%d/%d", s->env.players[a].attack_timer, s->env.players[a].equipped[GEAR_SLOT_RING] == ITEM_RING_OF_RECOIL);
+    fputc('\n', out);
+}
+
 static void compare_step(Run* r, int k, int x, RiskfightState* s, int hits_before, int consumed_before[2]) {
     const Tape* tape = r->tape;
     const TapeTick* row = tape_tick(tape, x);
@@ -471,6 +531,7 @@ static void compare_step(Run* r, int k, int x, RiskfightState* s, int hits_befor
     chane(r, 5, rt->echo[1].n, echo_sim_n[1]);
     chane(r, 6, our_expect, s->consume_ticks[0] > consumed_before[0]);
     chane(r, 7, his_ate_rec, s->consume_ticks[1] > consumed_before[1]);
+    if (g_events && r->exact == 2) dump_tick_row(r, x, k, s, hits_before);
     if (row->bar_now_ratio >= 0 && row->bar_now_scale > 1) {
         OsrsHealthBarRange band = osrs_health_bar_range(row->bar_now_ratio, row->bar_now_scale, 99, 121);
         if (band.kind == OSRS_HEALTH_BAR_KNOWN) chan(r, CH_HIS_BAND, hp1 >= band.lower && hp1 <= band.upper);
@@ -705,10 +766,12 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[first], "-e")) exact_seeds = atoi(argv[first + 1]);
         else if (!strcmp(argv[first], "-o")) tsv_path = argv[first + 1];
         else if (!strcmp(argv[first], "-d")) div_path = argv[first + 1];
+        else if (!strcmp(argv[first], "-m")) { g_events = fopen(argv[first + 1], "w"); if (!g_events) { perror("open -m"); return 1; } }
+        else if (!strcmp(argv[first], "-P")) g_pid_mode = atoi(argv[first + 1]);
         else { fprintf(stderr, "unknown option %s\n", argv[first]); return 2; }
     }
     if (first >= argc || seeds < 1 || exact_seeds < 1) {
-        fprintf(stderr, "usage: fidelity_riskfight [-s SEEDS] [-e EXACT_SEEDS] [-o fights.tsv] [-d divergences.tsv] tape...\n");
+        fprintf(stderr, "usage: fidelity_riskfight [-s SEEDS] [-e EXACT_SEEDS] [-P PID_MODE 0 echo only, 1 echo+landings, 2 leave-one-out (default)] [-o fights.tsv] [-d divergences.tsv] [-m events.tsv] tape...\n");
         return 2;
     }
     g_ablation.his_defence = 99;
@@ -931,6 +994,7 @@ int main(int argc, char** argv) {
     }
     if (tsv) fclose(tsv);
     if (dfile) fclose(dfile);
+    if (g_events) fclose(g_events);
 
     const Agg* a = &agg[0];
     printf("fidelity_riskfight: %ld tapes (%ld seeded, %d skipped), %d free seeds, %d exact seeds | our attacks on him: hit chance rec %.3f sim %.3f (n rec %ld) | "

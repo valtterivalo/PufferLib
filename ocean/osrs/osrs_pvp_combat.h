@@ -1020,6 +1020,9 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             int this_delay = hit_delay;
             if (spec_item_idx == ITEM_DARK_BOW && i == 1)
                 this_delay = pvp_ranged_hit_delay_dbow_second(distance);
+            /* Dragon claws: hits 3 and 4 land a tick after hits 1 and 2 (own recordings: 22 of 31 claws specs show 2+2 splats one tick apart, none shows four on one tick). */
+            if (spec_item_idx == ITEM_DRAGON_CLAWS && i >= 2)
+                this_delay = hit_delay + 1;
             queue_hit(env, attacker_idx, defender_idx,
                       attacker, defender, sr.damage[i], hit_style, this_delay, 1,
                       sr.damage[i] > 0, freeze_ticks, heal_percent, drain_type, drain_percent, flat_heal);

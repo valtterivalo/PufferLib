@@ -97,7 +97,9 @@ static inline int osrs_stat_item_register(const Item* row, int attack_style) {
 
 /* Equivalent combat gear variants. Locked cape stats: OSRS Wiki,
  * https://oldschool.runescape.wiki/w/Infernal_cape#Combat_stats .
- * Raw 24224 is the locked infernal cape, not granite maul 24225. */
+ * Raw 24224 is the locked infernal cape, not granite maul 24225. Dragon claws (cr) 28039 is the Bounty Hunter ornament of dragon claws with the same
+ * stats, speed and special (https://oldschool.runescape.wiki/w/Dragon_claws_(cr)); Voidwaker (deadman) 29607 and Statius's warhammer (bh) 27908 are
+ * the untradeable variants of 27690 and 22622. */
 #define OSRS_ITEM_RAW_GEAR_ALIAS_ROWS(X) \
     X(1704, ITEM_GLORY) \
     X(4880, ITEM_DHAROKS_HELM) \
@@ -110,8 +112,11 @@ static inline int osrs_stat_item_register(const Item* row, int attack_style) {
     X(4994, ITEM_VERACS_PLATESKIRT) \
     X(24133, ITEM_INFERNAL_CAPE) \
     X(24224, ITEM_INFERNAL_CAPE) \
+    X(27908, ITEM_STATIUS_WARHAMMER) \
+    X(28039, ITEM_DRAGON_CLAWS) \
     X(28055, ITEM_DRAGON_BOOTS) \
     X(28069, ITEM_FIGHTER_TORSO) \
+    X(29607, ITEM_VOIDWAKER) \
     X(33335, ITEM_SOULREAPER_AXE)
 
 static inline int osrs_item_index_from_raw_id(int raw) {
