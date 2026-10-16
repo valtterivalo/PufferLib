@@ -29,6 +29,7 @@ struct Log {
     float scripted_ticks, scripted_omissions, midfight_ticks, prefix_terminal;
     float self_teleports, opponent_teleports, both_teleports;
     float rude_teleports, rematches, tp_self_spec, tp_opp_spec, tp_both_spec, tp_opp_could_spec, tp_hp, tp_fight_tick;
+    float tp_food, tp_potion_doses, tp_self_no_special;
     float self_escape_healing[4], self_escape_no_boost, self_escape_both_no_special;
     float drink_brew, drink_sanfew, drink_combat;
     float eat_marlin, eat_halibut, eat_pie;
@@ -172,6 +173,9 @@ static void riskfight_native_log_round(Env* env) {
         env->log.tp_both_spec += s->specs_used[0] > 0 && s->specs_used[1] > 0;
         env->log.tp_opp_could_spec += !osrs_escape_no_special(&s->escape_supplies[0][1]);
         env->log.tp_hp += supplies->hp;
+        env->log.tp_food += supplies->food;
+        env->log.tp_potion_doses += supplies->potion_doses;
+        env->log.tp_self_no_special += osrs_escape_no_special(supplies);
         env->log.tp_fight_tick += s->escape_tick[0];
     }
     if (env->session_fights == 0) {
@@ -348,6 +352,9 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "tp_opp_could_spec", log->tp_opp_could_spec);
     dict_set(out, "tp_hp", log->tp_hp);
     dict_set(out, "tp_fight_tick", log->tp_fight_tick);
+    dict_set(out, "tp_food", log->tp_food);
+    dict_set(out, "tp_potion_doses", log->tp_potion_doses);
+    dict_set(out, "tp_self_no_special", log->tp_self_no_special);
     dict_set(out, "score", log->net_stake);
     dict_set(out, "perf", log->net_stake);
     dict_set(out, "scripted_ticks", log->scripted_ticks);

@@ -35,7 +35,8 @@ static int riskfight_rude_teleport(const RiskfightState* s) {
 typedef struct {
     int delay;   /* ticks of the session spent before the next fight starts */
     int refill;  /* our side restocks: we died or teleported */
-    int rematch; /* the same opponent, with the supplies he had left */
+    int rematch; /* the same opponent (his profile and price) comes back */
+    int refill_opponent; /* ... with full supplies, because he teleported too; otherwise with the supplies he had left */
     int rude;
 } RiskfightTransition;
 
@@ -57,7 +58,8 @@ static RiskfightTransition riskfight_session_transition(const RiskfightState* s,
                 t.refill = 1;
                 t.rude = riskfight_rude_teleport(s);
                 int rematch = encounter_rand_float(rng) < RF_REMATCH_PROBABILITY;
-                t.rematch = rematch && !t.rude && !s->escaped[1];
+                t.rematch = rematch && !t.rude;
+                t.refill_opponent = t.rematch && s->escaped[1];
                 t.delay = riskfight_delay_draw(t.rematch ? &RF_DELAY_REMATCH : &RF_DELAY_RESTOCK, rng);
             } else t.delay = riskfight_delay_draw(&RF_DELAY_SEARCH, rng);
             break;
@@ -117,7 +119,7 @@ static void riskfight_carry_restore(RiskfightState* s, int side, const Riskfight
 /** Starts the next fight of a session from a reset state: the sides the transition keeps get their supplies back, aged by the delay. The estimate each
  * side holds of the other's special energy follows the other side's supplies, aged the same way. Observations of the gear are retaken. */
 static void riskfight_session_begin_fight(RiskfightState* s, const RiskfightCarry carry[2], const RiskfightTransition* t) {
-    int keep[2] = {!t->refill, t->rematch};
+    int keep[2] = {!t->refill, t->rematch && !t->refill_opponent};
     for (int side = 0; side < 2; side++)
         if (keep[side]) riskfight_carry_restore(s, side, &carry[side], t->delay);
     riskfight_observe_visible(s, 0, 1);

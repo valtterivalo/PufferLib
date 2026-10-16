@@ -15,8 +15,10 @@ Event definitions (game ticks of 0.6 s; a tick label N is the pvp_fight conventi
   our escape tablet: our animation 4069/4071 (Teleport to house break) first tick of the burst; Exit Arena: last 'Exit Arena' click before the one tick
              position jump of >= 4 tiles (the portal); unconfirmed clicks (recording ended first, no 'cannot leave' chat) count too. A blocked attempt
              ('cannot teleport/leave ... special attack', 'cannot leave the crater') plays no animation and does not count; the successful one does.
-  his tp     his animation 4069/4071/714/3864 in [hi - 6, hi + 12] when nothing else ended the fight.
-  outcome    priority: death, kill, escape in [hi - 25, hi + 12], his tp, other (tracking lost, not classified).
+  his leave  first of: his animation 4069/4071/714/3864 (tablet or spell), or a position jump of >= 4 tiles faster than running between two observations
+             of him (portal Exit Arena), in [hi - 15, hi + 12]. Positions: per tick actor states (recordings from Oct 10) and his animation events (all).
+  outcome    our death, his death, else whoever left first: our escape tick (tablet: break animation, portal: landing jump) vs his departure tick, a tie goes to
+             us (escape window [hi - 25, hi + 12]); if he left first the fight is his_tp / his_exit and our later escape within 60 ticks is kept as leave_esc; else other.
   delay      start lo of the next real fight minus the end event tick (death tick / kill tick / escape tick). Tick labels are used inside a recording and across
              recordings of one client instance whose labels agree with the wall clock within 5 s; otherwise wall seconds / 0.6 (lower fidelity, flagged).
   in-session next fight starts <= 600 s of wall clock after the last tracked tick of this one; longer gaps are reported separately, never as delays.
@@ -36,12 +38,12 @@ import sys
 
 REC_DIR = os.path.expanduser("~/.light2/gameplay-recordings/local-debug")
 CACHE_DIR = "/tmp/dm_cache"
-SCHEMA = 2
+SCHEMA = 4
 
 # ---- copied from tools/pvp_fight.py (light repo, 2026-10-16) ------------------------------------------------------
 WANTED = {
     "SESSION_STARTED", "SESSION_ENDED", "GAME_TICK_OBSERVED", "ANIMATION_OBSERVED", "HITSPLAT_APPLIED_OBSERVED",
-    "SEMANTIC_MENU_ACTION", "CHAT_MESSAGE_OBSERVED", "GAME_STATE_OBSERVED", "ACTOR_STATE_OBSERVED",
+    "SEMANTIC_MENU_ACTION", "CHAT_MESSAGE_OBSERVED", "GAME_STATE_OBSERVED", "ACTOR_STATE_OBSERVED", "ITEM_CONTAINER_OBSERVED",
 }
 SPECS = {11275: "VW spec", 1667: "maul spec", 7644: "AGS spec", 7514: "claws spec", 7515: "VLS spec", 1062: "dds spec",
          1060: "mace spec", 3299: "abyssal dagger spec", 3300: "BH dagger spec"}
@@ -118,6 +120,7 @@ def extract(rec):
     chat = []        # (tick, type, message) non-SPAM
     menus = []       # (tick, option, target, origin)
     states = []      # (tick, game state)
+    inv = []         # (tick, [[item id, quantity], ...]) every observation of our inventory container 93
     for t, ns, k, p in events:
         if k == "GAME_TICK_OBSERVED":
             pl = p["player"]
@@ -142,21 +145,37 @@ def extract(rec):
             menus.append((t, tag(p["option"]), tag(p["target"])[:40], p["origin"]))
         elif k == "GAME_STATE_OBSERVED":
             states.append((t, p["gameState"]))
+        elif k == "ITEM_CONTAINER_OBSERVED" and p["containerId"] == 93:
+            inv.append((t, [[i["itemId"], i["quantity"]] for i in p["items"]]))
     fights = fights_from(T, me)
     opp_names = {f["opp"] for f in fights}
     opp_track = []   # (tick, name, x, y, bar ratio, bar scale, clientDeadFlag, animation) of every fight opponent seen at a GAME_TICK observation
+    opp_pos = []     # (tick, name, x, y) every animation event of a fight opponent incl. animation -1: his position where no per tick actor state was recorded
     for t, ns, k, p in events:
+        if k == "ANIMATION_OBSERVED" and p["actor"]["kind"] == "PLAYER" and p["actor"].get("cleanName") in opp_names:
+            wp = p["actor"]["worldPoint"]
+            opp_pos.append((t, p["actor"]["cleanName"], wp["x"], wp["y"]))
         if k == "ACTOR_STATE_OBSERVED" and p.get("observation") == "GAME_TICK" and p["actor"].get("cleanName") in opp_names:
             st = p["state"]
             hb = st.get("healthBar") or {}
             opp_track.append((t, p["actor"]["cleanName"], st["worldPoint"]["x"], st["worldPoint"]["y"], hb.get("ratio", -1), hb.get("scale", -1),
                               st.get("clientDeadFlag"), st.get("animation")))
+    opp_gear = []    # (tick, name, itemOffset, rawEquipmentIds) when the observed composition of a fight opponent changes
+    last_gear = {}
+    for t, ns, k, p in events:
+        if k == "ACTOR_STATE_OBSERVED" and p["actor"].get("cleanName") in opp_names:
+            eq = p["state"].get("equipment") or {}
+            if eq.get("availability") == "OBSERVED_COMPOSITION":
+                g = (eq["itemOffset"], tuple(eq["rawEquipmentIds"]))
+                if last_gear.get(p["actor"]["cleanName"]) != g:
+                    last_gear[p["actor"]["cleanName"]] = g
+                    opp_gear.append((t, p["actor"]["cleanName"], g[0], list(g[1])))
     out = dict(
         file=base, start_utc=started[1]["startedAt"], end_utc=ended[1]["endedAt"] if ended else None,
         end_rel=round((ended[0] - start_ns) / 1e9, 3) if ended else None,
         pvp=pvp, me=me, first_tick=min(ticks) if ticks else None, last_tick=max(ticks) if ticks else None, n_ticks=len(ticks),
         ticks=[[t] + v for t, v in sorted(ticks.items())], anims=anims, chat=chat, menus=menus, states=states,
-        fights=fights, opp_track=opp_track,
+        fights=fights, opp_track=opp_track, opp_pos=opp_pos, opp_gear=opp_gear, inv=inv,
         hits=[[t, h[0], h[1], h[2]] for t in sorted(T) for h in T[t]["hits"]],
     )
     os.makedirs(CACHE_DIR, exist_ok=True)
@@ -174,6 +193,7 @@ MERGE_GAP = 15            # same opponent spans closer than this are one fight (
 ARENA_BOX = (3340, 3460, 4000, 4120)   # x0, x1, y0, y1 of the instanced arena seen in the recordings
 JUMP_TILES = 4            # a one tick position change of at least this many tiles is a teleport style move (running is 2)
 DEATH_ANIM = 836
+HIS_TELE_ANIMS = {4069, 4071, 714, 3864}
 TABLET_ANIMS = {4069, 4071}
 UNAMBIGUOUS_SPECS = {11275, 1667, 7644, 7514, 1062}
 SPEC_COST = {11275: 50, 1667: 50, 7644: 50, 7514: 50, 7515: 50, 1062: 25, 1060: 25, 3300: 25, 3299: 25}
@@ -263,30 +283,69 @@ def own_events(rec):
     return dict(deaths=deaths, esc=esc, enters=enters, jumps=jumps)
 
 
+def his_departure(rec, f):
+    """When he left the fight: his first teleport animation (tablet 4069/4071, spell 714, 3864) or his first position jump (a portal hop: >= 4 tiles and
+    faster than running between two observations of him) in [hi - 15, hi + 12]. Positions come from the per tick actor states (Oct 10 on) and from his
+    animation events (all recordings, sparse). Returns (tick, kind, detail) or None."""
+    opp, lo, hi = f["opp"], f["lo"], f["hi"]
+    lim = min(hi + END_WINDOW_AFTER, rec["last_tick"])
+    cands = []
+    anim = [t for t, n, a, x, y in rec["anims"] if n == opp and a in HIS_TELE_ANIMS and max(lo, hi - 30) <= t <= lim]
+    if anim:
+        cands.append((min(anim), "tp", "anim"))
+    pts = {}
+    for x in rec["opp_track"]:
+        if x[1] == opp:
+            pts[x[0]] = (x[2], x[3])
+    for t, n, x, y in rec["opp_pos"]:
+        if n == opp:
+            pts.setdefault(t, (x, y))
+    ks = sorted(k for k in pts if lo <= k <= lim + 30)
+    for u, v in zip(ks, ks[1:]):
+        d = max(abs(pts[v][0] - pts[u][0]), abs(pts[v][1] - pts[u][1]))
+        if d >= JUMP_TILES and d > 2 * (v - u) and hi - 15 <= v <= lim:
+            cands.append((v, "exit", f"jump{d}"))
+            break
+    return min(cands) if cands else None
+
+
+def our_leave_tick(e):
+    """Tick we actually left: the landing when seen, else the break animation (tablet) or click + 2 (portal)."""
+    if e["landing"] is not None:
+        return e["landing"] if e["kind"] == "exit" else e["tick"]
+    return e["tick"] if e["kind"] == "tablet" else e["tick"] + 2
+
+
 def classify(rec, ev, f):
-    """Outcome of one merged fight with the evidence ticks. Priority: death, kill, our escape, his teleport, other."""
+    """Outcome of one merged fight with the evidence ticks. Priority: our death, his death, then whoever left first (our escape or his departure), other."""
     me, opp, lo, hi = rec["me"], f["opp"], f["lo"], f["hi"]
     last = rec["last_tick"]
     lim = min(hi + END_WINDOW_AFTER, last)
-    out = dict(outcome="other", end_tick=hi, evidence="")
+    out = dict(outcome="other", end_tick=hi, evidence="", esc=None, his=None, leave_esc=None)
     death = next((d for d in ev["deaths"] if lo <= d["tick"] <= lim), None)
     his = [(t, a) for t, n, a, x, y in rec["anims"] if n == opp and lo <= t <= lim]
     dead_flag = [t for (t, n, x, y, r, s, flag, an) in rec["opp_track"] if n == opp and lo <= t <= hi + 6 and (flag or an == DEATH_ANIM)]
     kill_chat = [c for c in rec["chat"] if lo <= c[0] <= hi + 40 and "Target killed" in c[2] and opp in c[2].replace("\xa0", " ")]
     he836 = [t for t, a in his if a == DEATH_ANIM and t <= hi + 6]
     esc = [e for e in ev["esc"] if hi - END_WINDOW_BEFORE <= e["tick"] <= lim and e["tick"] >= lo]
+    dep = his_departure(rec, f)
     if death:
         out.update(outcome="death", end_tick=death["tick"], evidence="our hp0/anim836")
     elif he836 or dead_flag or kill_chat:
         out.update(outcome="kill", end_tick=min(he836 + dead_flag) if (he836 or dead_flag) else hi,
                    evidence="opp anim836" if he836 else "opp deadflag" if dead_flag else "kill chat")
-    elif esc:
-        e = esc[-1]
-        out.update(outcome="our_tp" if e["kind"] == "tablet" else "our_exit", end_tick=e["tick"], evidence=e["kind"], esc=e)
     else:
-        tele = [(t, a) for t, a in his if a in (4069, 4071, 714, 3864) and hi - 6 <= t <= lim]
-        if tele:
-            out.update(outcome="his_tp", end_tick=tele[0][0], evidence=f"opp anim {tele[0][1]}")
+        e = esc[-1] if esc else None
+        ours = our_leave_tick(e) if e else None
+        if dep:
+            out["his"] = dep
+        if e and (not dep or ours <= dep[0]):
+            out.update(outcome="our_tp" if e["kind"] == "tablet" else "our_exit", end_tick=e["tick"], evidence=e["kind"], esc=e)
+        elif dep:
+            out.update(outcome="his_tp" if dep[1] == "tp" else "his_exit", end_tick=dep[0], evidence=f"his {dep[2]}", esc=e)
+            # our own escape after he left (restock): first escape after his departure, before anything else happens
+            later = [x for x in ev["esc"] if dep[0] <= our_leave_tick(x) <= dep[0] + 60]
+            out["leave_esc"] = later[0] if later else None
     return out
 
 
@@ -365,7 +424,7 @@ def build_fights(recs):
             e = c.get("esc")
             end = c["end_tick"]
             fr = dict(rec=rec, opp=f["opp"], lo=f["lo"], hi=f["hi"], ticks=f["hi"] - f["lo"] + 1, outcome=c["outcome"], end_tick=end,
-                      evidence=c["evidence"], esc=e, venue=venue(rec, f["lo"]))
+                      evidence=c["evidence"], esc=e, his=c["his"], leave_esc=c["leave_esc"], venue=venue(rec, f["lo"]))
             fr["t_lo"] = rec.wall(f["lo"])
             fr["t_hi"] = rec.wall(f["hi"])
             fr["t_end"] = rec.wall(end)
@@ -424,7 +483,10 @@ def link(fights):
         d_evt, clk = ticks_between(a["rec"], a["end_tick"], b["rec"], b["lo"])
         d_hi, _ = ticks_between(a["rec"], a["hi"], b["rec"], b["lo"])
         wall_gap = b["t_lo"] - a["t_hi"]
-        pairs.append(dict(a=a, b=b, d_evt=d_evt, d_hi=d_hi, clock=clk, wall_gap=wall_gap, in_session=wall_gap <= SESSION_GAP_S and b["t_lo"] >= a["t_hi"]))
+        d_leave = ticks_between(a["rec"], a["leave_esc"]["tick"], b["rec"], b["lo"])[0] if a["leave_esc"] else None
+        our_e = a["esc"] if a["outcome"] in ("our_tp", "our_exit") else a["leave_esc"]
+        d_our = ticks_between(a["rec"], our_e["tick"], b["rec"], b["lo"])[0] if our_e else None
+        pairs.append(dict(a=a, b=b, d_evt=d_evt, d_hi=d_hi, d_leave=d_leave, d_our=d_our, our_kind=our_e["kind"] if our_e else None, clock=clk, wall_gap=wall_gap, in_session=wall_gap <= SESSION_GAP_S and b["t_lo"] >= a["t_hi"]))
     return real, pairs
 
 
@@ -450,11 +512,16 @@ def list_samples(pairs):
               ("M tablet same", lambda p: p["a"]["outcome"] == "our_tp" and p["b"]["opp"] == p["a"]["opp"]),
               ("M exit same", lambda p: p["a"]["outcome"] == "our_exit" and p["b"]["opp"] == p["a"]["opp"]),
               ("R' new opponent", lambda p: p["a"]["outcome"] in esc_out and p["b"]["opp"] != p["a"]["opp"]),
-              ("D death", lambda p: p["a"]["outcome"] == "death"), ("S kill", lambda p: p["a"]["outcome"] == "kill"), ("S his_tp", lambda p: p["a"]["outcome"] == "his_tp")]
+              ("D death", lambda p: p["a"]["outcome"] == "death"), ("S kill", lambda p: p["a"]["outcome"] == "kill"), ("S his_tp", lambda p: p["a"]["outcome"] == "his_tp"), ("S his_exit", lambda p: p["a"]["outcome"] == "his_exit"),
+              ("S his departure, from our later escape", None)]
     print("=" * 132)
     print("SAMPLES (in-session, ticks, sorted)")
     for nm, pred in groups:
-        print(f"{nm:<16}", " ".join(f"{p['d_evt']:.0f}" for p in sorted((p for p in pairs if p["in_session"] and pred(p)), key=lambda p: p["d_evt"])))
+        if pred is None:
+            vals = sorted(p["d_leave"] for p in pairs if p["in_session"] and p["d_leave"] is not None and p["a"]["outcome"] in ("his_tp", "his_exit"))
+        else:
+            vals = sorted(p["d_evt"] for p in pairs if p["in_session"] and pred(p))
+        print(f"{nm:<16}", " ".join(f"{v:.0f}" for v in vals))
 
 
 def main():
@@ -500,17 +567,26 @@ def report(recs, fights, real, pairs):
       f"delay clock: tick labels {sum(p['clock'] == 'tick' for p in pairs)} (same recording, or same client instance with labels within {CONSIST_S:.0f} s of the wall clock), wall seconds/0.6 {sum(p['clock'] == 'wall' for p in pairs)}")
 
     P("=" * 132)
-    P("B. OUTCOME MIX of real fights (priority: our death > his death > our escape > his teleport anim > other)")
+    P("B. OUTCOME MIX of real fights (our death > his death > whoever left first: our escape or his departure > other)")
     for v in (None, "arena", "open"):
         sub = [f for f in real if v is None or f["venue"] == v]
         c = collections.Counter(f["outcome"] for f in sub)
-        P(f"  {v or 'all':<6} n={len(sub):<4} " + "  ".join(f"{k}={c[k]} ({100 * c[k] / len(sub):.0f}%)" for k in ("kill", "death", "our_tp", "our_exit", "his_tp", "other")))
+        P(f"  {v or 'all':<6} n={len(sub):<4} " + "  ".join(f"{k}={c[k]} ({100 * c[k] / len(sub):.0f}%)" for k in ("kill", "death", "our_tp", "our_exit", "his_tp", "his_exit", "other")))
     ev = collections.Counter((f["outcome"], f["evidence"]) for f in real)
     P("  evidence: " + "; ".join(f"{k[0]}/{k[1] or '-'}={v}" for k, v in sorted(ev.items())))
-    P(f"  our escapes that were blocked at least once before they worked: {sum(1 for f in real if f['esc'] and f['esc']['blocked'])} of {sum(f['outcome'] in esc_out for f in real)}; "
+    both = [f for f in real if f["esc"] and f["his"] and f["outcome"] in ("our_tp", "our_exit", "his_tp", "his_exit")]
+    dl = [our_leave_tick(f["esc"]) - f["his"][0] for f in both]
+    P(f"  who left first, fights where both our escape and a departure of his were seen: {len(both)}; we first by >= 2 ticks {sum(d <= -2 for d in dl)}, within 1 tick {sum(abs(d) <= 1 for d in dl)}, he first by >= 2 ticks {sum(d >= 2 for d in dl)}; "
+      f"outcome rule is strict order, a tie goes to us; his departure seen in {sum(1 for f in real if f['his'])} of {len(real)} fights, ours in {sum(1 for f in real if f['esc'] and f['outcome'] in ('our_tp', 'our_exit', 'his_tp', 'his_exit'))}")
+    P(row("  our leave tick minus his departure tick (ticks)", [float(d) for d in dl]))
+    for kind in ("tp", "exit"):
+        P(f"  his departure by evidence: {kind} " + ", ".join(f"{o}={sum(1 for f in real if f['his'] and f['his'][1] == kind and f['outcome'] == o)}" for o in ("our_tp", "our_exit", "his_tp", "his_exit", "kill", "death", "other")) + f"; era with per tick actor states (tick >= recording of Oct 10): "
+          + f"{sum(1 for f in real if f['his'] and f['his'][1] == kind and f['rec'].raw['opp_track'])}")
+    P(f"  fights from recordings with per tick actor positions (Oct 10 on): {sum(1 for f in real if f['rec'].raw['opp_track'])} of {len(real)}; the others have his position only at his animation events, so a portal exit is seen only if one of his animation events falls in the window")
+    P(f"  our escapes that were blocked at least once before they worked: {sum(1 for f in real if f['outcome'] in esc_out and f['esc']['blocked'])} of {sum(f['outcome'] in esc_out for f in real)}; "
       f"'cannot teleport/leave ... special attack' messages in these recordings: {sum(1 for r in recs for c in r.raw['chat'] if 'special attack' in c[2] and BLOCK_RE.search(c[2]))}; "
       f"'cannot leave the crater for N seconds after engaging in combat': {sum(1 for r in recs for c in r.raw['chat'] if 'crater' in c[2])}")
-    P(f"  unconfirmed Exit Arena clicks (no jump seen, recording ended or tick row missing) counted as escapes: {sum(1 for f in real if f['esc'] and f['esc'].get('unconfirmed'))}")
+    P(f"  unconfirmed Exit Arena clicks (no jump seen, recording ended or tick row missing) counted as escapes: {sum(1 for f in real if f['outcome'] in esc_out and f['esc'].get('unconfirmed'))}")
     P(f"  deaths seen in these recordings outside a real fight: {sum(len(r.ev['deaths']) for r in recs) - sum(f['outcome'] == 'death' for f in real)} "
       f"(of {sum(len(r.ev['deaths']) for r in recs)})")
 
@@ -519,7 +595,7 @@ def report(recs, fights, real, pairs):
     P(row("all real fights", [f["ticks"] for f in real]))
     for v in ("arena", "open"):
         P(row(f"  venue {v}", [f["ticks"] for f in real if f["venue"] == v]))
-    for o in ("kill", "death", "our_tp", "our_exit", "his_tp", "other"):
+    for o in ("kill", "death", "our_tp", "our_exit", "his_tp", "his_exit", "other"):
         P(row(f"  outcome {o}", [f["ticks"] for f in real if f["outcome"] == o]))
     P(row("end = outcome event tick (end_tick - lo + 1)", [f["end_tick"] - f["lo"] + 1 for f in real]))
     P(row("  same, only classified ends (not 'other')", [f["end_tick"] - f["lo"] + 1 for f in real if f["outcome"] != "other"]))
@@ -546,6 +622,18 @@ def report(recs, fights, real, pairs):
     show("   venue open", lambda p: esc(p) and p["a"]["venue"] == "open", extra=False)
     show("   same recording (recorder kept running)", lambda p: esc(p) and p["a"]["rec"] is p["b"]["rec"], extra=False)
     show("   across recordings", lambda p: esc(p) and p["a"]["rec"] is not p["b"]["rec"], extra=False)
+    P("  -- pooled: our own escape (tablet or Exit Arena) whether we left first or followed him out, measured from OUR escape tick")
+    mine = lambda p: p["d_our"] is not None
+    show("R* every escape of ours at the end of a fight", mine, key="d_our")
+    show("   tablet", lambda p: mine(p) and p["our_kind"] == "tablet", key="d_our", extra=False)
+    show("   Exit Arena", lambda p: mine(p) and p["our_kind"] == "exit", key="d_our", extra=False)
+    show("M* ... next fight SAME opponent", lambda p: mine(p) and p["b"]["opp"] == p["a"]["opp"], key="d_our", extra=False)
+    show("   tablet", lambda p: mine(p) and p["our_kind"] == "tablet" and p["b"]["opp"] == p["a"]["opp"], key="d_our", extra=False)
+    show("   Exit Arena", lambda p: mine(p) and p["our_kind"] == "exit" and p["b"]["opp"] == p["a"]["opp"], key="d_our", extra=False)
+    show("R'* ... next fight NEW opponent", lambda p: mine(p) and p["b"]["opp"] != p["a"]["opp"], key="d_our", extra=False)
+    show("   tablet", lambda p: mine(p) and p["our_kind"] == "tablet" and p["b"]["opp"] != p["a"]["opp"], key="d_our", extra=False)
+    show("   Exit Arena", lambda p: mine(p) and p["our_kind"] == "exit" and p["b"]["opp"] != p["a"]["opp"], key="d_our", extra=False)
+    P("  -- we left first (outcome our_tp / our_exit):")
     show("M  escape -> SAME opponent fights us again", lambda p: esc(p) and p["b"]["opp"] == p["a"]["opp"])
     show("   tablet", lambda p: p["a"]["outcome"] == "our_tp" and p["b"]["opp"] == p["a"]["opp"], extra=False)
     show("   Exit Arena", lambda p: p["a"]["outcome"] == "our_exit" and p["b"]["opp"] == p["a"]["opp"], extra=False)
@@ -554,14 +642,22 @@ def report(recs, fights, real, pairs):
     show("   Exit Arena", lambda p: p["a"]["outcome"] == "our_exit" and p["b"]["opp"] != p["a"]["opp"], extra=False)
     show("D  our death -> next fight", lambda p: p["a"]["outcome"] == "death")
     show("S  our kill -> next fight (any opponent)", lambda p: p["a"]["outcome"] == "kill")
-    show("S  his teleport anim -> next fight", lambda p: p["a"]["outcome"] == "his_tp")
-    show("S* kill or his teleport -> NEW opponent", lambda p: p["a"]["outcome"] in ("kill", "his_tp") and p["b"]["opp"] != p["a"]["opp"], extra=False)
+    show("S  his teleport (tablet/spell anim) -> next fight", lambda p: p["a"]["outcome"] == "his_tp")
+    show("S  his Exit Arena (position jump) -> next fight", lambda p: p["a"]["outcome"] == "his_exit")
+    hisany = lambda p: p["a"]["outcome"] in ("his_tp", "his_exit")
+    show("S  his departure, any kind -> next fight", hisany)
+    show("   same, next opponent NEW", lambda p: hisany(p) and p["b"]["opp"] != p["a"]["opp"], extra=False)
+    show("   same, next opponent SAME", lambda p: hisany(p) and p["b"]["opp"] == p["a"]["opp"], extra=False)
+    show("   same, measured from OUR later escape (restock)", lambda p: hisany(p) and p["d_leave"] is not None, key="d_leave", extra=False)
+    show("   same, we did not escape afterwards", lambda p: hisany(p) and p["d_leave"] is None, extra=False)
+    show("S* kill or his departure -> NEW opponent", lambda p: p["a"]["outcome"] in ("kill", "his_tp", "his_exit") and p["b"]["opp"] != p["a"]["opp"], extra=False)
     show("O  unclassified end -> next fight", lambda p: p["a"]["outcome"] == "other")
     show("   any end: idle gap hi -> next lo", lambda p: True, key="d_hi", extra=False)
+    P("   " + bucket_row("our escape, either order", [p["wall_gap"] for p in pairs if p["d_our"] is not None]))
     P("  right tail: all pairs by wall gap between the end of the fight and the next fight start (no 10 min cut), minutes:")
     for nm, pred in (("escape", esc), ("  tablet", lambda p: p["a"]["outcome"] == "our_tp"), ("  exit", lambda p: p["a"]["outcome"] == "our_exit"),
                      ("death", lambda p: p["a"]["outcome"] == "death"), ("kill", lambda p: p["a"]["outcome"] == "kill"),
-                     ("his_tp", lambda p: p["a"]["outcome"] == "his_tp"), ("other", lambda p: p["a"]["outcome"] == "other")):
+                     ("his_tp", lambda p: p["a"]["outcome"] == "his_tp"), ("his_exit", lambda p: p["a"]["outcome"] == "his_exit"), ("other", lambda p: p["a"]["outcome"] == "other")):
         P("   " + bucket_row(nm, [p["wall_gap"] for p in pairs if pred(p)]))
     for nm, o in (("D  death", "death"), ("S  kill", "kill")):
         allv = sorted((p["d_evt"], p["clock"]) for p in pairs if p["a"]["outcome"] == o)
@@ -605,7 +701,7 @@ def report(recs, fights, real, pairs):
     in_fight = sum(f["ticks"] for f in real)
     P(f"  sessions {len(sess)} ({sum(len(s) >= 2 for s in sess)} with >= 2 fights), fights {len(real)}, total inner-span ticks {tot:.0f} ({tot * TICK_S / 3600:.2f} h); pooled fights/hour over inner spans = {len(real) / (tot * TICK_S / 3600):.1f}; "
       f"pooled fights/hour over sessions with >= 2 fights = {sum(len(s) for s in sess if len(s) >= 2) / (sum(sp for s, sp in zip(sess, spans) if len(s) >= 2) * TICK_S / 3600):.1f}")
-    P(f"  kills {sum(f['outcome'] == 'kill' for f in real)}, deaths {sum(f['outcome'] == 'death' for f in real)}, escapes {sum(f['outcome'] in esc_out for f in real)}, his teleport {sum(f['outcome'] == 'his_tp' for f in real)}, other {sum(f['outcome'] == 'other' for f in real)}; "
+    P(f"  kills {sum(f['outcome'] == 'kill' for f in real)}, deaths {sum(f['outcome'] == 'death' for f in real)}, escapes {sum(f['outcome'] in esc_out for f in real)}, his teleport {sum(f['outcome'] == 'his_tp' for f in real)}, his exit {sum(f['outcome'] == 'his_exit' for f in real)}, other {sum(f['outcome'] == 'other' for f in real)}; "
       f"time in fight / inner-span time = {in_fight / tot:.2f}")
     P(row("idle gap between consecutive fights, in-session (hi -> lo)", [p["d_hi"] for p in pairs if p["in_session"]]))
     P(row("idle gap between consecutive fights, > 10 min (wall ticks)", [p["wall_gap"] / TICK_S for p in pairs if not p["in_session"]]))
@@ -630,7 +726,7 @@ def report(recs, fights, real, pairs):
     P("  note: the Oct 4-9 recordings are one arena stay or one wilderness bout each (the recorder restarts), so a session there is a chain of recordings; Oct 10-13 recordings are continuous (many fights each).")
 
     P("=" * 132)
-    P("G. REMATCH after our escape (tablet or Exit Arena); denominators use escapes whose next real fight is within 10 min")
+    P("G. REMATCH (next real fight same opponent) after our escape (tablet or Exit Arena) or his departure; denominators use fights whose next real fight is within 10 min")
     tot_esc = [f for f in real if f["outcome"] in esc_out]
     idx = {id(f): i for i, f in enumerate(real)}
 
@@ -649,11 +745,17 @@ def report(recs, fights, real, pairs):
     def line(label, sub):
         s_, n_, c_ = tally(sub)
         P(f"  {label:<34} escapes={len(sub):<4} next fight same={s_:<3} new={n_:<3} none within 10 min={c_:<3}" + (f" rematch rate {100 * s_ / (s_ + n_):.1f}%" if s_ + n_ else ""))
-    line("all escapes", tot_esc)
+    line("all escapes, we left first", tot_esc)
     line("  tablet", [f for f in tot_esc if f["outcome"] == "our_tp"])
     line("  Exit Arena", [f for f in tot_esc if f["outcome"] == "our_exit"])
     line("  venue arena", [f for f in tot_esc if f["venue"] == "arena"])
     line("  venue open", [f for f in tot_esc if f["venue"] == "open"])
+    line("every escape of ours, either order", [f for f in real if f["outcome"] in esc_out or f["leave_esc"]])
+    line("  of which we followed his departure", [f for f in real if f["leave_esc"]])
+    line("his departures (whatever we did next)", [f for f in real if f["outcome"] in ("his_tp", "his_exit")])
+    line("  his tablet/spell", [f for f in real if f["outcome"] == "his_tp"])
+    line("  his Exit Arena", [f for f in real if f["outcome"] == "his_exit"])
+    line("any fight end that was not a kill/death", [f for f in real if f["outcome"] not in ("kill", "death")])
     later = 0
     for f in tot_esc:
         p = nxt.get(id(f))

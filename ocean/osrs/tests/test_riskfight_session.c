@@ -133,8 +133,9 @@ static void test_teleport_refills_and_costs_the_restock(void) {
     destroy();
 }
 
-/* Many teleports: after a rude one (ours after our special, while he can still spec) the opponent never returns; after others he does, with what he had left. */
-static void teleports(int our_specs, int his_energy, int trials, int* rematches, int* rudes) {
+/* Many teleports: after a rude one (ours after our special, while he can still spec) the opponent never returns; after others he does, with what he had left
+ * (or, when he teleported too, refilled). */
+static void teleports(int our_specs, int his_energy, int he_teleports, int trials, int* rematches, int* rudes) {
     *rematches = *rudes = 0;
     for (int trial = 0; trial < trials; trial++) {
         env = make_env(6000, 1, 100 + trial);
@@ -142,27 +143,30 @@ static void teleports(int our_specs, int his_energy, int trials, int* rematches,
         env->state.env.players[1].special_energy = his_energy;
         env->state.specs_used[0] = our_specs;
         actions[0][RF_PRIMARY] = RF_TELEPORT;
+        actions[1][RF_PRIMARY] = he_teleports ? RF_TELEPORT : 0;
         puf_step(env);
         assert(env->log.self_teleports == 1);
         *rudes += env->log.rude_teleports == 1;
         *rematches += env->log.rematches == 1;
-        /* The opponent who is back is the one who was left: the hitpoints he had (natural drift aside), not a fresh 99 to 121. */
+        /* The opponent who is back is the one who was left: the hitpoints he had (natural drift aside), not a fresh 99 to 121; if he teleported he is fresh. */
         int back = env->state.env.players[1].current_hitpoints < 100;
-        assert(back == (env->log.rematches == 1));
+        assert(back == (env->log.rematches == 1 && !he_teleports));
         destroy();
     }
 }
 
 static void test_rude_teleport_loses_the_opponent(void) {
     int rematches, rudes;
-    teleports(1, 100, 300, &rematches, &rudes);
+    teleports(1, 100, 0, 300, &rematches, &rudes);
     assert(rudes == 300 && rematches == 0);
-    teleports(0, 100, 300, &rematches, &rudes); /* no special of ours: polite */
+    teleports(0, 100, 0, 300, &rematches, &rudes); /* no special of ours: polite */
     assert(rudes == 0 && rematches > 0);
     int polite = rematches;
-    teleports(1, 0, 300, &rematches, &rudes);   /* he has nothing left to spec with: polite */
+    teleports(1, 0, 0, 300, &rematches, &rudes);   /* he has nothing left to spec with: polite */
     assert(rudes == 0 && rematches > 0);
     assert(polite > 300 * RF_REMATCH_PROBABILITY / 2 && polite < 300 * (1 + RF_REMATCH_PROBABILITY) / 2 + 1);
+    teleports(0, 100, 1, 300, &rematches, &rudes); /* both teleport: he comes back refilled, as often */
+    assert(rudes == 0 && rematches > 300 * RF_REMATCH_PROBABILITY / 2);
     /* The rule at its source. */
     RiskfightState s;
     memset(&s, 0, sizeof(s));

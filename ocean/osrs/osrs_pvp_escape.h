@@ -6,6 +6,7 @@ typedef enum { OSRS_ESCAPE_NO_HEALING, OSRS_ESCAPE_OTHER_HEALING,
 typedef struct {
     OsrsEscapeHealing healing;
     int marlins, brew_doses, halibut, pie_bites, boost_doses;
+    int food, potion_doses; /* every eat item in the bag, and every dose of every drink */
     int hp, attack, strength, attack_base, strength_base;
     int food_timer, potion_timer, combo_timer;
     int special_energy, minimum_spec_cost;
@@ -28,6 +29,8 @@ static OsrsEscapeSupplies osrs_escape_supplies(const Player* player) {
         healing += item->click_action == OSRS_CLICK_EAT ||
             item->consumable_kind == OSRS_CONSUMABLE_BREW ||
             item->consumable_kind == OSRS_CONSUMABLE_GUTHIX_REST;
+        out.food += item->click_action == OSRS_CLICK_EAT;
+        if (item->click_action == OSRS_CLICK_DRINK) out.potion_doses += item->dose_count;
         if (item->gear_slot == GEAR_SLOT_WEAPON) {
             int cost = osrs_spec_cost(item->item_idx);
             if (cost > 0 && (!out.minimum_spec_cost || cost < out.minimum_spec_cost))
