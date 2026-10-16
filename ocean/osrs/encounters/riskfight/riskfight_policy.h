@@ -266,6 +266,52 @@ static void riskfight_write_wait_mask(unsigned char* mask) {
     for (int head = 0; head < RF_HEADS; head++) mask[RF_HEAD_OFFSET[head]] = 1;
 }
 
+/** Everything riskfight_write_action_mask reads, reduced to what its result depends on (hitpoints only through the three comparisons it makes, the timers only
+ * through "is zero", the veng cooldown only through "<= 1"). The mask changes on about one agent-tick in six, so the env, which keeps the last mask in the agent's
+ * buffer, rewrites it only when the key differs. `valid` is 0 while the buffer holds something else (the wait mask); `buffer` guards against the buffer moving.
+ * ADD EVERY NEW INPUT OF riskfight_write_action_mask HERE: test_riskfight_env_trace.c compares the buffer with a fresh mask every step. */
+typedef struct {
+    uint16_t cells[OSRS_INVENTORY_SIZE];
+    uint8_t equipped[NUM_GEAR_SLOTS];
+    uint8_t below_full, at_full, above_divine, food_ready, karambwan_ready, potion_ready, overheal_block, prayer, magic_ok, veng_active, veng_cooled, has_sacks,
+        teleport_ok, deployable, valid;
+    int special_energy;
+    const unsigned char* buffer;
+} RiskfightMaskKey;
+
+static inline void riskfight_mask_key(const RiskfightState* s, int agent, const unsigned char* buffer, RiskfightMaskKey* key) {
+    const Player* p = &s->env.players[agent];
+    memset(key, 0, sizeof(*key));
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) key->cells[slot] = p->inventory_cells[slot].content_code;
+    memcpy(key->equipped, p->equipped, NUM_GEAR_SLOTS);
+    key->below_full = p->current_hitpoints < p->base_hitpoints;
+    key->at_full = p->current_hitpoints >= p->base_hitpoints;
+    key->above_divine = p->current_hitpoints > OSRS_DIVINE_DAMAGE;
+    key->food_ready = p->food_timer == 0;
+    key->karambwan_ready = p->karambwan_timer == 0;
+    key->potion_ready = p->potion_timer == 0;
+    key->overheal_block = p->pvp_overheal_block > 0;
+    key->prayer = p->current_prayer > 0;
+    key->magic_ok = p->current_magic >= OSRS_VENGEANCE_MAGIC_LEVEL;
+    key->veng_active = p->veng_active != 0;
+    key->veng_cooled = p->veng_cooldown <= 1;
+    key->has_sacks = s->inventory_use[agent].vengeance_sacks > 0;
+    key->teleport_ok = osrs_teleport_allowed(s->env.pvp_runtime.teleport[agent], s->env.tick);
+    key->deployable = riskfight_deployable != 0;
+    key->valid = 1;
+    key->special_energy = p->special_energy;
+    key->buffer = buffer;
+}
+
+/** riskfight_write_action_mask into the agent's buffer, skipped when `mask` still holds the mask of this very key. */
+static inline void riskfight_write_action_mask_keyed(const RiskfightState* s, int agent, RiskfightMaskKey* held, unsigned char* mask) {
+    RiskfightMaskKey key;
+    riskfight_mask_key(s, agent, mask, &key);
+    if (!memcmp(&key, held, sizeof(key))) return;
+    riskfight_write_action_mask(s, agent, mask);
+    *held = key;
+}
+
 /** First inventory slot (1-based, 0 when absent) per consumable kind and per item. */
 typedef struct {
     int kind_slot[OSRS_CONSUMABLE_COUNT];

@@ -8,6 +8,11 @@ typedef float obs_t;
 #endif
 #define PUF_HAS_BOT_POLICY
 #include "pufferenv.h"
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#elif defined(__SSE2__)
+#include <emmintrin.h>
+#endif
 #define Log OsrsSharedLog
 #include "../osrs/encounters/encounter_riskfight.h"
 #undef Log
@@ -54,6 +59,7 @@ struct Env {
     RiskfightTransition wait_transition; /* what the wait leads to */
     float session_stake;                 /* kills minus price times deaths so far, in kill units */
     RiskfightState state;
+    RiskfightMaskKey mask_key[2]; /* what each agent's mask buffer holds (riskfight_write_action_mask_keyed) */
     RiskfightContext context;
     RiskfightTraining training;
     RiskfightAlign align;
@@ -120,14 +126,32 @@ static inline obs_t riskfight_obs_one(float value) {
     return value;
 #endif
 }
-/** Writes obs as round-to-nearest-even bf16, bit-identical to __float2bfloat16 for finite values. */
+/** Writes obs as round-to-nearest-even bf16, bit-identical to __float2bfloat16 for finite values: (bits + 0x7FFF + bit 16) >> 16, in 32-bit wrapping integer
+ * arithmetic. Vectorized by hand: the compilers' -O2 cost models do not vectorize a loop whose length is not a multiple of the vector width. */
 static inline void riskfight_obs_store(obs_t* out, const float* obs) {
 #ifdef RF_BF16_OBS
-    uint32_t bits[RF_OBS_SIZE];
-    uint16_t rounded[RF_OBS_SIZE];
-    memcpy(bits, obs, sizeof(bits));
-    for (int j = 0; j < RF_OBS_SIZE; j++) rounded[j] = (uint16_t)((bits[j] + 0x7FFFu + ((bits[j] >> 16) & 1u)) >> 16);
-    memcpy(out, rounded, sizeof(rounded));
+    int j = 0;
+#if defined(__ARM_NEON)
+    const uint32x4_t bias = vdupq_n_u32(0x7FFFu), one = vdupq_n_u32(1u);
+    for (; j + 8 <= RF_OBS_SIZE; j += 8) {
+        uint32x4_t a = vreinterpretq_u32_f32(vld1q_f32(obs + j)), b = vreinterpretq_u32_f32(vld1q_f32(obs + j + 4));
+        a = vaddq_u32(a, vaddq_u32(bias, vandq_u32(vshrq_n_u32(a, 16), one)));
+        b = vaddq_u32(b, vaddq_u32(bias, vandq_u32(vshrq_n_u32(b, 16), one)));
+        vst1q_u16(out + j, vcombine_u16(vshrn_n_u32(a, 16), vshrn_n_u32(b, 16)));
+    }
+#elif defined(__SSE2__)
+    const __m128i bias = _mm_set1_epi32(0x7FFF), one = _mm_set1_epi32(1);
+    for (; j + 8 <= RF_OBS_SIZE; j += 8) {
+        __m128i a = _mm_castps_si128(_mm_loadu_ps(obs + j)), b = _mm_castps_si128(_mm_loadu_ps(obs + j + 4));
+        a = _mm_add_epi32(a, _mm_add_epi32(bias, _mm_and_si128(_mm_srli_epi32(a, 16), one)));
+        b = _mm_add_epi32(b, _mm_add_epi32(bias, _mm_and_si128(_mm_srli_epi32(b, 16), one)));
+        /* the high halves as signed 16-bit values (sign-extend the low 16 bits of a >> 16), so the signed saturating pack passes all 16 bits through */
+        a = _mm_srai_epi32(_mm_slli_epi32(_mm_srli_epi32(a, 16), 16), 16);
+        b = _mm_srai_epi32(_mm_slli_epi32(_mm_srli_epi32(b, 16), 16), 16);
+        _mm_storeu_si128((__m128i*)(out + j), _mm_packs_epi32(a, b));
+    }
+#endif
+    for (; j < RF_OBS_SIZE; j++) out[j] = riskfight_obs_one(obs[j]);
 #else
     memcpy(out, obs, RF_OBS_SIZE * sizeof(float));
 #endif
@@ -140,8 +164,10 @@ static void riskfight_native_observe(Env* env) {
         float obs[RF_OBS_SIZE];
         riskfight_write_observation(&env->state, i, obs);
         riskfight_obs_store(env->agents[i].observations, obs);
-        if (env->wait_left > 0) riskfight_write_wait_mask(env->agents[i].action_mask);
-        else riskfight_write_action_mask(&env->state, i, env->agents[i].action_mask);
+        if (env->wait_left > 0) {
+            riskfight_write_wait_mask(env->agents[i].action_mask);
+            env->mask_key[i].valid = 0;
+        } else riskfight_write_action_mask_keyed(&env->state, i, &env->mask_key[i], env->agents[i].action_mask);
     }
     env->wait_obs_valid = env->wait_left > 0;
 }
