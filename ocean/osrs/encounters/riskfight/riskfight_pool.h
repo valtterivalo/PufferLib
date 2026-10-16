@@ -6,7 +6,7 @@
 #include "../../osrs_items.h"
 #include "../../osrs_types.h"
 
-enum { RF_POOL_MAX = 192, RF_KIT_WEAPONS = 5 };
+enum { RF_POOL_MAX = 640, RF_KIT_WEAPONS = 5 };
 
 typedef enum { RF_KIT_EMPIRICAL, RF_KIT_ARCHETYPE, RF_KIT_EDGE } RiskfightKitKind;
 
@@ -19,6 +19,10 @@ typedef struct {
     uint8_t weapons[RF_KIT_WEAPONS];     /* every weapon of the kit, the started-with one first; ITEM_NONE past weapon_count */
     int weapon_count;
     int bag;                             /* RiskfightBag: what fills his inventory (riskfight_kits.h) */
+    int start_offset;                    /* tiles east of us he starts; 1 is adjacent, the fight starts at melee range as the live ones do */
+    int hitpoints;                       /* starting hitpoints (121: overhealed, as both sides of the live fights) */
+    int ranged_level;                    /* ranged level he starts at (a ranger arrives boosted); 0 leaves the maxed account's 99 */
+    int oppfit_ok;                       /* the fitted opponent (OppFit) can play this kit: melee weapons whose specials are VW, maul, AGS, claws */
 } RiskfightKit;
 
 static RiskfightKit RISKFIGHT_POOL[RF_POOL_MAX];

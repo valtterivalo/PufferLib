@@ -56,6 +56,9 @@ static void riskfight_put_int(EncounterState* state, EncounterContext* context, 
         ctx->kit_mix = value == 3;
         ctx->loadout[0] = value == 0 ? NULL : value >= 2 ? &RISKFIGHT_VW_LOADOUT : &RISKFIGHT_LIVE_LOADOUT;
         ctx->loadout[1] = value ? &RISKFIGHT_LIVE_LOADOUT : NULL;
+    } else if (strcmp(key, "opponent_pool") == 0) {
+        /* 1: each reset draws his kit from the opponent pool (riskfight_kits.h); needs self_play 0, the pool kits are played by the script or OppFit. */
+        assert(value == 0 || value == 1); ctx->opponent_pool = value;
     } else if (strcmp(key, "human_player") == 0) {
         assert(value == 0 || value == 1); ctx->human_player = value;
     } else if (strcmp(key, "seed") == 0) {

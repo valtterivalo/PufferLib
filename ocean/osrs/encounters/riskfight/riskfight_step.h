@@ -210,8 +210,11 @@ static int riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
 static void riskfight_policy_commands(const RiskfightState* s, int agent,
     const int* actions, HumanInput* hi) {
     human_input_clear_pending(hi);
-    for (int head = 0; head < RF_HEADS; head++)
-        assert(actions[head] >= 0 && actions[head] < RF_ACTION_DIMS[head]);
+    /* The style and prayer heads of a net stop at accurate..defensive and up to Piety; a scripted ranger fights rapid on Rigour, which no net picks. */
+    for (int head = 0; head < RF_HEADS; head++) {
+        int limit = head == RF_STYLE ? FIGHT_STYLE_RAPID + 1 : head == RF_PRAYER ? OFFENSIVE_PRAYER_AUGURY + 1 : RF_ACTION_DIMS[head];
+        assert(actions[head] >= 0 && actions[head] < limit);
+    }
     for (int head = 0; head < RF_HEADS; head++) {
         int gear_slot = RF_GEAR_SLOT_BY_HEAD[head];
         if (gear_slot < 0 || !actions[head]) continue;

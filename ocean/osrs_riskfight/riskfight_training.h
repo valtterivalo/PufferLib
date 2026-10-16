@@ -125,7 +125,9 @@ static void riskfight_training_randomize(RiskfightTraining* training, RiskfightS
     p->current_attack = 100 + riskfight_dr_pick(training, 19);
     p->current_strength = 100 + riskfight_dr_pick(training, 19);
     p->current_defence = 90 + riskfight_dr_pick(training, 21);
-    p->current_hitpoints = 99 + riskfight_dr_pick(training, 23);
+    /* A pool kit keeps the hitpoints it starts with when they are below the account's 99 (the low-hitpoints Dharok's); a ranger's level varies below the boosted 112. */
+    if (!context->opp_kit || context->opp_kit->hitpoints >= 99) p->current_hitpoints = 99 + riskfight_dr_pick(training, 23);
+    if (context->opp_kit && context->opp_kit->ranged_level) p->current_ranged = 100 + riskfight_dr_pick(training, 13);
     if (context->loadout[1] == &RISKFIGHT_LIVE_LOADOUT) {
         static const uint8_t shields[] = {ITEM_AVERNIC_DEFENDER, ITEM_DRAGON_DEFENDER, ITEM_RUNE_DEFENDER};
         static const uint8_t legs[] = {ITEM_DRAGON_PLATELEGS, ITEM_RUNE_PLATELEGS};
@@ -195,7 +197,9 @@ static void riskfight_training_next_round(RiskfightTraining* training,
     RiskfightState* state, RiskfightContext* context) {
     const RiskfightProfile* profile = state->opponent_profile;
     float price = state->death_price;
+    context->keep_opp_kit = 1;
     riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
+    context->keep_opp_kit = 0;
     state->opponent_profile = profile;
     state->death_price = price;
     training->start_tick = 0;

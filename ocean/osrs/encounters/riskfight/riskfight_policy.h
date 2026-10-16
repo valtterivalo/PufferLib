@@ -195,6 +195,8 @@ typedef struct {
     int kind_slot[OSRS_CONSUMABLE_COUNT];
     uint8_t item_slot[ITEM_NONE + 1];
     uint8_t main_weapon, shield;
+    uint8_t weapons[RF_KIT_WEAPONS + 1]; /* every weapon in the bag, in slot order */
+    int weapon_count;
 } RiskfightObservedInventory;
 
 static int riskfight_is_switch_weapon(uint8_t weapon) {
@@ -202,7 +204,7 @@ static int riskfight_is_switch_weapon(uint8_t weapon) {
 }
 
 static RiskfightObservedInventory riskfight_observed_inventory(const float* obs) {
-    RiskfightObservedInventory inventory = {{0}, {0}, ITEM_NONE, ITEM_NONE};
+    RiskfightObservedInventory inventory = {{0}, {0}, ITEM_NONE, ITEM_NONE, {0}, 0};
     for (int slot = OSRS_INVENTORY_SIZE - 1; slot >= 0; slot--) {
         const OsrsItemContentMetadata* m = osrs_item_content_metadata(
             osrs_inventory_cell_obs_code_decode(obs[RF_INVENTORY_START + slot * RF_INVENTORY_WIDTH]));
@@ -210,6 +212,7 @@ static RiskfightObservedInventory riskfight_observed_inventory(const float* obs)
         inventory.item_slot[m->item_idx] = slot + 1;
         if (m->gear_slot == GEAR_SLOT_WEAPON && !riskfight_is_switch_weapon(m->item_idx))
             inventory.main_weapon = m->item_idx;
+        if (m->gear_slot == GEAR_SLOT_WEAPON && inventory.weapon_count <= RF_KIT_WEAPONS) inventory.weapons[inventory.weapon_count++] = m->item_idx;
         if (m->gear_slot == GEAR_SLOT_SHIELD) inventory.shield = m->item_idx;
     }
     return inventory;
@@ -280,8 +283,6 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     int hp = self.hitpoints;
     const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
     actions[RF_PRIMARY] = RF_ATTACK;
-    actions[RF_PRAYER] = OFFENSIVE_PRAYER_PIETY;
-    actions[RF_STYLE] = FIGHT_STYLE_AGGRESSIVE;
     int consume_band = (hp >= 40) + (hp >= 65) + (hp >= 73) + (hp >= 90);
     if (riskfight_sample_event(seed, tick, 11, profile->consume_pm[consume_band]))
         riskfight_script_consume(&self, &inventory, actions);
@@ -292,19 +293,51 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     OsrsHealthBarRange opp_hp = osrs_health_bar_range(opp_bar, OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121);
     int opp_upper = opp_hp.kind == OSRS_HEALTH_BAR_KNOWN ? opp_hp.upper : 121;
     int holding_maul = pvp_is_maul(self.weapon);
+    /* What his kit holds, read off what he wields and carries. Voidwaker, the mauls and the axe have plans of their own (below); every other weapon is a plain one:
+     * the main weapon is the plain weapon with the cheapest special (a whip, else the crossbow whose own special is the lower), another plain weapon with a
+     * special is the one he switches to for it. A kit of Voidwaker, mauls and axe alone keeps the old plan: Voidwaker main, the others for their specials. */
+    uint8_t kit_weapons[RF_KIT_WEAPONS + 2];
+    int kit_count = 0, has_vw = 0, has_axe = 0;
+    uint8_t maul_item = ITEM_NONE, plain_main = ITEM_NONE, plain_spec = ITEM_NONE;
+    kit_weapons[kit_count++] = self.weapon;
+    for (int i = 0; i < inventory.weapon_count; i++) kit_weapons[kit_count++] = inventory.weapons[i];
+    for (int i = 0; i < kit_count; i++) {
+        uint8_t w = kit_weapons[i];
+        if (w == ITEM_NONE) continue;
+        has_vw |= w == ITEM_VOIDWAKER;
+        has_axe |= w == ITEM_DHAROKS_GREATAXE;
+        if (pvp_is_maul(w) && (maul_item == ITEM_NONE || w == ITEM_GRANITE_MAUL_ORNATE)) maul_item = w;
+        if (riskfight_is_switch_weapon(w)) continue;
+        int key = osrs_spec_cost(w) * 256 + w;
+        if (plain_main == ITEM_NONE || key < osrs_spec_cost(plain_main) * 256 + plain_main) plain_main = w;
+        if (plain_spec == ITEM_NONE || key > osrs_spec_cost(plain_spec) * 256 + plain_spec) plain_spec = w;
+    }
+    if (plain_spec == plain_main) plain_spec = ITEM_NONE;
+    uint8_t generic_spec = plain_spec != ITEM_NONE ? plain_spec : plain_main != ITEM_NONE && osrs_spec_cost(plain_main) > 0 ? plain_main : ITEM_NONE;
+    int generic_cost = generic_spec == ITEM_NONE ? 100 : osrs_spec_cost(generic_spec);
     int axe_band = (opp_bar >= 12) + (opp_bar >= 24);
-    int axe_swing = hp < 99 &&
+    int axe_swing = has_axe && hp < 99 &&
         riskfight_sample_event(seed, attack_tick, 23, profile->axe_pm[axe_band]);
-    int vw_spec = obs[6] >= 0.5f && opponent[0] < 0.65f &&
+    int vw_spec = has_vw && obs[6] >= 0.5f && opponent[0] < 0.65f &&
         riskfight_sample_event(seed, attack_tick, 21, profile->vw_pm);
-    int maul_spec = !vw_spec && obs[6] >= 0.99f && opponent[0] < 0.65f && opp_upper <= 76 && hp < 99 &&
+    int maul_cost = maul_item == ITEM_NONE ? 100 : osrs_spec_cost(maul_item);
+    /* The ornate maul waits for the energy of two specials and lands both at once; the plain one costs 60 and gets one. */
+    int maul_specs = maul_item == ITEM_NONE ? 0 : maul_item == ITEM_GRANITE_MAUL_ORNATE ? 2 : 1;
+    int maul_spec = !vw_spec && maul_specs && obs[6] * 100 >= maul_cost * maul_specs - 1 && opponent[0] < 0.65f && opp_upper <= 76 && hp < 99 &&
         riskfight_sample_event(seed, tick, 22, profile->maul_pm);
-    int voidwaker_main = inventory.main_weapon == ITEM_NONE && (self.weapon == ITEM_VOIDWAKER || inventory.item_slot[ITEM_VOIDWAKER]);
-    uint8_t main_weapon = !riskfight_is_switch_weapon(self.weapon) ? self.weapon :
+    int generic_roll = generic_spec != ITEM_NONE && !vw_spec && !maul_spec && obs[6] * 100 >= generic_cost - 0.5f && opponent[0] < 0.65f &&
+        riskfight_sample_event(seed, attack_tick, 25, profile->vw_pm);
+    int voidwaker_main = plain_main == ITEM_NONE && inventory.main_weapon == ITEM_NONE && (self.weapon == ITEM_VOIDWAKER || inventory.item_slot[ITEM_VOIDWAKER]);
+    uint8_t main_weapon = plain_main != ITEM_NONE ? plain_main : !riskfight_is_switch_weapon(self.weapon) ? self.weapon :
         voidwaker_main ? ITEM_VOIDWAKER : inventory.main_weapon != ITEM_NONE ? inventory.main_weapon : self.weapon;
-    uint8_t weapon = vw_spec ? ITEM_VOIDWAKER : maul_spec ? ITEM_GRANITE_MAUL_ORNATE :
+    uint8_t weapon = vw_spec ? ITEM_VOIDWAKER : maul_spec ? maul_item : generic_roll ? generic_spec :
         axe_swing ? ITEM_DHAROKS_GREATAXE : main_weapon;
-    actions[RF_SPECIAL] = maul_spec ? 2 : !holding_maul && vw_spec != (obs[13] >= 0.5f);
+    int armed_wanted = vw_spec || generic_roll;
+    actions[RF_SPECIAL] = maul_spec ? maul_specs : !holding_maul && armed_wanted != (obs[13] >= 0.5f);
+    /* Ranged weapons are fought on Rigour and rapid, the rest on Piety and aggressive. */
+    int ranged_weapon = weapon != ITEM_NONE && get_item_attack_style(weapon) == ATTACK_STYLE_RANGED;
+    actions[RF_PRAYER] = ranged_weapon ? OFFENSIVE_PRAYER_RIGOUR : OFFENSIVE_PRAYER_PIETY;
+    actions[RF_STYLE] = ranged_weapon ? FIGHT_STYLE_RAPID : FIGHT_STYLE_AGGRESSIVE;
     actions[RF_WEAPON] = inventory.item_slot[weapon];
     if (!item_is_two_handed(weapon) && inventory.shield != ITEM_NONE)
         actions[RF_SHIELD] = inventory.item_slot[inventory.shield];

@@ -158,6 +158,10 @@ typedef struct {
     HumanInput policy_commands[2];
     RiskfightOpponent opponent;
     int kit_mix; /* training resets draw our kit between RISKFIGHT_LIVE_LOADOUT and RISKFIGHT_VW_LOADOUT (live_loadout=3) */
+    int opponent_pool; /* every reset draws his kit from the opponent pool (riskfight_kits.h); he is then scripted or OppFit, never self-play */
+    const RiskfightKit* opp_kit; /* the kit of this fight, NULL outside the pool */
+    uint32_t opp_roll;           /* the draw of his unseen ring, kept with the kit across the rounds of a session */
+    int keep_opp_kit;            /* the next reset is another round against the same opponent: his kit and ring stay */
     int self_play;
     int human_player;
     float damage_reward_coeff;
@@ -276,6 +280,8 @@ static void riskfight_build_vw_loadout(void) { /* called by riskfight_build_live
     assert(slot == 28);
     RISKFIGHT_VW_LOADOUT = loadout;
 }
+
+#include "riskfight_kits.h"
 
 static void riskfight_init_context(EncounterContext* context) {
     RiskfightContext* ctx = (RiskfightContext*)context;
@@ -411,6 +417,15 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
     uint32_t rng = seed ? seed : s->env.rng_state;
     ctx->motor.pending_count = 0;
     ctx->motor.rng = osrs_lowbias32(rng ^ 0x6d6f746fu) | 1;
+    if (!ctx->opponent_pool) ctx->opp_kit = NULL;
+    else {
+        if (!ctx->keep_opp_kit) {
+            ctx->opp_kit = riskfight_pool_pick((float)(osrs_lowbias32(rng ^ 0x6b697473u) >> 8) / 16777216.0f);
+            ctx->opp_roll = osrs_lowbias32(rng ^ 0x72696e67u);
+        }
+        assert(ctx->opp_kit);
+        ctx->loadout[1] = &RISKFIGHT_POOL_LOADOUT[ctx->opp_kit - RISKFIGHT_POOL];
+    }
     memset(s, 0, sizeof(*s));
     s->env.rng_state = rng;
     s->death_price = 1;
@@ -445,6 +460,7 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
         osrs_actor_route_cache_clear(&ctx->routes[i]);
         s->script_seed[i] = osrs_lowbias32(s->env.rng_state + (uint32_t)(i + 1) * 0x9e3779b9U);
     }
+    if (ctx->opp_kit) riskfight_kit_apply(s, ctx->opp_kit, ctx->opp_roll);
     s->opponent_profile = riskfight_pick_profile(ctx->opponent, osrs_lowbias32(s->env.rng_state + 3 * 0x9e3779b9U));
     riskfight_observe_visible(s, 0, 1);
     riskfight_observe_visible(s, 1, 1);

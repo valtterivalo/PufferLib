@@ -171,7 +171,9 @@ static inline OsrsThreatWeapon osrs_threat_weapon(const uint8_t equipment[NUM_GE
     EquipmentBonuses b;
     osrs_sum_equipment_bonuses(loadout, &b);
     int style = osrs_threat_style_of_weapon(weapon);
-    OsrsThreatWeapon w = {.item = weapon, .style = (uint8_t)style, .melee_type = -1, .spec_type = -1};
+    OsrsThreatWeapon w;
+    memset(&w, 0, sizeof(w)); /* the struct is hashed byte for byte by the determinism proofs: no indeterminate padding */
+    w.item = weapon; w.style = (uint8_t)style; w.melee_type = -1; w.spec_type = -1;
     int speed = b.attack_speed + osrs_stance_speed_mod(who->stance);
     assert(speed >= 1);
     w.speed = (uint8_t)speed;

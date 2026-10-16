@@ -76,6 +76,9 @@ void puf_init(Env* env, Dict* kwargs) {
     if (deployable) riskfight_put_int((EncounterState*)&env->state, (EncounterContext*)&env->context, "deployable", (int)deployable->value);
     DictItem* live = dict_find(kwargs, "live_loadout");
     if (live) riskfight_put_int((EncounterState*)&env->state, (EncounterContext*)&env->context, "live_loadout", (int)live->value);
+    DictItem* pool = dict_find(kwargs, "opponent_pool");
+    if (pool) riskfight_put_int((EncounterState*)&env->state, (EncounterContext*)&env->context, "opponent_pool", (int)pool->value);
+    assert(!env->context.opponent_pool || !dict_get(kwargs, "self_play")); /* pool kits are played by the script or OppFit */
     const char* reward_keys[] = {"damage_reward_coeff", "teleport_penalty", "chance_reward_coeff"};
     for (int i = 0; i < 3; i++) {
         DictItem* item = dict_find(kwargs, reward_keys[i]);
@@ -126,7 +129,8 @@ static void riskfight_native_reset(Env* env) {
     env->context.opp_hook = NULL;
     env->context.opp_after = NULL;
     env->context.opp_user = NULL;
-    if (env->oppfit && encounter_rand_float(&env->training.rng) < env->oppfit_probability) {
+    /* OppFit plays the melee kits whose specials it was fitted on (VW, maul, AGS, claws); every other pool kit is left to the script. */
+    if (env->oppfit && (!env->context.opp_kit || env->context.opp_kit->oppfit_ok) && encounter_rand_float(&env->training.rng) < env->oppfit_probability) {
         oppfit_reset(env->oppfit, &env->state, xorshift32(&env->training.rng) | 1);
         env->context.opp_user = env->oppfit;
         env->context.opp_hook = oppfit_actions;
