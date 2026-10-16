@@ -13,7 +13,7 @@ static void reset(float damage_coeff) {
     riskfight_put_float((EncounterState*)&env->state, (EncounterContext*)&env->context,
         "damage_reward_coeff", damage_coeff);
     env->context.chance_reward_coeff = 0;
-    env->session_elapsed = env->session_fights = 0;
+    env->session_elapsed = env->session_fights = env->wait_left = 0;
     env->session_stake = 0;
     memset(&env->log, 0, sizeof(env->log));
     memset(actions, 0, sizeof(actions));
@@ -218,6 +218,7 @@ static void test_native_chance_logs(void) {
     assert(env->log.direct_ko_chance_mass > 0 && env->log.direct_ko_chance_mass <= 1);
     assert(env->log.chance_reward == 0.25f * env->log.direct_ko_chance_mass);
     assert(env->log.episode_return == 1 + env->log.chance_reward);
+    while (env->wait_left > 0) puf_step(env); /* the next fight starts clean */
     assert(env->state.direct_ko_chance_mass[0] == 0 && env->state.chance_rewards[0] == 0);
 }
 

@@ -28,6 +28,31 @@ static Env* make_env(int session_ticks, double price, unsigned rng) {
 
 static void destroy(void) { puf_close(env); free(env); env = NULL; }
 
+/** Steps through the wait that follows a fight and returns its length: every tick is a step of no choice, the observation says so (flag and ticks left), the
+ * mask allows only the no-op, the reward is 0 and the clock advances one tick. The next fight is on the step the wait ends. */
+static int wait_out(void) {
+    int ticks = 0;
+    while (env->wait_left > 0) {
+        int left = env->wait_left;
+        for (int seat = 0; seat < 2; seat++) {
+            const float* block = observations[seat] + RF_SESSION_START;
+            assert(block[2] == 1 && fabsf(block[3] - (left >= RF_WAIT_SCALE_TICKS ? 1.0f : (float)left / RF_WAIT_SCALE_TICKS)) < 1e-6f);
+            int offset = 0;
+            for (int head = 0; head < RF_HEADS; head++) {
+                for (int a = 0; a < RF_ACTION_DIMS[head]; a++) assert(masks[seat][offset + a] == (a == 0));
+                offset += RF_ACTION_DIMS[head];
+            }
+        }
+        int before = env->session_elapsed;
+        puf_step(env);
+        assert(rewards[0] == 0 && rewards[1] == 0);
+        ticks++;
+        if (terminals[0]) break; /* the budget ran out in the wait: the session was reset */
+        assert(env->session_elapsed == before + 1);
+    }
+    return ticks;
+}
+
 static int delay_min(const RiskfightDelay* d) { return d->ticks[0]; }
 static int delay_max(const RiskfightDelay* d) { return d->ticks[RF_DELAY_DECILES - 1]; }
 static int count_food(const Player* p) {
@@ -62,7 +87,9 @@ static void test_supplies_persist_across_a_fight_boundary(void) {
     puf_step(env);
     assert(terminals[0] == 0 && terminals[1] == 0);
     assert(env->log.kills == 1 && env->log.n == 0 && env->session_fights == 1);
-    int delay = env->session_elapsed - before - 1;
+    assert(env->wait_left > 0 && env->state.env.episode_over); /* the wait: the fight's last state stays, the clock runs */
+    int delay = wait_out();
+    assert(env->session_elapsed - before == 1 + delay);
     assert(delay >= delay_min(&RF_DELAY_SEARCH) && delay <= delay_max(&RF_DELAY_SEARCH));
     us = &env->state.env.players[0];
     assert(env->state.env.tick == 0 && !env->state.env.episode_over);
@@ -89,6 +116,7 @@ static void test_the_gap_is_spent_eating(void) {
     us->current_hitpoints = 80;
     env->state.env.players[1].current_hitpoints = 0;
     puf_step(env);
+    wait_out();
     us = &env->state.env.players[0];
     assert(us->current_hitpoints >= us->base_hitpoints && count_food(us) < food && count_food(us) >= food - 3);
     assert(us->food_timer == 0 && us->attack_timer == 0 && !us->ate_food_this_tick);
@@ -100,6 +128,7 @@ static void test_the_gap_is_spent_eating(void) {
     us->current_hitpoints = 80;
     env->state.env.players[1].current_hitpoints = 0;
     puf_step(env);
+    wait_out();
     assert(env->state.env.players[0].current_hitpoints <= 88); /* natural regeneration only */
     destroy();
 }
@@ -115,7 +144,8 @@ static void test_death_refills_and_pays_the_respawn(void) {
     int before = env->session_elapsed;
     puf_step(env);
     assert(terminals[0] == 0 && env->log.deaths == 1);
-    int delay = env->session_elapsed - before - 1;
+    int delay = wait_out();
+    assert(env->session_elapsed - before == 1 + delay);
     assert(delay >= delay_min(&RF_DELAY_RESPAWN) && delay <= delay_max(&RF_DELAY_RESPAWN));
     us = &env->state.env.players[0];
     assert(count_food(us) == full_food && us->special_energy == 100 && us->current_hitpoints == RISKFIGHT_DEFAULT_LOADOUT.hitpoints);
@@ -147,6 +177,9 @@ static void test_teleport_refills_and_costs_the_restock(void) {
     puf_step(env);
     assert(terminals[0] == 0 && env->log.escapes == 1 && env->log.self_teleports == 1);
     assert(rewards[0] == 0);
+    /* The wait is the restock delay in steps: 1 + expected ticks of the session, one step each, all of them without reward. */
+    assert(env->wait_left == expected);
+    assert(wait_out() == expected);
     assert(env->session_elapsed - before == 1 + expected);
     assert(expected >= (rematch ? delay_min(&RF_DELAY_REMATCH) : delay_min(&RF_DELAY_RESTOCK)));
     assert(expected <= (rematch ? delay_max(&RF_DELAY_REMATCH) : delay_max(&RF_DELAY_RESTOCK)));
@@ -169,6 +202,7 @@ static void teleports(int our_specs, int his_energy, int he_teleports, int trial
         actions[0][RF_PRIMARY] = RF_TELEPORT;
         actions[1][RF_PRIMARY] = he_teleports ? RF_TELEPORT : 0;
         puf_step(env);
+        wait_out();
         assert(env->log.self_teleports == 1);
         *rudes += env->log.rude_teleports == 1;
         *rematches += env->log.rematches == 1;
@@ -225,9 +259,11 @@ static void test_reward_scale_stays_within_one(void) {
     env->state.env.players[0].current_hitpoints = 0;
     puf_step(env);
     assert(rewards[0] == -1.0f && rewards[1] == 1 * RF_REWARD_SCALE);
+    wait_out();
     env->state.env.players[1].current_hitpoints = 0;
     puf_step(env);
     assert(rewards[0] == 1 * RF_REWARD_SCALE && rewards[1] == -1.0f);
+    wait_out();
     env->state.env.players[0].current_hitpoints = 0;
     env->state.env.players[1].current_hitpoints = 0;
     puf_step(env);
@@ -247,6 +283,7 @@ static void test_reward_scale_stays_within_one(void) {
         }
         float expected = (fight & 1) ? 1 * RF_REWARD_SCALE : -price * RF_REWARD_SCALE;
         assert(fabsf(rewards[0] - expected) < 1e-6f);
+        if (!terminals[0]) wait_out();
         if (terminals[0]) break;
     }
     assert(most >= RF_REWARD_SCALE);
@@ -280,7 +317,8 @@ static void test_session_of_n_ticks_ends(void) {
     assert(delay_min(&RF_DELAY_SEARCH) >= 1);
     env->state.env.players[1].current_hitpoints = 0;
     puf_step(env);
-    assert(terminals[0] == 1 && env->log.n == 1 && env->log.kills == 1);
+    assert(terminals[0] == 0 && env->wait_left > 0 && env->log.kills == 1);
+    assert(wait_out() == 1 && terminals[0] == 1 && env->log.n == 1 && env->log.kills == 1);
     destroy();
     /* A fight still running when the budget runs out earns nothing. */
     env = make_env(budget, 1, 34);
@@ -290,11 +328,49 @@ static void test_session_of_n_ticks_ends(void) {
     destroy();
 }
 
+/* A wait is real ticks: a 256-tick restock is 256 steps of zero reward, and a session takes as many steps as it has ticks. */
+static void test_waits_are_steps(void) {
+    env = make_env(6000, 1, 51);
+    actions[0][RF_PRIMARY] = RF_TELEPORT;
+    puf_step(env);
+    assert(env->wait_left > 0);
+    env->wait_left = env->wait_transition.delay = 256;
+    int before = env->session_elapsed, steps = 0;
+    memset(actions, 0, sizeof(actions));
+    while (env->wait_left > 0) {
+        puf_step(env);
+        steps++;
+        assert(rewards[0] == 0 && rewards[1] == 0 && terminals[0] == 0 && terminals[1] == 0);
+        assert(env->session_elapsed == before + steps);
+        assert(env->wait_left == 0 ? observations[0][RF_SESSION_START + 2] == 0 : observations[0][RF_SESSION_START + 2] == 1);
+    }
+    assert(steps == 256 && env->state.env.tick == 0 && !env->state.env.episode_over);
+    assert(env->log.wait_ticks == 256);
+    destroy();
+    /* A whole session of teleports and waits: one step per tick, the last of them terminal. */
+    const int budget = 3000;
+    env = make_env(budget, 0, 52);
+    int total = 0;
+    float reward_in_waits = 0;
+    while (!terminals[0]) {
+        actions[0][RF_PRIMARY] = RF_TELEPORT;
+        int waiting = env->wait_left > 0;
+        puf_step(env);
+        total++;
+        if (waiting) reward_in_waits += fabsf(rewards[0]) + fabsf(rewards[1]);
+        assert(total <= budget);
+    }
+    assert(total == budget && reward_in_waits == 0 && env->log.n == 1);
+    assert(env->log.wait_ticks > 0 && env->log.wait_ticks + env->log.episode_length >= budget - 1);
+    printf("waits: a session of %d ticks is %d steps, %.0f of them waiting between %.0f fights\n", budget, total, env->log.wait_ticks, env->log.rounds);
+    destroy();
+}
+
 static void test_session_observation(void) {
     env = make_env(6000, 1, 41);
     float* block = observations[0] + RF_SESSION_START;
     assert(RF_OBS_SIZE == RF_SESSION_START + RF_SESSION_SIZE);
-    assert(block[0] == 1 && block[1] == 1);
+    assert(block[0] == 1 && block[1] == 1 && block[2] == 0 && block[3] == 0);
     env->session_elapsed = 6000 - RF_SESSION_HORIZON_TICKS / 2;
     puf_step(env);
     assert(fabsf(block[0] - (RF_SESSION_HORIZON_TICKS / 2 - 1) / (float)RF_SESSION_HORIZON_TICKS) < 1e-3f);
@@ -324,6 +400,7 @@ int main(void) {
     test_rude_teleport_loses_the_opponent();
     test_reward_scale_stays_within_one();
     test_session_of_n_ticks_ends();
+    test_waits_are_steps();
     test_session_observation();
     puts("Riskfight session contracts passed");
 }

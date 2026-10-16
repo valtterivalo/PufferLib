@@ -2,22 +2,24 @@
  * and he had done and had left when we teleported. The training dashboard shows only a fixed subset of the log; this shows all of it, per session.
  *
  *   cc -std=gnu11 -O2 -I. -Isrc -I$RAYLIB_INC -o session_probe ocean/osrs/tests/session_probe.c riskfight_oppfit_bridge.o -lm -lpthread
- *   RF_OPPFIT_MODEL=... RF_OPPFIT_EAT=... session_probe CHECKPOINT HIDDEN LAYERS SESSIONS [argmax|sample] [oppfit_probability] [seed] [session_ticks]
+ *   RF_OPPFIT_MODEL=... RF_OPPFIT_EAT=... session_probe CHECKPOINT HIDDEN LAYERS SESSIONS [argmax|sample] [oppfit_probability] [seed] [session_ticks] [opponent_pool]
  *
- * The env is the training recipe's (self_play=0, live kits mixed, deployable, motor, domain randomization, price drawn per fight). */
+ * The env is the training recipe's (self_play=0, live kits mixed, deployable, motor, domain randomization, price drawn per fight; opponent_pool=1 draws
+ * his kit from the pool). */
 #include "../../osrs_riskfight/osrs_riskfight.h"
 #include "rf_net.h"
 
 int main(int argc, char** argv) {
-    if (argc < 5) { fprintf(stderr, "usage: session_probe CHECKPOINT HIDDEN LAYERS SESSIONS [argmax|sample] [oppfit_probability] [seed] [session_ticks]\n"); return 2; }
+    if (argc < 5) { fprintf(stderr, "usage: session_probe CHECKPOINT HIDDEN LAYERS SESSIONS [argmax|sample] [oppfit_probability] [seed] [session_ticks] [opponent_pool]\n"); return 2; }
     int sessions = atoi(argv[4]);
     int hard = !(argc > 5 && !strcmp(argv[5], "sample"));
     double oppfit = argc > 6 ? atof(argv[6]) : 0.5;
     unsigned seed = argc > 7 ? (unsigned)atoi(argv[7]) : 1;
     double session_ticks = argc > 8 ? atof(argv[8]) : 3000;
+    double pool = argc > 9 ? atof(argv[9]) : 0;
     DictItem items[] = {{.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 0}, {.key = "session_ticks", .value = session_ticks},
         {.key = "curveball_probability", .value = 0.1}, {.key = "death_price", .value = 0}, {.key = "live_loadout", .value = 3}, {.key = "deployable", .value = 1},
-        {.key = "motor", .value = 1}, {.key = "domain_randomization", .value = 1}, {.key = "oppfit_probability", .value = oppfit}};
+        {.key = "motor", .value = 1}, {.key = "domain_randomization", .value = 1}, {.key = "oppfit_probability", .value = oppfit}, {.key = "opponent_pool", .value = pool}};
     Dict kwargs = {.items = items, .size = sizeof(items) / sizeof(*items)};
     Env* env = (Env*)calloc(1, sizeof(*env));
     env->rng = seed;
@@ -40,7 +42,8 @@ int main(int argc, char** argv) {
     }
     Dict out = {0};
     puf_log(&env->log, &out);
-    printf("sessions %d steps %ld mode %s oppfit %.2f session_ticks %.0f\n", sessions, steps, hard ? "argmax" : "sample", oppfit, session_ticks);
+    printf("sessions %d steps %ld mode %s oppfit %.2f session_ticks %.0f pool %.0f; %.1f%% of the steps are waits between fights\n", sessions, steps,
+        hard ? "argmax" : "sample", oppfit, session_ticks, pool, 100.0 * env->log.wait_ticks / steps);
     const Log* l = &env->log;
     double fights = l->rounds, tp = l->self_teleports;
     printf("per session: fights %.2f kills %.2f deaths %.2f mutual %.2f our_teleports %.2f his_teleports %.2f timeouts %.2f rematches %.2f rude %.2f net_stake/h %.3f\n",

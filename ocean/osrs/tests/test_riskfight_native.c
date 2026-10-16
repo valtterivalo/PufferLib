@@ -1,11 +1,15 @@
 #include "../../osrs_riskfight/osrs_riskfight.h"
 #include <assert.h>
 
+static Env* env;
+/** The wait between two fights is steps of its own: steps through them, to the first tick of the next fight. */
+static void wait_out(void) { while (env->wait_left > 0) puf_step(env); }
+
 int main(void) {
     DictItem items[] = {{.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 1},
         {.key = "session_ticks", .value = 100000}, {.key = "curveball_probability", .value = 0}};
     Dict kwargs = {.items = items, .size = sizeof(items) / sizeof(*items)};
-    Env* env = (Env*)calloc(1, sizeof(*env));
+    env = (Env*)calloc(1, sizeof(*env));
     float obs[2][RF_OBS_SIZE], actions[2][RF_HEADS] = {{0}}, rewards[2], terminals[2];
     unsigned char masks[2][RF_MASK_SIZE];
     env->rng = 123;
@@ -19,6 +23,7 @@ int main(void) {
     puf_step(env);
     /* A teleport ends the fight, not the session: the next fight starts at once from our side's view (refilled, tick 0). */
     assert(terminals[0] == 0 && terminals[1] == 0 && rewards[0] == 0 && rewards[1] == 0);
+    wait_out(); /* the restock is a wait of its own ticks */
     assert(env->state.env.tick == 0 && env->log.escapes == 1);
     assert(env->log.self_teleports == 1 && env->log.opponent_teleports == 0);
     assert(env->log.self_escape_healing[OSRS_ESCAPE_TRIPLE_EATS] == 1);
@@ -36,13 +41,16 @@ int main(void) {
     puf_step(env);
     assert(env->log.policy_0_score == 1 && env->log.draw_rate == 0);
     assert(env->log.kills == 1 && env->session_stake == 1);
+    wait_out();
     env->state.env.players[0].current_hitpoints = 0;
     puf_step(env);
     assert(env->log.policy_0_score == 1 && env->log.deaths == 1 && env->session_stake == 0);
+    wait_out();
     env->state.env.players[0].current_hitpoints = 0;
     env->state.env.players[1].current_hitpoints = 0;
     puf_step(env);
     assert(env->log.policy_0_score == 1.5f && env->log.draw_rate == 1);
+    wait_out();
     Dict output = {0};
     puf_log(&env->log, &output);
     assert(dict_get(&output, "policy_0_score") == 1.5);
@@ -51,8 +59,10 @@ int main(void) {
     actions[1][RF_PRIMARY] = RF_TELEPORT;
     puf_step(env);
     assert(env->log.opponent_teleports == 1 && env->log.self_teleports == 0);
+    wait_out();
     actions[0][RF_PRIMARY] = RF_TELEPORT;
     puf_step(env);
+    wait_out();
     assert(env->log.both_teleports == 1 && env->log.self_teleports == 1 && env->log.opponent_teleports == 2);
     assert(env->log.n == 0 && env->session_fights == 6);
     assert(env->log.episode_length > 0);
@@ -101,6 +111,7 @@ int main(void) {
         actions[0][RF_PRIMARY] = RF_TELEPORT;
         puf_step(env);
         assert(terminals[0] == 0 && terminals[1] == 0);
+        wait_out();
         assert(env->state.env.tick == 0 && env->state.env.players[0].current_hitpoints == RISKFIGHT_DEFAULT_LOADOUT.hitpoints);
         assert(!env->state.escaped[0] && env->log.self_teleports == round + 1);
     }
@@ -124,6 +135,7 @@ int main(void) {
     env->state.env.tick = RISKFIGHT_ROUND_TICKS - 1;
     puf_step(env);
     assert(terminals[0] == 0 && terminals[1] == 0 && rewards[0] == -RF_REWARD_SCALE && rewards[1] == -RF_REWARD_SCALE);
+    wait_out();
     assert(env->state.env.tick == 0 && env->log.timeouts == 1);
     puf_close(env); free(env);
     enum { SEEDED_ENVS = 8192 };

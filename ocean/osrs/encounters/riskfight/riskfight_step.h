@@ -529,13 +529,16 @@ static void riskfight_step(EncounterState* state, EncounterContext* context, con
     RiskfightState* s = (RiskfightState*)state;
     RiskfightContext* ctx = (RiskfightContext*)context;
     int opponent_actions[RF_HEADS];
-    if (!ctx->self_play) {
+    /* Seat 1 is a second agent (self-play) unless the script or OppFit plays him this fight; both read him as they would a lone opponent. */
+    const int seat_agent = ctx->self_play && !ctx->opp_driven;
+    if (!seat_agent) {
         if (ctx->opp_hook) ctx->opp_hook(ctx->opp_user, s, opponent_actions);
         else {
             float obs[RF_OBS_SIZE];
             riskfight_write_script_observation(s, 1, obs);
             riskfight_script(obs, s->opponent_profile, s->script_seed[1], s->consume_ticks[1], opponent_actions);
         }
+        if (ctx->opp_omit) memset(opponent_actions, 0, sizeof(opponent_actions));
         if (s->opp_lag > 0) {
             for (int k = 3; k > 0; k--) memcpy(s->opp_ring[k], s->opp_ring[k - 1], sizeof(s->opp_ring[k]));
             memcpy(s->opp_ring[0], opponent_actions, sizeof(s->opp_ring[0]));
@@ -544,7 +547,7 @@ static void riskfight_step(EncounterState* state, EncounterContext* context, con
     }
     riskfight_policy_commands(s, 0, actions, &ctx->policy_commands[0]);
     riskfight_motor_filter(ctx, s, &ctx->policy_commands[0]);
-    riskfight_policy_commands(s, 1, ctx->self_play ? actions + RF_HEADS : opponent_actions, &ctx->policy_commands[1]);
+    riskfight_policy_commands(s, 1, seat_agent ? actions + RF_HEADS : opponent_actions, &ctx->policy_commands[1]);
     riskfight_step_queues(s, ctx, &ctx->policy_commands[0].commands, &ctx->policy_commands[1].commands);
     if (ctx->opp_after) ctx->opp_after(ctx->opp_user, s);
 }

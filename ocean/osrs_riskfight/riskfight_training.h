@@ -9,6 +9,7 @@ typedef struct {
     float curveball_probability;
     int randomize;
     float death_price; /* 0: drawn per fight, log-uniform in [0.4, 2.5]; else fixed */
+    float pool_probability; /* self-play: the share of net-played opponents that wear a pool kit instead of one of our kits (needs opponent_pool) */
 } RiskfightTrainingConfig;
 
 typedef enum { RF_TRAIN_LEARNED, RF_TRAIN_SCRIPTED } RiskfightTrainingOpponent;
@@ -20,6 +21,7 @@ typedef struct {
     uint32_t rng;
     uint64_t ticks;
     RiskfightTrainingOpponent opponent;
+    const RiskfightProfile* scripted; /* the profile of a scripted opponent, drawn with the opponent and put on him after the reset */
     RiskfightTrainingStart start;
     int start_tick;
     int omissions;
@@ -42,6 +44,9 @@ static RiskfightTrainingConfig riskfight_training_config(Dict* kwargs) {
     DictItem* randomize = dict_find(kwargs, "domain_randomization");
     config.randomize = randomize ? (int)randomize->value : 0;
     assert(config.randomize == 0 || config.randomize == 1);
+    DictItem* pool_share = dict_find(kwargs, "selfplay_pool_probability");
+    config.pool_probability = pool_share ? (float)pool_share->value : 0;
+    assert(config.pool_probability >= 0 && config.pool_probability <= 1);
     for (int i = 0; i < 5; i++) {
         DictItem* item = dict_find(kwargs, names[i]);
         if (item) values[i] = item->value;
@@ -90,6 +95,11 @@ static const RiskfightProfile* riskfight_training_profile(RiskfightTraining* tra
 static RiskfightTrainingStart riskfight_training_prefix(RiskfightState* state,
     RiskfightContext* context, const RiskfightProfile* first, const RiskfightProfile* second, int ticks) {
     assert(context->self_play);
+    /* Both sides are scripts here, whoever will play him afterwards. */
+    const int driven = context->opp_driven;
+    void (*const hook)(void*, const void*, int*) = context->opp_hook;
+    context->opp_driven = 0;
+    context->opp_hook = NULL;
     const RiskfightProfile* scripts[2] = {first, second};
     for (int tick = 0; tick < ticks; tick++) {
         int actions[2 * RF_HEADS];
@@ -100,10 +110,16 @@ static RiskfightTrainingStart riskfight_training_prefix(RiskfightState* state,
         }
         riskfight_step((EncounterState*)state, (EncounterContext*)context, actions);
         if (state->env.episode_over) {
+            context->opp_driven = driven;
+            context->opp_hook = hook;
+            context->keep_opp_kit = 1; /* the opponent of the prefix is the one that steps up */
             riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
+            context->keep_opp_kit = 0;
             return RF_START_PREFIX_TERMINAL;
         }
     }
+    context->opp_driven = driven;
+    context->opp_hook = hook;
     riskfight_training_clear_returns(state);
     return RF_START_MIDFIGHT;
 }
@@ -155,18 +171,33 @@ static void riskfight_training_randomize(RiskfightTraining* training, RiskfightS
     state->opponent_profile = profile;
 }
 
-/** A new opponent steps up to a freshly reset fight: his price, who plays him (learned, or a scripted human or curveball), and his randomized side. A
- * midfight start (a scaffold that is off by default) happens only at the first fight of a session. */
-static RiskfightTrainingStart riskfight_training_new_opponent(RiskfightTraining* training, RiskfightState* state,
-    RiskfightContext* context, int frozen_policy, int allow_midfight) {
-    state->death_price = training->config.death_price > 0 ? training->config.death_price :
-        0.4f * powf(RF_PRICE_MAX_X10 / 4.0f, encounter_rand_float(&training->rng));
+/** Who plays the next new opponent and what he wears, drawn before his reset. He is played by the script or OppFit (the lone opponent of a self_play 0 env;
+ * in a self-play env with a frozen policy, with probability scripted_probability) or by a net in seat 1: the learning policy, or the frozen checkpoint the
+ * env is tagged with. The script and OppFit play pool kits (needs opponent_pool); a net wears a pool kit with selfplay_pool_probability, else one of our
+ * kits, drawn as ours are (live_loadout 3). */
+static void riskfight_training_draw_opponent(RiskfightTraining* training, RiskfightContext* context, int frozen_policy) {
     training->opponent = RF_TRAIN_LEARNED;
-    const RiskfightProfile* scripted = NULL;
+    training->scripted = NULL;
     if (frozen_policy > 0 && riskfight_training_draw(training, training->config.scripted_probability)) {
         training->opponent = RF_TRAIN_SCRIPTED;
-        scripted = riskfight_training_profile(training);
+        training->scripted = riskfight_training_profile(training);
     }
+    context->opp_driven = training->opponent == RF_TRAIN_SCRIPTED;
+    const int driven = !context->self_play || context->opp_driven;
+    context->loadout[1] = context->opp_default;
+    context->opp_plain = 0;
+    if (!driven) {
+        context->opp_plain = !riskfight_training_draw(training, training->config.pool_probability);
+        if (context->kit_mix) context->loadout[1] = encounter_rand_int(&training->rng, 2) ? &RISKFIGHT_VW_LOADOUT : &RISKFIGHT_LIVE_LOADOUT;
+    }
+}
+
+/** A new opponent steps up to a freshly reset fight (riskfight_training_draw_opponent before the reset): his price, who plays him, and his randomized side.
+ * A midfight start (a scaffold that is off by default) happens only at the first fight of a session. */
+static RiskfightTrainingStart riskfight_training_new_opponent(RiskfightTraining* training, RiskfightState* state,
+    RiskfightContext* context, int allow_midfight) {
+    state->death_price = training->config.death_price > 0 ? training->config.death_price :
+        0.4f * powf(RF_PRICE_MAX_X10 / 4.0f, encounter_rand_float(&training->rng));
     RiskfightTrainingStart start = RF_START_FRESH;
     if (allow_midfight && riskfight_training_draw(training, training->config.midfight_probability)) {
         const RiskfightProfile* first = riskfight_training_profile(training);
@@ -174,7 +205,7 @@ static RiskfightTrainingStart riskfight_training_new_opponent(RiskfightTraining*
         int ticks = 1 + encounter_rand_int(&training->rng, training->config.midfight_max_ticks);
         start = riskfight_training_prefix(state, context, first, second, ticks);
     }
-    if (scripted) state->opponent_profile = scripted;
+    if (training->scripted) state->opponent_profile = training->scripted;
     riskfight_training_randomize(training, state, context);
     return start;
 }
@@ -183,16 +214,17 @@ static RiskfightTrainingStart riskfight_training_new_opponent(RiskfightTraining*
 static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* training,
     RiskfightState* state, RiskfightContext* context, int frozen_policy) {
     if (context->kit_mix) context->loadout[0] = encounter_rand_int(&training->rng, 2) ? &RISKFIGHT_VW_LOADOUT : &RISKFIGHT_LIVE_LOADOUT;
+    riskfight_training_draw_opponent(training, context, frozen_policy);
     riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
-    RiskfightTrainingStart start = riskfight_training_new_opponent(training, state, context, frozen_policy, 1);
+    RiskfightTrainingStart start = riskfight_training_new_opponent(training, state, context, 1);
     training->start_tick = state->env.tick;
     training->start = start;
     training->omissions = 0;
     return start;
 }
 
-/** The next fight of the session after the transition `t`: our supplies persist unless we died or teleported; the opponent persists, with his supplies, only in a
- * rematch, otherwise a new one (and a new price) steps up. */
+/** The next fight of the session after the transition `t`: our supplies persist unless we died or teleported; the opponent persists, with his kit and
+ * supplies, only in a rematch, otherwise a new one steps up (a new kit, a new price, a new player). */
 static void riskfight_training_next_fight(RiskfightTraining* training, RiskfightState* state,
     RiskfightContext* context, const RiskfightTransition* t, int frozen_policy) {
     RiskfightCarry carry[2];
@@ -200,6 +232,7 @@ static void riskfight_training_next_fight(RiskfightTraining* training, Riskfight
     const RiskfightProfile* profile = state->opponent_profile;
     float price = state->death_price;
     int opp_lag = state->opp_lag;
+    if (!t->rematch) riskfight_training_draw_opponent(training, context, frozen_policy);
     context->keep_opp_kit = t->rematch; /* a rematch keeps his kit and ring; a new opponent draws a new pool kit */
     riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
     context->keep_opp_kit = 0;
@@ -208,19 +241,13 @@ static void riskfight_training_next_fight(RiskfightTraining* training, Riskfight
         state->opponent_profile = profile;
         state->death_price = price;
         state->opp_lag = opp_lag;
-    } else riskfight_training_new_opponent(training, state, context, frozen_policy, 0);
+    } else riskfight_training_new_opponent(training, state, context, 0);
     training->start_tick = 0;
     training->start = RF_START_FRESH;
 }
 
-static int riskfight_training_actions(RiskfightTraining* training,
-    const RiskfightState* state, int frozen_policy, int* actions) {
-    if (training->opponent != RF_TRAIN_SCRIPTED) return 0;
-    assert(frozen_policy > 0);
-    float observation[RF_OBS_SIZE];
-    riskfight_write_script_observation(state, 1, observation);
-    int omitted = riskfight_training_draw(training, riskfight_training_omission(training));
-    if (omitted) memset(actions + RF_HEADS, 0, RF_HEADS * sizeof(int));
-    else riskfight_script(observation, state->opponent_profile, state->script_seed[1], state->consume_ticks[1], actions + RF_HEADS);
-    return omitted;
+/** Whether the script or OppFit playing seat 1 of a self-play env does nothing this tick: scripted_omission_initial, annealed to 0 over
+ * scripted_omission_decay_ticks (steps of the env). Only the scripted share of a self-play env has any. */
+static int riskfight_training_omit(RiskfightTraining* training) {
+    return training->opponent == RF_TRAIN_SCRIPTED && riskfight_training_draw(training, riskfight_training_omission(training));
 }

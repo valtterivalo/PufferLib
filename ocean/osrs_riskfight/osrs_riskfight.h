@@ -38,6 +38,8 @@ struct Log {
     float ticks_tentacle, ticks_axe, ticks_voidwaker, ticks_maul;
     float swings, aligned_swings, adjacent_swings, spec_swings, spec_aligned, spec_adjacent;
     float oppfit_episodes;
+    float wait_ticks; /* steps spent waiting between fights */
+    float fights_pool, fights_selfplay, fights_frozen, fights_script; /* fights by who played seat 1 (the rest with oppfit_episodes) and by pool kit */
     float stops, ready_idle, vengs, eats, stop_spec, veng_spec, stop_veng_spec, spec_delay, norm_delay, hard_eats, hard_eats_zero;
 };
 struct Env {
@@ -47,6 +49,8 @@ struct Env {
     Agent agents[2];
     int tag, boundary_reached;
     int session_elapsed, session_fights; /* game ticks spent so far (fights and delays), fights ended */
+    int wait_left;                       /* ticks of the wait between two fights still to pass: each is a step of no choice, reward 0 */
+    RiskfightTransition wait_transition; /* what the wait leads to */
     float session_stake;                 /* kills minus price times deaths so far, in kill units */
     RiskfightState state;
     RiskfightContext context;
@@ -79,7 +83,6 @@ void puf_init(Env* env, Dict* kwargs) {
     if (live) riskfight_put_int((EncounterState*)&env->state, (EncounterContext*)&env->context, "live_loadout", (int)live->value);
     DictItem* pool = dict_find(kwargs, "opponent_pool");
     if (pool) riskfight_put_int((EncounterState*)&env->state, (EncounterContext*)&env->context, "opponent_pool", (int)pool->value);
-    assert(!env->context.opponent_pool || !dict_get(kwargs, "self_play")); /* pool kits are played by the script or OppFit */
     const char* reward_keys[] = {"damage_reward_coeff", "chance_reward_coeff"};
     for (int i = 0; i < 2; i++) {
         DictItem* item = dict_find(kwargs, reward_keys[i]);
@@ -118,22 +121,27 @@ static inline void riskfight_obs_store(obs_t* out, const float* obs) {
 }
 static void riskfight_native_observe(Env* env) {
     env->state.session_ticks_left = env->training.config.session_ticks - env->session_elapsed;
+    env->state.session_wait_left = env->wait_left;
     for (int i = 0; i < env->num_agents; i++) {
         float obs[RF_OBS_SIZE];
         riskfight_write_observation(&env->state, i, obs);
         riskfight_obs_store(env->agents[i].observations, obs);
-        riskfight_write_action_mask(&env->state, i, env->agents[i].action_mask);
+        if (env->wait_left > 0) riskfight_write_wait_mask(env->agents[i].action_mask);
+        else riskfight_write_action_mask(&env->state, i, env->agents[i].action_mask);
     }
 }
-/** Who plays the opponent of a fight just reset: the fitted human with probability oppfit_probability, drawn per opponent (a rematch keeps the draw and the seed). */
+/** Who plays the opponent of a fight just reset: when the script or OppFit drives him (always in a self_play 0 env, in a self-play env when the session's
+ * opponent was drawn scripted), the fitted human with probability oppfit_probability on the kits it was fitted on, else the script; drawn per opponent (a
+ * rematch keeps the draw and the seed). A net in seat 1 (self-play, or the frozen checkpoint) gets no hook. */
 static void riskfight_native_opponent_hooks(Env* env, int new_opponent) {
     env->context.opp_hook = NULL;
     env->context.opp_after = NULL;
     env->context.opp_user = NULL;
     if (!env->oppfit) return;
+    const int driven = !env->context.self_play || env->context.opp_driven;
     if (new_opponent) {
         /* OppFit plays the melee kits whose specials it was fitted on (VW, maul, AGS, claws); every other pool kit is left to the script. */
-        env->oppfit_active = (!env->context.opp_kit || env->context.opp_kit->oppfit_ok) && encounter_rand_float(&env->training.rng) < env->oppfit_probability;
+        env->oppfit_active = driven && (!env->context.opp_kit || env->context.opp_kit->oppfit_ok) && encounter_rand_float(&env->training.rng) < env->oppfit_probability;
         if (env->oppfit_active) env->oppfit_seed = xorshift32(&env->training.rng) | 1;
     }
     if (!env->oppfit_active) return;
@@ -149,6 +157,7 @@ static void riskfight_native_reset(Env* env) {
     riskfight_native_opponent_hooks(env, 1);
     env->session_elapsed = env->session_fights = 0;
     env->session_stake = 0;
+    env->wait_left = 0;
 }
 void puf_reset(Env* env) {
     riskfight_native_reset(env);
@@ -214,6 +223,13 @@ static void riskfight_native_log_round(Env* env) {
         env->log.stop_spec += a->stop_spec; env->log.veng_spec += a->veng_spec; env->log.stop_veng_spec += a->stop_veng_spec; env->log.spec_delay += a->spec_delay; env->log.norm_delay += a->norm_delay;
     }
     env->log.oppfit_episodes += env->context.opp_hook != NULL;
+    env->log.fights_pool += env->context.opp_kit != NULL;
+    {
+        const int net = env->context.self_play && !env->context.opp_driven;
+        env->log.fights_selfplay += net && env->tag == 0;
+        env->log.fights_frozen += net && env->tag > 0;
+        env->log.fights_script += !net && env->context.opp_hook == NULL;
+    }
     env->log.drink_brew += s->drink_brew[0];
     env->log.drink_sanfew += s->drink_sanfew[0];
     env->log.drink_combat += s->drink_combat[0];
@@ -223,9 +239,38 @@ static void riskfight_native_log_round(Env* env) {
     env->log.spec_voidwaker += s->spec_voidwaker[0];
     env->log.spec_maul += s->spec_maul[0];
 }
+/** The fight after a wait: the transition's rematch or new opponent, with the supplies aged by the wait. */
+static void riskfight_native_next_fight(Env* env) {
+    const RiskfightTransition* t = &env->wait_transition;
+    env->log.rematches += t->rematch;
+    riskfight_align_reset(&env->align);
+    riskfight_training_next_fight(&env->training, &env->state, &env->context, t, env->tag);
+    riskfight_native_opponent_hooks(env, !t->rematch);
+}
+/** The end of a step of either kind: the terminals, and the session's totals and a fresh session when its budget is spent. */
+static void riskfight_native_finish_step(Env* env) {
+    const int budget = env->training.config.session_ticks;
+    int session_over = env->session_elapsed >= budget;
+    for (int i = 0; i < env->num_agents; i++) env->agents[i].terminals[0] = session_over;
+    if (session_over) {
+        env->log.rounds += env->session_fights;
+        /* kills minus price times deaths per hour of session, so sessions of different length score alike */
+        env->log.net_stake += env->session_stake * (RF_TICKS_PER_HOUR / (float)budget);
+        env->log.scripted_omissions += env->training.omissions;
+        env->log.n++;
+#ifdef OSRS_PUFFER_RENDER
+        if (!env->renderer) riskfight_native_reset(env);
+        else { env->state.env.episode_over = 1; env->wait_left = 0; }
+#else
+        riskfight_native_reset(env);
+#endif
+    }
+    riskfight_native_observe(env);
+}
+
 void puf_step(Env* env) {
 #ifdef OSRS_PUFFER_RENDER
-    if (env->renderer && env->state.env.episode_over) {
+    if (env->renderer && env->state.env.episode_over && env->wait_left == 0) {
         for (int i = 0; i < env->num_agents; i++) {
             env->agents[i].rewards[0] = 0;
             env->agents[i].terminals[0] = 1;
@@ -234,12 +279,22 @@ void puf_step(Env* env) {
         return;
     }
 #endif
+    if (env->wait_left > 0) {
+        /* A tick of the wait between fights: nothing is chosen (the mask allows only the no-op), nothing is earned, the clock runs. The next fight starts, with
+         * what the wait did to the supplies (special energy regenerating, eating up), on the tick the wait ends. */
+        for (int i = 0; i < env->num_agents; i++) env->agents[i].rewards[0] = 0;
+        env->session_elapsed++;
+        env->log.wait_ticks++;
+        if (--env->wait_left == 0 && env->session_elapsed < env->training.config.session_ticks) riskfight_native_next_fight(env);
+        riskfight_native_finish_step(env);
+        return;
+    }
     int actions[2 * RF_HEADS] = {0};
     for (int i = 0; i < env->num_agents; i++)
         for (int j = 0; j < RF_HEADS; j++) actions[i * RF_HEADS + j] = (int)env->agents[i].actions[j];
     int stop_issued = actions[RF_PRIMARY] == RF_STOP;
-    env->training.omissions += riskfight_training_actions(&env->training,
-        &env->state, env->tag, actions);
+    env->context.opp_omit = riskfight_training_omit(&env->training);
+    env->training.omissions += env->context.opp_omit;
     env->training.ticks++;
     riskfight_step((EncounterState*)&env->state, (EncounterContext*)&env->context, actions);
     riskfight_align_observe(&env->state, 0, stop_issued, &env->align);
@@ -262,32 +317,12 @@ void puf_step(Env* env) {
         riskfight_native_log_round(env);
         env->session_fights++;
         if (env->session_elapsed < budget) {
-            RiskfightTransition t = riskfight_session_transition(&env->state, &env->training.rng);
-            env->session_elapsed += t.delay;
-            if (env->session_elapsed < budget) {
-                env->log.rematches += t.rematch;
-                riskfight_align_reset(&env->align);
-                riskfight_training_next_fight(&env->training, &env->state, &env->context, &t, env->tag);
-                riskfight_native_opponent_hooks(env, !t.rematch);
-            }
+            env->wait_transition = riskfight_session_transition(&env->state, &env->training.rng);
+            env->wait_left = env->wait_transition.delay;
+            if (env->wait_left == 0) riskfight_native_next_fight(env);
         }
     }
-    int session_over = env->session_elapsed >= budget;
-    for (int i = 0; i < env->num_agents; i++) env->agents[i].terminals[0] = session_over;
-    if (session_over) {
-        env->log.rounds += env->session_fights;
-        /* kills minus price times deaths per hour of session, so sessions of different length score alike */
-        env->log.net_stake += env->session_stake * (RF_TICKS_PER_HOUR / (float)budget);
-        env->log.scripted_omissions += env->training.omissions;
-        env->log.n++;
-#ifdef OSRS_PUFFER_RENDER
-        if (!env->renderer) riskfight_native_reset(env);
-        else env->state.env.episode_over = 1;
-#else
-        riskfight_native_reset(env);
-#endif
-    }
-    riskfight_native_observe(env);
+    riskfight_native_finish_step(env);
 }
 void puf_render(Env* env) {
 #ifdef OSRS_PUFFER_RENDER
@@ -314,6 +349,11 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "net_stake", log->net_stake);
     dict_set(out, "episode_length", log->episode_length);
     dict_set(out, "oppfit_episodes", log->oppfit_episodes);
+    dict_set(out, "wait_ticks", log->wait_ticks);
+    dict_set(out, "fights_pool", log->fights_pool);
+    dict_set(out, "fights_selfplay", log->fights_selfplay);
+    dict_set(out, "fights_frozen", log->fights_frozen);
+    dict_set(out, "fights_script", log->fights_script);
     dict_set(out, "swings", log->swings);
     dict_set(out, "aligned_swings", log->aligned_swings);
     dict_set(out, "adjacent_swings", log->adjacent_swings);

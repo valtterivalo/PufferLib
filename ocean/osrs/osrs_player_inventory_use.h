@@ -72,6 +72,9 @@ static inline void osrs_player_inventory_drink_effect(void* player, OsrsConsumab
         case OSRS_CONSUMABLE_SUPER_COMBAT:
             encounter_super_combat_boost(p);
             break;
+        case OSRS_CONSUMABLE_RANGING: /* the pool's rangers carry them; a net playing one may drink */
+            encounter_ranging_boost(p);
+            break;
         default: abort();
     }
 }

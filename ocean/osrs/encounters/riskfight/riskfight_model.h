@@ -72,13 +72,16 @@ enum {
     /* Appended blocks, in order: threat features (riskfight_threat.h), then the session block. */
     RF_THREAT_START = RF_PRICE + 1,
     /* Session block (riskfight_write_session_observation): [0] session ticks left over RF_SESSION_HORIZON_TICKS, capped at 1;
-     * [1] his special energy as a player counts it (100 minus the specs seen, plus the regeneration since), over 100. */
+     * [1] his special energy as a player counts it (100 minus the specs seen, plus the regeneration since), over 100; [2] 1 while the session is waiting between
+     * fights (every tick of the wait is a step of no choice, the mask allows only the no-op), [3] the ticks of the wait left over RF_WAIT_SCALE_TICKS, capped at 1. */
     RF_SESSION_START = RF_THREAT_START + RF_THREAT_SIZE,
-    RF_SESSION_SIZE = 2,
+    RF_SESSION_SIZE = 4,
     RF_OBS_SIZE = RF_SESSION_START + RF_SESSION_SIZE,
 };
 /* Ticks left beyond which the end of the session no longer changes what is worth doing: several fight cycles. */
 enum { RF_SESSION_HORIZON_TICKS = 1500 };
+/* The longest waits (the respawn delay) are about 1000 ticks: the scale of the wait-left feature. */
+enum { RF_WAIT_SCALE_TICKS = 1000 };
 /* Ticks left of a session whose end is not modelled: what riskfight_reset leaves and the live server keeps (a live session has no budget). */
 enum { RF_SESSION_OPEN = INT_MAX };
 #define RF_ACTION_DIMS_INIT {30,30,30,29,29,29,2,2,3,28,5,4,30,30,30,30,30,30,30,30,7}
@@ -153,6 +156,7 @@ typedef struct {
     /* Specials each side used this fight (any weapon), and the session ticks left (RF_SESSION_OPEN outside a session). */
     int specs_used[2];
     int session_ticks_left;
+    int session_wait_left; /* ticks of the wait between two fights still to pass (0 in a fight); the state is the one the last fight ended in */
 } RiskfightState;
 typedef struct {
     uint8_t equipment[NUM_GEAR_SLOTS];
@@ -174,11 +178,15 @@ typedef struct {
     HumanInput policy_commands[2];
     RiskfightOpponent opponent;
     int kit_mix; /* training resets draw our kit between RISKFIGHT_LIVE_LOADOUT and RISKFIGHT_VW_LOADOUT (live_loadout=3) */
-    int opponent_pool; /* every reset draws his kit from the opponent pool (riskfight_kits.h); he is then scripted or OppFit, never self-play */
+    const RiskfightLoadout* opp_default; /* his kit when he takes no pool kit, as live_loadout set it */
+    int opponent_pool; /* a reset draws his kit from the opponent pool (riskfight_kits.h) unless opp_plain; the script, OppFit or a net may play him */
+    int opp_plain;     /* the next new opponent keeps loadout[1] as the caller set it instead of drawing a pool kit (a net-played seat 1 draws one of our kits) */
     const RiskfightKit* opp_kit; /* the kit of this fight, NULL outside the pool */
     uint32_t opp_roll;           /* the draw of his unseen ring, kept with the kit across the rounds of a session */
     int keep_opp_kit;            /* the next reset is another round against the same opponent: his kit and ring stay */
-    int self_play;
+    int self_play;               /* seat 1 is a second agent; with opp_driven it is the script or OppFit, not that agent */
+    int opp_driven;              /* self-play only: the script or the OppFit hook plays seat 1 this fight, the actions of the second agent are ignored */
+    int opp_omit;                /* self-play only: this tick the driven opponent does nothing (scripted_omission, anneals to 0) */
     int human_player;
     float damage_reward_coeff;
     float chance_reward_coeff;
@@ -452,11 +460,10 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
     if (!ctx->opponent_pool) ctx->opp_kit = NULL;
     else {
         if (!ctx->keep_opp_kit) {
-            ctx->opp_kit = riskfight_pool_pick((float)(osrs_lowbias32(rng ^ 0x6b697473u) >> 8) / 16777216.0f);
+            ctx->opp_kit = ctx->opp_plain ? NULL : riskfight_pool_pick((float)(osrs_lowbias32(rng ^ 0x6b697473u) >> 8) / 16777216.0f);
             ctx->opp_roll = osrs_lowbias32(rng ^ 0x72696e67u);
         }
-        assert(ctx->opp_kit);
-        ctx->loadout[1] = &RISKFIGHT_POOL_LOADOUT[ctx->opp_kit - RISKFIGHT_POOL];
+        if (ctx->opp_kit) ctx->loadout[1] = &RISKFIGHT_POOL_LOADOUT[ctx->opp_kit - RISKFIGHT_POOL];
     }
     memset(s, 0, sizeof(*s));
     s->env.rng_state = rng;

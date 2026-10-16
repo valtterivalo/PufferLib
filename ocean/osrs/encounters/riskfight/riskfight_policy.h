@@ -33,13 +33,15 @@ __attribute__((constructor)) static void riskfight_build_inventory_rows(void) {
     }
 }
 
-/** The session block (RF_SESSION_START). [0] session ticks left over RF_SESSION_HORIZON_TICKS, capped at 1: what a fight is worth depends on the time left only
+/** The session block (RF_SESSION_START). [2] and [3] mark a wait between fights and how much of it is left. [0] session ticks left over RF_SESSION_HORIZON_TICKS, capped at 1: what a fight is worth depends on the time left only
  * through how many more fights fit, which stops mattering a few fight cycles out, so an open-ended session (live) reads 1, the value most of a training
  * session shows too. [1] his special energy as a player counts it: whether he can still spec decides whether leaving after our own spec is rude. */
 static void riskfight_write_session_observation(const RiskfightState* s, int agent, float* obs) {
     float* out = obs + RF_SESSION_START;
     out[0] = s->session_ticks_left >= RF_SESSION_HORIZON_TICKS ? 1.0f : fmaxf(0.0f, (float)s->session_ticks_left / RF_SESSION_HORIZON_TICKS);
     out[1] = s->visible[agent].spec_est / 100.0f;
+    out[2] = s->session_wait_left > 0;
+    out[3] = s->session_wait_left >= RF_WAIT_SCALE_TICKS ? 1.0f : (float)s->session_wait_left / RF_WAIT_SCALE_TICKS;
 }
 
 /** The observation up to the price, and the weapons of the agent's bag when `bag_weapons` is given (the threat block needs them). */
@@ -212,6 +214,12 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
         heads[RF_WEAPON][RF_UNEQUIP] = 0;
         heads[RF_RING][RF_UNEQUIP] = 0;
     }
+}
+
+/** The mask of a tick of waiting between fights: the no-op of every head and nothing else (the tick is a step of no choice). */
+static void riskfight_write_wait_mask(unsigned char* mask) {
+    memset(mask, 0, RF_MASK_SIZE);
+    for (int head = 0; head < RF_HEADS; head++) mask[RF_HEAD_OFFSET[head]] = 1;
 }
 
 /** First inventory slot (1-based, 0 when absent) per consumable kind and per item. */

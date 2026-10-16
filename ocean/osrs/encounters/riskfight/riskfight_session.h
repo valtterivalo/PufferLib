@@ -5,11 +5,12 @@
 /* A session is a fixed budget of game ticks spent on fights and on the time between them. What follows a fight is a consequence in the world, not a reward term:
  *   kill      we keep our supplies, a new opponent arrives after a search delay S
  *   death     the price is paid, we refill, a respawn and regear delay D passes, a new opponent
- *   teleport  the fight ends and we refill. Unless the teleport was rude the same opponent comes back for a rematch with probability RF_REMATCH_PROBABILITY,
- *             after M, with the supplies he had left. Otherwise (a rude teleport: ours after our own special, while he still had special energy for his, or no
- *             rematch) he is gone, and the next fight is with a new opponent after the restock delay R, which as measured (teleport to the next fight with a
- *             new opponent) already holds the search.
- *   his teleport, a timeout   he is gone (he refilled by teleporting), a new opponent after S, our supplies kept
+ *   teleport  the fight ends and the side that left refills. Unless the teleport was rude (a side's own, after its own special, while the other still had
+ *             special energy for his) the pair meets again with probability RF_REMATCH_PROBABILITY, after M, each side with the supplies it had left (the one
+ *             that teleported refilled). Otherwise (a rude teleport, or no rematch) he is gone and the next fight is with a new opponent: after the restock
+ *             delay R when we left, which as measured (teleport to the next fight with a new opponent) already holds the search, after S when he left.
+ *   a timeout he is gone, a new opponent after S, our supplies kept
+ * Both seats follow these rules (a second agent's teleport is as rude as ours); only the clock is ours, as the session is seat 0's.
  * Supplies are everything in the inventory, the worn gear, boosted levels, special energy (regenerating over the time passed) and Vengeance. Hitpoints
  * persist as what the player eats back during the wait (riskfight_idle_eat), at the cost of the food. */
 
@@ -28,20 +29,24 @@ static int riskfight_delay_draw(const RiskfightDelay* delay, uint32_t* rng) {
     return (int)(delay->ticks[below] + fraction * (delay->ticks[below + 1] - delay->ticks[below]) + 0.5f);
 }
 
-/** Our teleport after our own special while he could still spec: the opponent takes it as a rude exit. Read at the end of the fight. */
-static int riskfight_rude_teleport(const RiskfightState* s) {
-    return s->escaped[0] && s->specs_used[0] > 0 && !osrs_escape_no_special(&s->escape_supplies[0][1]);
+/** A teleport of `side` after its own special while the other side could still spec: the other takes it as a rude exit. Read at the end of the fight. */
+static int riskfight_rude_teleport_of(const RiskfightState* s, int side) {
+    return s->escaped[side] && s->specs_used[side] > 0 && !osrs_escape_no_special(&s->escape_supplies[side][1 - side]);
 }
+/** Our (seat 0) rude teleport: the logged one. */
+static int riskfight_rude_teleport(const RiskfightState* s) { return riskfight_rude_teleport_of(s, 0); }
 
 typedef struct {
-    int delay;   /* ticks of the session spent before the next fight starts */
-    int refill;  /* our side restocks: we died or teleported */
-    int rematch; /* the same opponent (his profile and price) comes back */
-    int refill_opponent; /* ... with full supplies, because he teleported too; otherwise with the supplies he had left */
-    int rude;
+    int delay;     /* ticks of the session spent before the next fight starts */
+    int refill[2]; /* the side restocks: it died or teleported */
+    int rematch;   /* the same opponent (his profile, price and kit) comes back */
+    int rude;      /* a rude teleport by either side ended the fight: no rematch */
 } RiskfightTransition;
 
-/** What follows the fight that just ended (outcome of side 0), drawing the delays and the rematch from `rng`. */
+/** What follows the fight that just ended, drawing the delays and the rematch from `rng`. The rules treat the seats alike: whoever leaves rudely, or dies, or
+ * teleports, is restocked, and a pair that parted politely meets again with probability RF_REMATCH_PROBABILITY, each side carrying what it had left (the
+ * side that restocked comes back refilled). The clock is the session's: it is seat 0's, the one that carries the session, so the delay is the one seat 0
+ * waits (a new opponent replaces seat 1, he has no session of his own to wait out). */
 static RiskfightTransition riskfight_session_transition(const RiskfightState* s, uint32_t* rng) {
     RiskfightTransition t = {0};
     switch (s->outcome[0]) {
@@ -51,18 +56,15 @@ static RiskfightTransition riskfight_session_transition(const RiskfightState* s,
             break;
         case RISKFIGHT_DEATH:
         case RISKFIGHT_MUTUAL_DEATH:
-            t.refill = 1;
+            t.refill[0] = 1;
             t.delay = riskfight_delay_draw(&RF_DELAY_RESPAWN, rng);
             break;
         case RISKFIGHT_ESCAPE:
-            if (s->escaped[0]) {
-                t.refill = 1;
-                t.rude = riskfight_rude_teleport(s);
-                int rematch = encounter_rand_float(rng) < RF_REMATCH_PROBABILITY;
-                t.rematch = rematch && !t.rude;
-                t.refill_opponent = t.rematch && s->escaped[1];
-                t.delay = riskfight_delay_draw(t.rematch ? &RF_DELAY_REMATCH : &RF_DELAY_RESTOCK, rng);
-            } else t.delay = riskfight_delay_draw(&RF_DELAY_SEARCH, rng);
+            for (int side = 0; side < 2; side++) t.refill[side] = s->escaped[side];
+            t.rude = riskfight_rude_teleport_of(s, 0) || riskfight_rude_teleport_of(s, 1);
+            int rematch = encounter_rand_float(rng) < RF_REMATCH_PROBABILITY;
+            t.rematch = rematch && !t.rude;
+            t.delay = riskfight_delay_draw(t.rematch ? &RF_DELAY_REMATCH : s->escaped[0] ? &RF_DELAY_RESTOCK : &RF_DELAY_SEARCH, rng);
             break;
         case RISKFIGHT_ONGOING:
             abort();
@@ -144,7 +146,7 @@ static void riskfight_carry_restore(RiskfightState* s, int side, const Riskfight
 /** Starts the next fight of a session from a reset state: the sides the transition keeps get their supplies back, aged by the delay. The estimate each
  * side holds of the other's special energy follows the other side's supplies, aged the same way. Observations of the gear are retaken. */
 static void riskfight_session_begin_fight(RiskfightState* s, const RiskfightCarry carry[2], const RiskfightTransition* t) {
-    int keep[2] = {!t->refill, t->rematch && !t->refill_opponent};
+    int keep[2] = {!t->refill[0], t->rematch && !t->refill[1]};
     for (int side = 0; side < 2; side++)
         if (keep[side]) riskfight_carry_restore(s, side, &carry[side], t->delay);
     riskfight_observe_visible(s, 0, 1);

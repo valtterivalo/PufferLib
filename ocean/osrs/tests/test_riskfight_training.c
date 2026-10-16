@@ -70,21 +70,14 @@ int main(void) {
     assert(teacher->env.training.opponent == RF_TRAIN_SCRIPTED);
     ptrdiff_t profile = teacher->env.state.opponent_profile - RISKFIGHT_HUMAN_PROFILES;
     assert(profile >= 0 && profile < RISKFIGHT_HUMAN_TRAIN_PROFILES);
+    assert(teacher->env.context.opp_driven);
     int commands[2 * RF_HEADS] = {0};
-    commands[RF_PRIMARY] = RF_STOP;
-    commands[RF_HEADS + RF_PRIMARY] = RF_TELEPORT;
-    assert(riskfight_training_actions(&teacher->env.training, &teacher->env.state, 1, commands) == 1);
-    assert(commands[RF_PRIMARY] == RF_STOP);
-    for (int i = RF_HEADS; i < 2 * RF_HEADS; i++) assert(commands[i] == 0);
+    teacher->env.training.ticks = 0;
+    assert(riskfight_training_omit(&teacher->env.training) == 1); /* the omission starts at 1: he does nothing */
     teacher->env.training.ticks = 5;
     assert(riskfight_training_omission(&teacher->env.training) == 0.5f);
     teacher->env.training.ticks = 10;
-    int expected[RF_HEADS];
-    riskfight_script(teacher->observations[1], teacher->env.state.opponent_profile,
-        teacher->env.state.script_seed[1], teacher->env.state.consume_ticks[1], expected);
-    assert(riskfight_training_actions(&teacher->env.training, &teacher->env.state, 1, commands) == 0);
-    assert(memcmp(commands + RF_HEADS, expected, sizeof(expected)) == 0);
-    assert(commands[RF_PRIMARY] == RF_STOP);
+    assert(riskfight_training_omit(&teacher->env.training) == 0);
     teacher->actions[1][RF_PRIMARY] = RF_TELEPORT;
     puf_step(&teacher->env);
     assert(teacher->terminals[0] == 0 && teacher->env.training.ticks == 11);
