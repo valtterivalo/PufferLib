@@ -172,7 +172,7 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
             if (!keep) memset(heads[head] + 1, 0, RF_ACTION_DIMS[head] - 1);
         }
         for (int action = 1; action < RF_ACTION_DIMS[RF_PRIMARY]; action++)
-            heads[RF_PRIMARY][action] = action == RF_ATTACK || action == RF_STOP;
+            heads[RF_PRIMARY][action] = action == RF_ATTACK || action == RF_STOP || (action == RF_TELEPORT && heads[RF_PRIMARY][RF_TELEPORT]);
         /* The shield comes off for the maul; the weapon and the ring never come off to fight bare-handed. */
         heads[RF_WEAPON][RF_UNEQUIP] = 0;
         heads[RF_RING][RF_UNEQUIP] = 0;

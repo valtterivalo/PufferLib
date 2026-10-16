@@ -50,6 +50,7 @@ struct Env {
     RiskfightAlign align;
     void* oppfit;
     float oppfit_probability;
+    float teleport_penalty_start, teleport_penalty_final, teleport_penalty_ticks;
 #ifdef OSRS_PUFFER_RENDER
     void* renderer;
 #endif
@@ -65,6 +66,10 @@ void puf_init(Env* env, Dict* kwargs) {
     env->oppfit_probability = oppfit_p ? (float)oppfit_p->value : 0;
     assert(env->oppfit_probability >= 0 && env->oppfit_probability <= 1);
     env->oppfit = env->oppfit_probability > 0 ? oppfit_create() : NULL;
+    DictItem* tp_final = dict_find(kwargs, "teleport_penalty_final");
+    DictItem* tp_ticks = dict_find(kwargs, "teleport_penalty_ticks");
+    env->teleport_penalty_final = tp_final ? (float)tp_final->value : -1;
+    env->teleport_penalty_ticks = tp_ticks ? (float)tp_ticks->value : 0;
     DictItem* motor = dict_find(kwargs, "motor");
     if (motor) riskfight_put_int((EncounterState*)&env->state, (EncounterContext*)&env->context, "motor", (int)motor->value);
     DictItem* deployable = dict_find(kwargs, "deployable");
@@ -77,6 +82,7 @@ void puf_init(Env* env, Dict* kwargs) {
         if (item) riskfight_put_float((EncounterState*)&env->state,
             (EncounterContext*)&env->context, reward_keys[i], (float)item->value);
     }
+    env->teleport_penalty_start = env->context.teleport_penalty;
     env->num_agents = env->context.self_play ? 2 : 1;
     for (int i = 0; i < env->num_agents; i++) env->agents[i].policy = i;
     env->state.env.rng_state = osrs_env_seed((uint32_t)env->rng, 0);
@@ -195,6 +201,10 @@ void puf_step(Env* env) {
     env->training.omissions += riskfight_training_actions(&env->training,
         &env->state, env->tag, actions);
     env->training.ticks++;
+    if (env->teleport_penalty_final >= 0 && env->teleport_penalty_ticks > 0) {
+        float f = env->training.ticks >= env->teleport_penalty_ticks ? 1.0f : (float)env->training.ticks / env->teleport_penalty_ticks;
+        env->context.teleport_penalty = env->teleport_penalty_start + (env->teleport_penalty_final - env->teleport_penalty_start) * f;
+    }
     riskfight_step((EncounterState*)&env->state, (EncounterContext*)&env->context, actions);
     riskfight_align_observe(&env->state, 0, stop_issued, &env->align);
     env->log.ticks_tentacle += env->state.ticks_tentacle[0];
