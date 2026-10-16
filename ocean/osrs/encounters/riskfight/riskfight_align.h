@@ -7,7 +7,7 @@
  * "adjacent". Observe once per riskfight_step, after it; reset at each fight start. */
 typedef struct {
     int swings, aligned, adjacent, spec_swings, spec_aligned, spec_adjacent;
-    int stops, ready_idle, vengs, eats;
+    int stops, ready_idle, vengs, eats, hard_eats, hard_eats_zero;
     int stop_spec, veng_spec, stop_veng_spec, spec_delay, norm_delay, idle_run;
     int our_last, his_last, our_last_spec, our_last_marked, last_stop, last_veng;
 } RiskfightAlign;
@@ -26,6 +26,8 @@ static void riskfight_align_observe(const RiskfightState* s, int agent, int stop
     if (stop_issued) a->last_stop = tick;
     if (us->cast_veng_this_tick) a->last_veng = tick;
     a->eats += us->ate_food_this_tick || us->ate_karambwan_this_tick;
+    a->hard_eats += us->ate_food_this_tick;
+    a->hard_eats_zero += us->ate_food_this_tick && us->last_food_heal == 0; /* a meal that healed nothing: full hitpoints inside the overheal lock, or at the overheal cap */
     int swung = us->attack_style_this_tick != ATTACK_STYLE_NONE;
     int his_swung = him->attack_style_this_tick != ATTACK_STYLE_NONE;
     int idle = !swung && us->current_hitpoints > 0 && him->current_hitpoints > 0 && us->attack_timer <= 0 && !s->escaped[0] && !s->escaped[1];

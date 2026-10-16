@@ -36,7 +36,7 @@ struct Log {
     float ticks_tentacle, ticks_axe, ticks_voidwaker, ticks_maul;
     float swings, aligned_swings, adjacent_swings, spec_swings, spec_aligned, spec_adjacent;
     float oppfit_episodes;
-    float stops, ready_idle, vengs, eats, stop_spec, veng_spec, stop_veng_spec, spec_delay, norm_delay;
+    float stops, ready_idle, vengs, eats, stop_spec, veng_spec, stop_veng_spec, spec_delay, norm_delay, hard_eats, hard_eats_zero;
 };
 struct Env {
     Log log;
@@ -171,6 +171,7 @@ static void riskfight_native_log_round(Env* env) {
         env->log.swings += a->swings; env->log.aligned_swings += a->aligned; env->log.adjacent_swings += a->adjacent;
         env->log.spec_swings += a->spec_swings; env->log.spec_aligned += a->spec_aligned; env->log.spec_adjacent += a->spec_adjacent;
         env->log.stops += a->stops; env->log.ready_idle += a->ready_idle; env->log.vengs += a->vengs; env->log.eats += a->eats;
+        env->log.hard_eats += a->hard_eats; env->log.hard_eats_zero += a->hard_eats_zero;
         env->log.stop_spec += a->stop_spec; env->log.veng_spec += a->veng_spec; env->log.stop_veng_spec += a->stop_veng_spec; env->log.spec_delay += a->spec_delay; env->log.norm_delay += a->norm_delay;
     }
     env->log.oppfit_episodes += env->context.opp_hook != NULL;
@@ -289,6 +290,8 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "ready_idle", log->ready_idle);
     dict_set(out, "vengs", log->vengs);
     dict_set(out, "eats", log->eats);
+    dict_set(out, "hard_eats", log->hard_eats);
+    dict_set(out, "hard_eats_zero", log->hard_eats_zero);
     dict_set(out, "stop_spec", log->stop_spec);
     dict_set(out, "veng_spec", log->veng_spec);
     dict_set(out, "stop_veng_spec", log->stop_veng_spec);
