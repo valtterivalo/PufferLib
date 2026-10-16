@@ -61,17 +61,26 @@ static int riskfight_chance_range(const RiskfightState* s, int agent) {
     return riskfight_chance_range_of(threat, v->spec_est, v->last_cast_tick >= v->last_proc_tick);
 }
 
+/** The three floats of the session block that move while the session waits between fights (the sim is not stepped then): ticks left, wait left, reputation. */
+static inline void riskfight_session_clock(const RiskfightState* s, float out[3]) {
+    out[0] = s->session_ticks_left >= RF_SESSION_HORIZON_TICKS ? 1.0f : fmaxf(0.0f, (float)s->session_ticks_left / RF_SESSION_HORIZON_TICKS);
+    out[1] = s->session_wait_left >= RF_WAIT_SCALE_TICKS ? 1.0f : (float)s->session_wait_left / RF_WAIT_SCALE_TICKS;
+    out[2] = fminf(1.0f, s->session_rep / RF_REP_OBS_SCALE);
+}
+
 /** The session block (RF_SESSION_START). [2] and [3] mark a wait between fights and how much of it is left. [0] session ticks left over RF_SESSION_HORIZON_TICKS, capped at 1: what a fight is worth depends on the time left only
  * through how many more fights fit, which stops mattering a few fight cycles out, so an open-ended session (live) reads 1, the value most of a training
  * session shows too. [1] his special energy as a player counts it: whether he can still spec decides whether leaving after our own spec is rude. [4] our reputation
  * (RF_REP_OBS_SCALE rude teleports read 1): it lengthens the wait for a new opponent and makes ragging more likely. */
 static void riskfight_write_session_observation(const RiskfightState* s, int agent, float* obs) {
     float* out = obs + RF_SESSION_START;
-    out[0] = s->session_ticks_left >= RF_SESSION_HORIZON_TICKS ? 1.0f : fmaxf(0.0f, (float)s->session_ticks_left / RF_SESSION_HORIZON_TICKS);
+    float clock[3];
+    riskfight_session_clock(s, clock);
+    out[0] = clock[0];
     out[1] = s->visible[agent].spec_est / 100.0f;
     out[2] = s->session_wait_left > 0;
-    out[3] = s->session_wait_left >= RF_WAIT_SCALE_TICKS ? 1.0f : (float)s->session_wait_left / RF_WAIT_SCALE_TICKS;
-    out[4] = fminf(1.0f, s->session_rep / RF_REP_OBS_SCALE);
+    out[3] = clock[1];
+    out[4] = clock[2];
     out[5] = fminf(1.0f, (float)s->overeats[agent] / (RF_OVEREAT_PATIENCE + 1));
     const RiskfightVisibleOpponent* v = &s->visible[agent];
     int range = riskfight_chance_range_of(obs + RF_THREAT_START, v->spec_est, v->last_cast_tick >= v->last_proc_tick);
@@ -255,6 +264,52 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
 static void riskfight_write_wait_mask(unsigned char* mask) {
     memset(mask, 0, RF_MASK_SIZE);
     for (int head = 0; head < RF_HEADS; head++) mask[RF_HEAD_OFFSET[head]] = 1;
+}
+
+/** Everything riskfight_write_action_mask reads, reduced to what its result depends on (hitpoints only through the three comparisons it makes, the timers only
+ * through "is zero", the veng cooldown only through "<= 1"). The mask changes on about one agent-tick in six, so the env, which keeps the last mask in the agent's
+ * buffer, rewrites it only when the key differs. `valid` is 0 while the buffer holds something else (the wait mask); `buffer` guards against the buffer moving.
+ * ADD EVERY NEW INPUT OF riskfight_write_action_mask HERE: test_riskfight_env_trace.c compares the buffer with a fresh mask every step. */
+typedef struct {
+    uint16_t cells[OSRS_INVENTORY_SIZE];
+    uint8_t equipped[NUM_GEAR_SLOTS];
+    uint8_t below_full, at_full, above_divine, food_ready, karambwan_ready, potion_ready, overheal_block, prayer, magic_ok, veng_active, veng_cooled, has_sacks,
+        teleport_ok, deployable, valid;
+    int special_energy;
+    const unsigned char* buffer;
+} RiskfightMaskKey;
+
+static inline void riskfight_mask_key(const RiskfightState* s, int agent, const unsigned char* buffer, RiskfightMaskKey* key) {
+    const Player* p = &s->env.players[agent];
+    memset(key, 0, sizeof(*key));
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) key->cells[slot] = p->inventory_cells[slot].content_code;
+    memcpy(key->equipped, p->equipped, NUM_GEAR_SLOTS);
+    key->below_full = p->current_hitpoints < p->base_hitpoints;
+    key->at_full = p->current_hitpoints >= p->base_hitpoints;
+    key->above_divine = p->current_hitpoints > OSRS_DIVINE_DAMAGE;
+    key->food_ready = p->food_timer == 0;
+    key->karambwan_ready = p->karambwan_timer == 0;
+    key->potion_ready = p->potion_timer == 0;
+    key->overheal_block = p->pvp_overheal_block > 0;
+    key->prayer = p->current_prayer > 0;
+    key->magic_ok = p->current_magic >= OSRS_VENGEANCE_MAGIC_LEVEL;
+    key->veng_active = p->veng_active != 0;
+    key->veng_cooled = p->veng_cooldown <= 1;
+    key->has_sacks = s->inventory_use[agent].vengeance_sacks > 0;
+    key->teleport_ok = osrs_teleport_allowed(s->env.pvp_runtime.teleport[agent], s->env.tick);
+    key->deployable = riskfight_deployable != 0;
+    key->valid = 1;
+    key->special_energy = p->special_energy;
+    key->buffer = buffer;
+}
+
+/** riskfight_write_action_mask into the agent's buffer, skipped when `mask` still holds the mask of this very key. */
+static inline void riskfight_write_action_mask_keyed(const RiskfightState* s, int agent, RiskfightMaskKey* held, unsigned char* mask) {
+    RiskfightMaskKey key;
+    riskfight_mask_key(s, agent, mask, &key);
+    if (!memcmp(&key, held, sizeof(key))) return;
+    riskfight_write_action_mask(s, agent, mask);
+    *held = key;
 }
 
 /** First inventory slot (1-based, 0 when absent) per consumable kind and per item. */

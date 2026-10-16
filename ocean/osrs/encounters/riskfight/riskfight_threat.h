@@ -117,7 +117,7 @@ static void riskfight_threat_refresh(RiskfightThreat* t, const uint8_t equipment
     }
     uint8_t prior_items[RF_THREAT_HIS_SLOTS];
     float prior_p[RF_THREAT_HIS_SLOTS];
-    int prior_n = riskfight_pool_prior(equipment, prior_items, prior_p, RF_THREAT_HIS_SLOTS);
+    int prior_n = riskfight_pool_prior_memo(equipment, prior_items, prior_p, RF_THREAT_HIS_SLOTS);
     for (int i = 0; i < prior_n && n < RF_THREAT_HIS_SLOTS; i++) {
         int known = 0;
         for (int j = 0; j < n; j++) known |= items[j] == prior_items[i];
