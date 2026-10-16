@@ -189,6 +189,12 @@ static void riskfight_load_state(RiskfightState* s, RiskfightContext* ctx, const
         p->food_timer = side->food_timer;
         p->potion_timer = side->potion_timer;
         p->karambwan_timer = side->karambwan_timer;
+        /* No wire field carries "last hitsplat on this side": it is derived from the other side's last swing (side[1-i].seen_last_attack_ago, the
+         * tick the swing started). A melee swing lands one tick after it starts, so its hit is `ago - 1` ticks old; a slower style lands later, which
+         * only keeps the lock a little longer than the real one. A swing that has not landed yet sits in the pending queue and sets the lock when the
+         * sim lands it. */
+        int swung = snapshot->side[1 - i].seen_last_attack_ago;
+        p->pvp_overheal_block = swung >= 1 && swung <= OSRS_PVP_OVERHEAL_BLOCK_TICKS ? OSRS_PVP_OVERHEAL_BLOCK_TICKS + 1 - swung : 0;
         p->offensive_prayer = side->offensive_prayer;
         p->prayer = side->overhead_prayer;
         p->x = FIGHT_AREA_BASE_X + FIGHT_AREA_WIDTH / 2 + side->x;

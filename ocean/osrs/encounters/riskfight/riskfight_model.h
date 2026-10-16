@@ -153,6 +153,7 @@ typedef struct {
     OsrsActorRouteCache routes[2];
     HumanInput policy_commands[2];
     RiskfightOpponent opponent;
+    int kit_mix; /* training resets draw our kit between RISKFIGHT_LIVE_LOADOUT and RISKFIGHT_VW_LOADOUT (live_loadout=3) */
     int self_play;
     int human_player;
     float damage_reward_coeff;
@@ -185,6 +186,10 @@ static RiskfightLoadout RISKFIGHT_DEFAULT_LOADOUT;
 /* The bag and gear of the recorded live fights (tape 20261005T193654 KeengCr1mson): Voidwaker, ornate granite maul, anglerfish, karambwan, brews,
  * restores, a super combat, a Vengeance sack and a teleport; both sides carry it. Built at load from names, not item codes. */
 static RiskfightLoadout RISKFIGHT_LIVE_LOADOUT;
+/* The kit of the live fight 20261016T141036 (our side): the same gear but the dragon defender, and no two-handed weapon in the bag: 14 blighted
+ * anglerfish (sim anglerfish), 7 karambwan, 2 super restores, 2 brews, a super combat, the Vengeance sack and the house tablet, all 28 slots full
+ * until the first meal. His side keeps RISKFIGHT_LIVE_LOADOUT (the opponent is observed to carry the maul). */
+static RiskfightLoadout RISKFIGHT_VW_LOADOUT;
 
 __attribute__((constructor)) static void riskfight_build_default_loadout(void) {
     RiskfightLoadout loadout = {.hitpoints = 121, .vengeance_sacks = 100};
@@ -222,6 +227,7 @@ __attribute__((constructor)) static void riskfight_build_default_loadout(void) {
     RISKFIGHT_DEFAULT_LOADOUT = loadout;
 }
 
+static void riskfight_build_vw_loadout(void);
 __attribute__((constructor)) static void riskfight_build_live_loadout(void) {
     RiskfightLoadout loadout = {.hitpoints = 121, .vengeance_sacks = 27};
     for (int i = 0; i < NUM_GEAR_SLOTS; i++) loadout.equipment[i] = ITEM_NONE;
@@ -247,6 +253,24 @@ __attribute__((constructor)) static void riskfight_build_live_loadout(void) {
     loadout.inventory[slot++] = osrs_inventory_content_code_from_item(ITEM_GRANITE_MAUL_ORNATE);
     assert(slot == 27);
     RISKFIGHT_LIVE_LOADOUT = loadout;
+    riskfight_build_vw_loadout();
+}
+
+static void riskfight_build_vw_loadout(void) { /* called by riskfight_build_live_loadout: it copies the live kit, so the order is fixed */
+    RiskfightLoadout loadout = RISKFIGHT_LIVE_LOADOUT;
+    loadout.equipment[GEAR_SLOT_SHIELD] = ITEM_DRAGON_DEFENDER;
+    loadout.equipment[GEAR_SLOT_LEGS] = ITEM_NONE; /* worn slot 7 of the live request is -1 */
+    const struct { OsrsConsumableKind kind; int doses, count; } supplies[] = {
+        {OSRS_CONSUMABLE_ANGLERFISH, 0, 14}, {OSRS_CONSUMABLE_KARAMBWAN, 0, 7}, {OSRS_CONSUMABLE_SUPER_RESTORE, 4, 2},
+        {OSRS_CONSUMABLE_BREW, 4, 2}, {OSRS_CONSUMABLE_SUPER_COMBAT, 4, 1},
+        {OSRS_CONSUMABLE_VENGEANCE_SACK, 0, 1}, {OSRS_CONSUMABLE_TELEPORT, 0, 1},
+    };
+    int slot = 0;
+    for (size_t k = 0; k < sizeof(supplies) / sizeof(*supplies); k++)
+        for (int n = 0; n < supplies[k].count; n++)
+            loadout.inventory[slot++] = riskfight_supply_code(supplies[k].kind, supplies[k].doses);
+    assert(slot == 28);
+    RISKFIGHT_VW_LOADOUT = loadout;
 }
 
 static void riskfight_init_context(EncounterContext* context) {

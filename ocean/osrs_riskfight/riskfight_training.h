@@ -143,6 +143,15 @@ static void riskfight_training_randomize(RiskfightTraining* training, RiskfightS
         if ((kind == OSRS_CONSUMABLE_ANGLERFISH || kind == OSRS_CONSUMABLE_KARAMBWAN) && riskfight_dr_pick(training, 100) < 35)
             p->inventory_cells[slot] = osrs_inventory_cell_from_content_code(0);
     }
+    /* Our side in the VW kit starts from a bag the fight has already emptied in places: meals gone leave several empty slots, as live. */
+    if (context->loadout[0] == &RISKFIGHT_VW_LOADOUT) {
+        Player* us = &state->env.players[0];
+        for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+            OsrsConsumableKind kind = (OsrsConsumableKind)osrs_inventory_cell_metadata(&us->inventory_cells[slot])->consumable_kind;
+            if ((kind == OSRS_CONSUMABLE_ANGLERFISH || kind == OSRS_CONSUMABLE_KARAMBWAN) && riskfight_dr_pick(training, 100) < 25)
+                us->inventory_cells[slot] = osrs_inventory_cell_from_content_code(0);
+        }
+    }
     state->opp_lag = riskfight_dr_pick(training, 4);
     RiskfightProfile* profile = &training->profile;
     *profile = *state->opponent_profile;
@@ -156,6 +165,7 @@ static void riskfight_training_randomize(RiskfightTraining* training, RiskfightS
 
 static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* training,
     RiskfightState* state, RiskfightContext* context, int frozen_policy) {
+    if (context->kit_mix) context->loadout[0] = encounter_rand_int(&training->rng, 2) ? &RISKFIGHT_VW_LOADOUT : &RISKFIGHT_LIVE_LOADOUT;
     riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
     state->death_price = training->config.death_price > 0 ? training->config.death_price :
         0.4f * powf(RF_PRICE_MAX_X10 / 4.0f, encounter_rand_float(&training->rng));

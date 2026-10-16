@@ -316,6 +316,10 @@ typedef struct {
     int rolled_max;
 } OsrsPvpHitEvent;
 
+/* An anglerfish overheals (above max hitpoints) only when the eater was not attacked or damaged by the other player inside a PvP area within the
+ * last 16 ticks (oldschool.runescape.wiki/w/Anglerfish): a hit landing at tick H blocks it for eats at ticks H .. H+15. */
+enum { OSRS_PVP_OVERHEAL_BLOCK_TICKS = 16 };
+
 /* Hitsplat ids as the client reports them to the local player (calib README Fact 14): damage by me 16, my maximum hit 43, damage by another player
  * 17, block of mine 12, block of another's 13. My Recoil and Vengeance echoes are type 16 (the source of their event is my side). */
 enum { OSRS_HITSPLAT_BLOCK_ME = 12, OSRS_HITSPLAT_BLOCK_OTHER = 13, OSRS_HITSPLAT_DAMAGE_ME = 16, OSRS_HITSPLAT_DAMAGE_OTHER = 17,
@@ -478,8 +482,11 @@ typedef struct {
     int food_timer;
     int potion_timer;
     int karambwan_timer;
-
     uint8_t consumable_used_this_tick;
+    /* PvP overheal lock: ticks left in which an anglerfish cannot overheal because the other player attacked or damaged this one (hitsplats of
+     * any damage, 0s included). Set to OSRS_PVP_OVERHEAL_BLOCK_TICKS when such a hit lands, counted down at the start of every tick; 0 = free.
+     * A byte beside consumable_used_this_tick: it sits in existing padding, so serialized states keep their size. */
+    uint8_t pvp_overheal_block;
     int last_food_heal;
     int last_food_waste;
     int last_karambwan_heal;

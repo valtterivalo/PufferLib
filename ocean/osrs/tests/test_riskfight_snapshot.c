@@ -78,6 +78,8 @@ static void test_load_state(void) {
     assert(state.env.pid_holder == 1 && state.env.tick == RISKFIGHT_LOAD_TICK && !state.env.episode_over);
     assert(state.visible[1].last_attack_tick == RISKFIGHT_LOAD_TICK - 3 && state.visible[0].last_attack_tick == -1);
     assert(state.visible[0].health_bar == osrs_health_bar_ratio(55, 99, OSRS_PLAYER_HEALTH_BAR_SCALE));
+    /* The overheal lock comes from the other side's last swing: we swung 3 ticks ago, so a melee hit landed on him 2 ticks ago; he never swung. */
+    assert(him->pvp_overheal_block == OSRS_PVP_OVERHEAL_BLOCK_TICKS + 1 - 3 && us->pvp_overheal_block == 0);
     assert(context.loadout[0] == NULL);
 }
 

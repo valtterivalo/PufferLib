@@ -451,6 +451,7 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     if (defender->current_hitpoints <= 0) return;
     int hitpoints_before = defender->current_hitpoints;
 
+    if (attacker_idx != defender_idx && hit->kind != OSRS_HIT_POISON) defender->pvp_overheal_block = OSRS_PVP_OVERHEAL_BLOCK_TICKS;
     if (hit->kind == OSRS_HIT_RECOIL || hit->kind == OSRS_HIT_VENGEANCE ||
             hit->kind == OSRS_HIT_POISON) {
         defender->hit_landed_this_tick = 1;

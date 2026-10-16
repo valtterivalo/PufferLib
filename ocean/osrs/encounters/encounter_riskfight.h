@@ -50,8 +50,12 @@ static void riskfight_put_int(EncounterState* state, EncounterContext* context, 
     } else if (strcmp(key, "deployable") == 0) {
         assert(value == 0 || value == 1); riskfight_deployable = value;
     } else if (strcmp(key, "live_loadout") == 0) {
-        assert(value == 0 || value == 1);
-        for (int i = 0; i < 2; i++) ctx->loadout[i] = value ? &RISKFIGHT_LIVE_LOADOUT : NULL;
+        /* 0 default kits; 1 both sides carry the live kit with the maul; 2 we carry the VW kit (dragon defender, no two-handed weapon) and he the
+         * live kit; 3 as 2 for half of the training episodes, as 1 for the rest (drawn at every training reset). */
+        assert(value >= 0 && value <= 3);
+        ctx->kit_mix = value == 3;
+        ctx->loadout[0] = value == 0 ? NULL : value >= 2 ? &RISKFIGHT_VW_LOADOUT : &RISKFIGHT_LIVE_LOADOUT;
+        ctx->loadout[1] = value ? &RISKFIGHT_LIVE_LOADOUT : NULL;
     } else if (strcmp(key, "human_player") == 0) {
         assert(value == 0 || value == 1); ctx->human_player = value;
     } else if (strcmp(key, "seed") == 0) {

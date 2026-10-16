@@ -483,6 +483,8 @@ void pvp_step(
     memcpy(env->last_executed_actions, env->actions,
         NUM_AGENTS * OSRS_BASE_NUM_ACTION_HEADS * sizeof(int));
 
+    for (int i = 0; i < NUM_AGENTS; i++)
+        if (env->players[i].pvp_overheal_block > 0) env->players[i].pvp_overheal_block--;
     update_timers(&env->players[0]);
     update_timers(&env->players[1]);
 

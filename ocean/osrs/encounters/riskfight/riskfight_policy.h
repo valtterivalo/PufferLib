@@ -132,7 +132,7 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
         gear_masks[gear_slot] = heads[head];
         heads[head][RF_UNEQUIP] = p->equipped[gear_slot] != ITEM_NONE && has_empty;
     }
-    int has_teleport = 0, one_handed_switch = 0, shield_slot = -1;
+    int has_teleport = 0, one_handed_switch = 0, shield_slot = -1, two_handed_wieldable = 0;
     /* One spec of the wielded spec weapon, else of the cheapest spec weapon in the bag: the plain granite maul costs 60, the ornate 50. */
     int wielded_spec_cost = osrs_spec_cost(p->equipped[GEAR_SLOT_WEAPON]), bag_spec_cost = 0;
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
@@ -144,6 +144,7 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
                 int cost = osrs_spec_cost(m->item_idx);
                 if (cost > 0 && (!bag_spec_cost || cost < bag_spec_cost)) bag_spec_cost = cost;
                 if (!item_is_two_handed(m->item_idx)) one_handed_switch |= allowed;
+                else two_handed_wieldable |= allowed;
             }
             if (m->gear_slot == GEAR_SLOT_SHIELD) shield_slot = slot;
         }
@@ -179,7 +180,8 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
         }
         for (int action = 1; action < RF_ACTION_DIMS[RF_PRIMARY]; action++)
             heads[RF_PRIMARY][action] = action == RF_ATTACK || action == RF_STOP || (action == RF_TELEPORT && heads[RF_PRIMARY][RF_TELEPORT]);
-        /* The shield comes off for the maul; the weapon and the ring never come off to fight bare-handed. */
+        /* The shield comes off only to make way for a two-handed weapon in the bag that could be wielded; the weapon and the ring never come off to fight bare-handed. */
+        heads[RF_SHIELD][RF_UNEQUIP] &= two_handed_wieldable;
         heads[RF_WEAPON][RF_UNEQUIP] = 0;
         heads[RF_RING][RF_UNEQUIP] = 0;
     }

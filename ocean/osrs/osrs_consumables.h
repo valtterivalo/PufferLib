@@ -92,7 +92,9 @@ static inline int osrs_brew_defence_boost_amount(int base_defence) {
     return base_defence * 20 / 100 + 2;
 }
 
-static inline EatResult osrs_eat_food(FoodType type, int current_hp, int max_hp, int food_timer) {
+/* overheal_blocked: the eater was attacked or damaged by the other player inside a PvP area within OSRS_PVP_OVERHEAL_BLOCK_TICKS (a blocked
+ * anglerfish heals like any other food: up to max_hp, nothing at full hitpoints, and is still consumed). */
+static inline EatResult osrs_eat_food(FoodType type, int current_hp, int max_hp, int food_timer, int overheal_blocked) {
     EatResult r = {0, 0};
     if (food_timer > 0) return r;
 
@@ -100,7 +102,7 @@ static inline EatResult osrs_eat_food(FoodType type, int current_hp, int max_hp,
     if (heal <= 0) return r;
 
     if (type == FOOD_ANGLERFISH) {
-        int room = max_hp + heal - current_hp;
+        int room = (overheal_blocked ? max_hp : max_hp + heal) - current_hp;
         r.consumed = 1;
         r.hp_healed = room < heal ? (room > 0 ? room : 0) : heal;
         return r;

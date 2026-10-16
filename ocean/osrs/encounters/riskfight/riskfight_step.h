@@ -402,6 +402,7 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         p->render_hit_count = 0;
         p->hit_landed_this_tick = 0;
         update_player_timers(p, encounter_player_prayer_bonus(p));
+        if (p->pvp_overheal_block > 0) p->pvp_overheal_block--;
         osrs_poison_tick_immunity(&s->poison[i]);
     }
     /* Inputs of both actors (meals, casts, equips, clicks) resolve before either actor's incoming hits: a meal heals before the damage landing on
