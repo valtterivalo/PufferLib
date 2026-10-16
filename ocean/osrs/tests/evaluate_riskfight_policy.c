@@ -111,7 +111,8 @@ static Hist eval_request_hist(const Request* q) {
     memcpy(h.warning.unseen, q->unseen, sizeof(q->unseen));
     h.since_eat = q->belief.seen_since_eat; h.big_hit_tick = q->big_hit;
     h.since_vw_spec = q->since_vw; h.since_maul_spec = q->since_maul;
-    h.ready_age = q->ready_age; h.last_swing_tick = q->last_swing; return h;
+    h.ready_age = q->ready_age; h.last_swing_tick = q->last_swing;
+    h.unanswered_since = q->unanswered_since; h.unanswered_damage = q->unanswered_damage; return h;
 }
 static void eval_plan(int argc, char** argv) {
     uint32_t n = eval_uint(argv[3], 2, UINT32_MAX - 1), seed = eval_uint(argv[6], 1, UINT32_MAX);

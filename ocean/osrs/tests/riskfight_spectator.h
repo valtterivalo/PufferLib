@@ -185,6 +185,7 @@ typedef struct {
     OppIn in;                     /* the inputs at the decision (his_hp is drawn per sample by the fit) */
     int hit_ratio, hit_scale, meals; /* his bar at his last hit (-1 none) and his meals since */
     int ate, swung, launch, wield, masked, swing_unknown, veng, bar, nhit, dmg;
+    double vis;                   /* the chance the animation of a meal on this tick shows, if no animation of his own hides it (the sim's own rule, riskfight_meal_visible) */
 } FitRow;
 
 static SpecKind spec_of_weapon_kind(int k) { return k == WK_VW ? SPEC_VW : k == WK_AGS ? SPEC_AGS : k == WK_CLAWS ? SPEC_CLAWS : k == WK_MAUL ? SPEC_MAUL : SPEC_NONE; }
@@ -205,7 +206,7 @@ static void fit_series(const SpecDuel* d, int side, FitRow* out, Hist* final) {
     GsSpecEnergy energy = gs_energy_full(d->rows[0].tick);
     GsTimerState timer = {0}, our_timer = {0};
     int hp_ratio = 30, our_bar = 30, our_veng = d->veng0[other], hit_ratio = -1, hit_scale = 30, meals = 0;
-    int cast_active = d->veng0[side], last_cast = INT_MIN / 2;
+    int cast_active = d->veng0[side], last_cast = INT_MIN / 2, prev_anim = 0;
     for (int i = 0; i < d->row_count; i++) {
         const SpecRow* r = &d->rows[i];
         const SpecSide* x = &r->s[side];
@@ -217,6 +218,7 @@ static void fit_series(const SpecDuel* d, int side, FitRow* out, Hist* final) {
             memset(row, 0, sizeof(*row));
             GsEnergyRange e = gs_energy_range(&energy, tick);
             int warning = warning_since(&h.warning);
+            row->vis = prev_anim ? RF_MEAL_VISIBLE_CARRY : RF_MEAL_VISIBLE_QUIET;
             row->tick = tick; row->session = d->session; row->source = d->source; row->style = d->dharok[side]; row->third = r->third;
             row->h = h;
             row->hit_ratio = hit_ratio; row->hit_scale = hit_scale; row->meals = meals;
@@ -229,6 +231,7 @@ static void fit_series(const SpecDuel* d, int side, FitRow* out, Hist* final) {
                 .our_tau = our_timer.seen ? opp_imax(0, our_timer.earliest - tick) : -1,
                 .our_spec = h.warning.spec_wielded_since != WARNING_NONE, .our_veng = our_veng,
                 .seen_mask = h.seen_mask, .wield_class = h.wield_class, .veng_ok = !cast_active && tick - last_cast >= 50,
+                .dmg_lag = lag_of(tick, h.unanswered_since), .dmg_size = h.unanswered_damage,
             };
             for (int k = 0; k < WK_COUNT; k++) { row->in.energy_ok[k] = e.high >= WK_COST[k]; row->in.has[k] = 1; }
         }
@@ -283,6 +286,7 @@ static void fit_series(const SpecDuel* d, int side, FitRow* out, Hist* final) {
             row->swing_unknown = unclassified;
         }
         in.ready = gs_timer_reading(timer, tick + 1) == GS_READING_READY;
+        prev_anim = other_animation || x->eat829 || x->nhit > 0;
         hist_update(&h, tick, &in);
     }
     *final = h;
