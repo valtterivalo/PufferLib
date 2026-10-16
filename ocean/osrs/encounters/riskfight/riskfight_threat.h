@@ -122,20 +122,56 @@ static OsrsThreatActor riskfight_threat_actor_of(const Player* p) {
         (OffensivePrayer)p->offensive_prayer, (FightStyle)p->fight_style};
 }
 
-/** Writes the RF_THREAT_SIZE floats of agent `p` against the other side `t` (its slots, its health bar). */
-static void riskfight_threat_write(const Player* p, const OsrsInventoryCell* cells, const RiskfightThreat* t, int bar_ratio, float* out) {
+/** The weapons of our bag that take an OURS slot after the wielded one: distinct, ascending by item index, at most RF_THREAT_OURS_SLOTS - 1. Feed every bag weapon to
+ * riskfight_threat_note_bag_weapon while the inventory is walked anyway. */
+typedef struct { uint8_t item[RF_THREAT_OURS_SLOTS - 1]; int count; } RiskfightBagWeapons;
+
+static inline void riskfight_threat_note_bag_weapon(RiskfightBagWeapons* bag, uint8_t item) {
+    int at = 0;
+    while (at < bag->count && bag->item[at] < item) at++;
+    if (at < bag->count && bag->item[at] == item) return;
+    if (at == RF_THREAT_OURS_SLOTS - 1) return; /* four slots: the wielded weapon and the three lowest item indices of the bag */
+    int last = bag->count < RF_THREAT_OURS_SLOTS - 1 ? bag->count : RF_THREAT_OURS_SLOTS - 2;
+    for (int i = last; i > at; i--) bag->item[i] = bag->item[i - 1];
+    bag->item[at] = item;
+    if (bag->count < RF_THREAT_OURS_SLOTS - 1) bag->count++;
+}
+
+/** Writes the RF_THREAT_SIZE floats of agent `p` against the other side `t` (its slots, its health bar). `bag` holds the weapons of p's inventory. */
+static void riskfight_threat_write(const Player* p, const RiskfightBagWeapons* bag, const RiskfightThreat* t, int bar_ratio, float* out) {
     memset(out, 0, RF_THREAT_SIZE * sizeof(float));
     OsrsThreatActor us = riskfight_threat_actor_of(p);
-    OsrsDefenceRolls ours = osrs_defence_rolls(p->equipped, &us);
-    OsrsHealthBarRange bar = osrs_health_bar_range(bar_ratio, OSRS_PLAYER_HEALTH_BAR_SCALE, RF_THREAT_BASE_HITPOINTS, RF_THREAT_OVERHEAL_CAP);
-    int his_hp_lower = bar.kind == OSRS_HEALTH_BAR_KNOWN ? bar.lower : RF_THREAT_BASE_HITPOINTS;
+    /* What we wear, summed: the Player's cache when it is current, else summed here. */
+    EquipmentBonuses worn;
+    int dharok_armour;
+    uint8_t wielded = p->equipped[GEAR_SLOT_WEAPON];
+    if (!p->slot_gear_dirty) {
+        worn = osrs_equipment_bonuses_of_gear(&p->slot_cached_bonuses);
+        dharok_armour = p->equipment_effect_profile.dharok_piece_count;
+    } else {
+        osrs_sum_equipment_bonuses(p->equipped, &worn);
+        OsrsEquipmentEffectProfile effects;
+        osrs_derive_equipment_effect_profile(p->equipped, &effects);
+        dharok_armour = effects.dharok_piece_count;
+    }
+    if (wielded != ITEM_NONE && (ITEM_DATABASE[wielded].effect_mask & OSRS_ITEM_EFFECT_DHAROK_PIECE)) dharok_armour--;
+    OsrsDefenceRolls ours = osrs_defence_rolls_from(&worn, &us);
+    int his_hp_lower = -1;
     for (int i = 0; i < t->count; i++) {
         const RiskfightThreatSlot* s = &t->slots[i];
         const OsrsThreatWeapon* w = &s->w;
         float* o = out + i * RF_THREAT_HIS_WIDTH;
         o[0] = s->p;
         o[1] = s->shown;
-        o[2] = (float)osrs_threat_max_hit_at(w, RF_THREAT_BASE_HITPOINTS, his_hp_lower) / RF_THREAT_DAMAGE_SCALE;
+        int max_hit = w->max_hit;
+        if (w->dharok) {
+            if (his_hp_lower < 0) {
+                OsrsHealthBarRange bar = osrs_health_bar_range(bar_ratio, OSRS_PLAYER_HEALTH_BAR_SCALE, RF_THREAT_BASE_HITPOINTS, RF_THREAT_OVERHEAL_CAP);
+                his_hp_lower = bar.kind == OSRS_HEALTH_BAR_KNOWN ? bar.lower : RF_THREAT_BASE_HITPOINTS;
+            }
+            max_hit = osrs_threat_max_hit_at(w, RF_THREAT_BASE_HITPOINTS, his_hp_lower);
+        }
+        o[2] = (float)max_hit / RF_THREAT_DAMAGE_SCALE;
         o[3] = osrs_threat_hit_chance(w, &ours);
         o[4] = (float)w->speed / RF_THREAT_SPEED_SCALE;
         o[4 + w->style] = 1; /* style 1..3 -> 5..7 */
@@ -147,19 +183,10 @@ static void riskfight_threat_write(const Player* p, const OsrsInventoryCell* cel
         }
     }
     /* Ours: the wielded weapon, then the bag's weapons in item order. */
-    uint8_t weapons[RF_THREAT_OURS_SLOTS];
-    int n = 0;
-    weapons[n++] = p->equipped[GEAR_SLOT_WEAPON];
-    for (int item = 0; item < ITEM_NONE && n < RF_THREAT_OURS_SLOTS; item++) {
-        if (item == weapons[0]) continue;
-        for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
-            const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&cells[slot]);
-            if (m->gear_slot == GEAR_SLOT_WEAPON && m->item_idx == item) { weapons[n++] = (uint8_t)item; break; }
-        }
-    }
     float* block = out + RF_THREAT_OURS_OFFSET;
-    for (int i = 0; i < n; i++) {
-        OsrsThreatWeapon w = osrs_threat_weapon(p->equipped, weapons[i], &us);
+    for (int i = 0; i <= bag->count; i++) {
+        uint8_t item = i == 0 ? wielded : bag->item[i - 1];
+        OsrsThreatWeapon w = osrs_threat_weapon_swapped(&worn, dharok_armour, p->equipped, item, &us);
         float* o = block + i * RF_THREAT_OURS_WIDTH;
         o[0] = 1;
         o[1] = (float)osrs_threat_max_hit_at(&w, RF_THREAT_BASE_HITPOINTS, p->current_hitpoints) / RF_THREAT_DAMAGE_SCALE;

@@ -181,6 +181,7 @@ static inline float riskfight_outcome_reward(RiskfightOutcome outcome, float pri
 }
 
 static void riskfight_write_observation(const RiskfightState*, int, float*);
+static void riskfight_write_script_observation(const RiskfightState*, int, float*);
 static void riskfight_script(const float*, const RiskfightProfile*, uint32_t, int, int*);
 static void riskfight_write_action_mask(const RiskfightState*, int, unsigned char*);
 

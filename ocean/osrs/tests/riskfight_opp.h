@@ -201,7 +201,7 @@ static double spec_probability(const OppFit* fit, const OppIn* in, int k) {
 /** The fitted policy as sim actions: eat with a serving, else swing or idle, the weapon of the swing and its spec, maul spec, Vengeance. */
 static void opp_fit_actions(const OppFit* fit, const RiskfightState* s, const Hist* h, int tick, uint32_t seed, int* actions) {
     float obs[RF_OBS_SIZE];
-    riskfight_write_observation(s, 1, obs);
+    riskfight_write_script_observation(s, 1, obs);
     static const RiskfightProfile quiet = {{0}, 0, 0, {0}, 0, 0, {{0}}};
     riskfight_script(obs, &quiet, s->script_seed[1], s->consume_ticks[1], actions);
     RiskfightObservedSelf self = riskfight_observed_self(obs);

@@ -525,7 +525,7 @@ static void riskfight_step(EncounterState* state, EncounterContext* context, con
         if (ctx->opp_hook) ctx->opp_hook(ctx->opp_user, s, opponent_actions);
         else {
             float obs[RF_OBS_SIZE];
-            riskfight_write_observation(s, 1, obs);
+            riskfight_write_script_observation(s, 1, obs);
             riskfight_script(obs, s->opponent_profile, s->script_seed[1], s->consume_ticks[1], opponent_actions);
         }
         if (s->opp_lag > 0) {
@@ -547,7 +547,7 @@ static void riskfight_step_human(EncounterState* state, EncounterContext* contex
     int human = ctx->human_player;
     float obs[RF_OBS_SIZE];
     int actions[RF_HEADS];
-    riskfight_write_observation(s, 1 - human, obs);
+    riskfight_write_script_observation(s, 1 - human, obs);
     riskfight_script(obs, s->opponent_profile, s->script_seed[1 - human], s->consume_ticks[1 - human], actions);
     riskfight_policy_commands(s, 1 - human, actions, &ctx->policy_commands[1 - human]);
     riskfight_step_queues(s, ctx,

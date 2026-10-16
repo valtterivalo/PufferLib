@@ -33,7 +33,8 @@ __attribute__((constructor)) static void riskfight_build_inventory_rows(void) {
     }
 }
 
-static void riskfight_write_observation(const RiskfightState* s, int agent, float* obs) {
+/** The observation up to the price, and the weapons of the agent's bag when `bag_weapons` is given (the threat block needs them). */
+static void riskfight_write_observation_core(const RiskfightState* s, int agent, float* obs, RiskfightBagWeapons* bag_weapons) {
     const Player* p = &s->env.players[agent];
     const OsrsInventoryUseState* use = &s->inventory_use[agent];
     const RiskfightVisibleOpponent* v = &s->visible[agent];
@@ -61,8 +62,10 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
         uint16_t code = p->inventory_cells[slot].content_code;
         float* row = obs + RF_INVENTORY_START + slot * RF_INVENTORY_WIDTH;
         memcpy(row, RF_INVENTORY_ROWS[code], sizeof(RF_INVENTORY_ROWS[code]));
-        row[5] = osrs_item_content_metadata(code)->consumable_kind == OSRS_CONSUMABLE_VENGEANCE_SACK ?
+        const OsrsItemContentMetadata* m = osrs_item_content_metadata(code);
+        row[5] = m->consumable_kind == OSRS_CONSUMABLE_VENGEANCE_SACK ?
             (float)use->vengeance_sacks / RF_OBSERVATION_SACK_SCALE : code != 0;
+        if (bag_weapons && m->gear_slot == GEAR_SLOT_WEAPON && m->item_idx != p->equipped[GEAR_SLOT_WEAPON]) riskfight_threat_note_bag_weapon(bag_weapons, m->item_idx);
     }
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
         obs[RF_EQUIPPED_START + slot] = (float)p->equipped[slot] / RF_OBSERVATION_ITEM_SCALE;
@@ -100,7 +103,18 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
         } else memset(out, 0, RF_EVENT_WIDTH * sizeof(float));
     }
     obs[RF_PRICE] = s->death_price * 10.0f / RF_PRICE_MAX_X10;
-    riskfight_threat_write(p, p->inventory_cells, &v->threat, v->health_bar, obs + RF_THREAT_START);
+}
+
+/** What the scripts read: the observation without its appended blocks (they read nothing from them), at the cost of the base. */
+static void riskfight_write_script_observation(const RiskfightState* s, int agent, float* obs) {
+    riskfight_write_observation_core(s, agent, obs, NULL);
+}
+
+/** The full observation: the base, then the appended blocks in order (threat features). */
+static void riskfight_write_observation(const RiskfightState* s, int agent, float* obs) {
+    RiskfightBagWeapons bag_weapons = {{0}, 0};
+    riskfight_write_observation_core(s, agent, obs, &bag_weapons);
+    riskfight_threat_write(&s->env.players[agent], &bag_weapons, &s->visible[agent].threat, s->visible[agent].health_bar, obs + RF_THREAT_START);
 }
 
 /** Head offsets into the mask, and the mask every state starts from: action 0 of every head and all

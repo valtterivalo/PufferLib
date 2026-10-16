@@ -96,7 +96,7 @@ static RiskfightTrainingStart riskfight_training_prefix(RiskfightState* state,
         int actions[2 * RF_HEADS];
         for (int i = 0; i < 2; i++) {
             float observation[RF_OBS_SIZE];
-            riskfight_write_observation(state, i, observation);
+            riskfight_write_script_observation(state, i, observation);
             riskfight_script(observation, scripts[i], state->script_seed[i], state->consume_ticks[i], actions + i * RF_HEADS);
         }
         riskfight_step((EncounterState*)state, (EncounterContext*)context, actions);
@@ -210,7 +210,7 @@ static int riskfight_training_actions(RiskfightTraining* training,
     if (training->opponent != RF_TRAIN_SCRIPTED) return 0;
     assert(frozen_policy > 0);
     float observation[RF_OBS_SIZE];
-    riskfight_write_observation(state, 1, observation);
+    riskfight_write_script_observation(state, 1, observation);
     int omitted = riskfight_training_draw(training, riskfight_training_omission(training));
     if (omitted) memset(actions + RF_HEADS, 0, RF_HEADS * sizeof(int));
     else riskfight_script(observation, state->opponent_profile, state->script_seed[1], state->consume_ticks[1], actions + RF_HEADS);

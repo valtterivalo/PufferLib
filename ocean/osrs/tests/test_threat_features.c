@@ -136,6 +136,18 @@ static void test_equals_sim(void) {
             abort();
         }
         assert(w.speed == get_slot_gear_bonuses(&attacker)->attack_speed + osrs_stance_speed_mod(a.stance));
+        /* The cheap route of the observation, swapping the weapon into the bonuses of what is worn, equals summing the loadout again, byte for byte. */
+        uint8_t worn[NUM_GEAR_SLOTS];
+        memcpy(worn, eq, NUM_GEAR_SLOTS);
+        worn[GEAR_SLOT_WEAPON] = (xorshift32(&rng) & 3) == 0 ? ITEM_NONE : (uint8_t)weapons[xorshift32(&rng) % (unsigned)weapon_count];
+        if (worn[GEAR_SLOT_WEAPON] != ITEM_NONE && item_is_two_handed(worn[GEAR_SLOT_WEAPON])) worn[GEAR_SLOT_SHIELD] = ITEM_NONE;
+        EquipmentBonuses worn_sum;
+        osrs_sum_equipment_bonuses(worn, &worn_sum);
+        int dharok_armour = 0;
+        for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
+            dharok_armour += slot != GEAR_SLOT_WEAPON && worn[slot] != ITEM_NONE && (ITEM_DATABASE[worn[slot]].effect_mask & OSRS_ITEM_EFFECT_DHAROK_PIECE) != 0;
+        OsrsThreatWeapon full = osrs_threat_weapon(worn, weapon, &a), swapped = osrs_threat_weapon_swapped(&worn_sum, dharok_armour, worn, weapon, &a);
+        if (memcmp(&full, &swapped, sizeof(full)) != 0) { printf("swapped != full for %s over worn %s: max %d/%d roll %d/%d speed %d/%d\n", ITEM_DATABASE[weapon].name, worn[GEAR_SLOT_WEAPON] == ITEM_NONE ? "-" : ITEM_DATABASE[worn[GEAR_SLOT_WEAPON]].name, full.max_hit, swapped.max_hit, full.att_roll, swapped.att_roll, full.speed, swapped.speed); abort(); }
         if (style == ATTACK_STYLE_MELEE) assert(w.dharok == (attacker.equipment_effect_profile.dharok_piece_count >= 4));
         checked[style]++;
     }

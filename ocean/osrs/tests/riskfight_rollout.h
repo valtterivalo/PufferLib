@@ -119,7 +119,7 @@ static void opponent_actions(const OppModel* model, Sim* sim, int step, uint32_t
         return;
     }
     float obs[RF_OBS_SIZE];
-    riskfight_write_observation(s, 1, obs);
+    riskfight_write_script_observation(s, 1, obs);
     int count = model->profile_count ? model->profile_count : PROFILE_COUNT;
     RiskfightProfile profile = RISKFIGHT_HUMAN_PROFILES[model->profile_first + osrs_lowbias32(g_rollout_seed) % count];
     riskfight_script(obs, &profile, s->script_seed[1], s->consume_ticks[1], actions);
@@ -191,7 +191,7 @@ static void queue_ours(Sim* sim, const Tape* tape, const OursPolicy* policy, int
     } else if (policy->kind == OURS_SCRIPT) {
         float obs[RF_OBS_SIZE];
         int actions[RF_HEADS];
-        riskfight_write_observation(&sim->state, 0, obs);
+        riskfight_write_script_observation(&sim->state, 0, obs);
         riskfight_script(obs, g_script_profile, sim->state.script_seed[0], sim->state.consume_ticks[0], actions);
         riskfight_policy_commands(&sim->state, 0, actions, hi);
     } else if (policy_rules(policy)) {

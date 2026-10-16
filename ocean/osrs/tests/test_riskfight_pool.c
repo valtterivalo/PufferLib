@@ -98,6 +98,39 @@ static void test_draws(void) {
     printf("draws: empirical %.3f archetype %.3f edge %.3f over %d resets\n", share[0], share[1], share[2], n);
 }
 
+/* The observation's cheap route (the Player's cached bonuses, weapon swaps by delta) against the slow one (every loadout summed from scratch). */
+static void check_threat_block_against_reference(const RiskfightState* s, const float* obs) {
+    const Player* p = &s->env.players[0];
+    const RiskfightThreat* t = &s->visible[0].threat;
+    OsrsThreatActor us = riskfight_threat_actor_of(p);
+    OsrsDefenceRolls ours = osrs_defence_rolls(p->equipped, &us);
+    const float* block = obs + RF_THREAT_START;
+    for (int i = 0; i < t->count; i++) {
+        const OsrsThreatWeapon* w = &t->slots[i].w;
+        assert(fabsf(block[i * RF_THREAT_HIS_WIDTH + 3] - osrs_threat_hit_chance(w, &ours)) < 1e-6f);
+        if (w->spec_cost > 0) assert(fabsf(block[i * RF_THREAT_HIS_WIDTH + 10] - osrs_threat_spec_hit_chance(w, &ours)) < 1e-6f);
+    }
+    uint8_t items[RF_THREAT_OURS_SLOTS];
+    int n = 0;
+    items[n++] = p->equipped[GEAR_SLOT_WEAPON];
+    for (int item = 0; item < ITEM_NONE && n < RF_THREAT_OURS_SLOTS; item++) {
+        if (item == items[0]) continue;
+        for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+            const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[slot]);
+            if (m->gear_slot == GEAR_SLOT_WEAPON && m->item_idx == item) { items[n++] = (uint8_t)item; break; }
+        }
+    }
+    OsrsDefenceRolls his = t->his_defence;
+    for (int i = 0; i < n; i++) {
+        OsrsThreatWeapon w = osrs_threat_weapon(p->equipped, items[i], &us);
+        const float* o = block + RF_THREAT_OURS_OFFSET + i * RF_THREAT_OURS_WIDTH;
+        assert(o[0] == 1 && fabsf(o[1] - (float)osrs_threat_max_hit_at(&w, RF_THREAT_BASE_HITPOINTS, p->current_hitpoints) / RF_THREAT_DAMAGE_SCALE) < 1e-6f);
+        assert(fabsf(o[2] - osrs_threat_hit_chance(&w, &his)) < 1e-6f && fabsf(o[3] - (float)w.speed / RF_THREAT_SPEED_SCALE) < 1e-6f);
+        if (w.spec_cost > 0) assert(fabsf(o[6] - osrs_threat_spec_hit_chance(&w, &his)) < 1e-6f);
+    }
+    if (n < RF_THREAT_OURS_SLOTS) assert(block[RF_THREAT_OURS_OFFSET + n * RF_THREAT_OURS_WIDTH] == 0);
+}
+
 /* Every kit plays: 240 ticks against a scripted fighter on our side attacking, no abort; each kit swings (or one side is gone); ranged kits shoot ranged. */
 static void test_every_kit_plays(void) {
     riskfight_init_context((EncounterContext*)&context);
@@ -119,6 +152,7 @@ static void test_every_kit_plays(void) {
             actions[RF_PRIMARY] = RF_ATTACK;
             riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
             float obs[RF_OBS_SIZE];
+            check_threat_block_against_reference(&state, (riskfight_write_observation(&state, 0, obs), obs));
             for (int side = 0; side < 1; side++) { /* our view: his own (a ranger on Rigour reads 1.25 at the prayer input) only feeds his script */
                 riskfight_write_observation(&state, side, obs);
                 /* The threat block stays in [0, 1] and nothing is NaN (older inputs such as the age of his last swing scale past 1 by design). */
