@@ -61,17 +61,26 @@ static int riskfight_chance_range(const RiskfightState* s, int agent) {
     return riskfight_chance_range_of(threat, v->spec_est, v->last_cast_tick >= v->last_proc_tick);
 }
 
+/** The three floats of the session block that move while the session waits between fights (the sim is not stepped then): ticks left, wait left, reputation. */
+static inline void riskfight_session_clock(const RiskfightState* s, float out[3]) {
+    out[0] = s->session_ticks_left >= RF_SESSION_HORIZON_TICKS ? 1.0f : fmaxf(0.0f, (float)s->session_ticks_left / RF_SESSION_HORIZON_TICKS);
+    out[1] = s->session_wait_left >= RF_WAIT_SCALE_TICKS ? 1.0f : (float)s->session_wait_left / RF_WAIT_SCALE_TICKS;
+    out[2] = fminf(1.0f, s->session_rep / RF_REP_OBS_SCALE);
+}
+
 /** The session block (RF_SESSION_START). [2] and [3] mark a wait between fights and how much of it is left. [0] session ticks left over RF_SESSION_HORIZON_TICKS, capped at 1: what a fight is worth depends on the time left only
  * through how many more fights fit, which stops mattering a few fight cycles out, so an open-ended session (live) reads 1, the value most of a training
  * session shows too. [1] his special energy as a player counts it: whether he can still spec decides whether leaving after our own spec is rude. [4] our reputation
  * (RF_REP_OBS_SCALE rude teleports read 1): it lengthens the wait for a new opponent and makes ragging more likely. */
 static void riskfight_write_session_observation(const RiskfightState* s, int agent, float* obs) {
     float* out = obs + RF_SESSION_START;
-    out[0] = s->session_ticks_left >= RF_SESSION_HORIZON_TICKS ? 1.0f : fmaxf(0.0f, (float)s->session_ticks_left / RF_SESSION_HORIZON_TICKS);
+    float clock[3];
+    riskfight_session_clock(s, clock);
+    out[0] = clock[0];
     out[1] = s->visible[agent].spec_est / 100.0f;
     out[2] = s->session_wait_left > 0;
-    out[3] = s->session_wait_left >= RF_WAIT_SCALE_TICKS ? 1.0f : (float)s->session_wait_left / RF_WAIT_SCALE_TICKS;
-    out[4] = fminf(1.0f, s->session_rep / RF_REP_OBS_SCALE);
+    out[3] = clock[1];
+    out[4] = clock[2];
     out[5] = fminf(1.0f, (float)s->overeats[agent] / (RF_OVEREAT_PATIENCE + 1));
     const RiskfightVisibleOpponent* v = &s->visible[agent];
     int range = riskfight_chance_range_of(obs + RF_THREAT_START, v->spec_est, v->last_cast_tick >= v->last_proc_tick);

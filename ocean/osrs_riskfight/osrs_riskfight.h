@@ -50,6 +50,7 @@ struct Env {
     int tag, boundary_reached;
     int session_elapsed, session_fights; /* game ticks spent so far (fights and delays), fights ended */
     int wait_left;                       /* ticks of the wait between two fights still to pass: each is a step of no choice, reward 0 */
+    int wait_obs_valid;                  /* the buffers hold the full observation and wait mask of this very state: the last full observe was made while waiting and nothing but the session clock has moved since */
     RiskfightTransition wait_transition; /* what the wait leads to */
     float session_stake;                 /* kills minus price times deaths so far, in kill units */
     RiskfightState state;
@@ -109,6 +110,16 @@ static inline void puf_set_bot_policy(Env* env, int bot_policy) {
     env->context.opponent = (RiskfightOpponent)bot_policy;
 }
 
+/** One float as the observation buffer holds it: round-to-nearest-even bf16, bit-identical to __float2bfloat16 for finite values, or the float itself. */
+static inline obs_t riskfight_obs_one(float value) {
+#ifdef RF_BF16_OBS
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    return (uint16_t)((bits + 0x7FFFu + ((bits >> 16) & 1u)) >> 16);
+#else
+    return value;
+#endif
+}
 /** Writes obs as round-to-nearest-even bf16, bit-identical to __float2bfloat16 for finite values. */
 static inline void riskfight_obs_store(obs_t* out, const float* obs) {
 #ifdef RF_BF16_OBS
@@ -131,6 +142,22 @@ static void riskfight_native_observe(Env* env) {
         riskfight_obs_store(env->agents[i].observations, obs);
         if (env->wait_left > 0) riskfight_write_wait_mask(env->agents[i].action_mask);
         else riskfight_write_action_mask(&env->state, i, env->agents[i].action_mask);
+    }
+    env->wait_obs_valid = env->wait_left > 0;
+}
+/** The observation of a tick of the wait between fights after the one that wrote it in full: the sim is not stepped while waiting, so every float of the
+ * observation and every mask byte stays as it is except the session clock (ticks left, wait left, reputation), which is rewritten here. */
+static void riskfight_native_observe_wait_tick(Env* env) {
+    env->state.session_ticks_left = env->training.config.session_ticks - env->session_elapsed;
+    env->state.session_wait_left = env->wait_left;
+    env->state.session_rep = env->training.rep;
+    float clock[3];
+    riskfight_session_clock(&env->state, clock);
+    for (int i = 0; i < env->num_agents; i++) {
+        obs_t* out = env->agents[i].observations + RF_SESSION_START;
+        out[0] = riskfight_obs_one(clock[0]);
+        out[3] = riskfight_obs_one(clock[1]);
+        out[4] = riskfight_obs_one(clock[2]);
     }
 }
 /** Who plays the opponent of a fight just reset: when the script or OppFit drives him (always in a self_play 0 env, in a self-play env when the session's
@@ -255,7 +282,7 @@ static void riskfight_native_next_fight(Env* env) {
     riskfight_native_opponent_hooks(env, !t->rematch);
 }
 /** The end of a step of either kind: the terminals, and the session's totals and a fresh session when its budget is spent. */
-static void riskfight_native_finish_step(Env* env) {
+static void riskfight_native_finish_step(Env* env, int wait_step) {
     env->training.rep = riskfight_rep_decay(env->training.rep);
     const int budget = env->training.config.session_ticks;
     int session_over = env->session_elapsed >= budget;
@@ -273,7 +300,8 @@ static void riskfight_native_finish_step(Env* env) {
         riskfight_native_reset(env);
 #endif
     }
-    riskfight_native_observe(env);
+    if (wait_step && !session_over && env->wait_left > 0 && env->wait_obs_valid) riskfight_native_observe_wait_tick(env);
+    else riskfight_native_observe(env);
 }
 
 void puf_step(Env* env) {
@@ -294,7 +322,7 @@ void puf_step(Env* env) {
         env->session_elapsed++;
         env->log.wait_ticks++;
         if (--env->wait_left == 0 && env->session_elapsed < env->training.config.session_ticks) riskfight_native_next_fight(env);
-        riskfight_native_finish_step(env);
+        riskfight_native_finish_step(env, 1);
         return;
     }
     int actions[2 * RF_HEADS] = {0};
@@ -331,7 +359,7 @@ void puf_step(Env* env) {
             if (env->wait_left == 0) riskfight_native_next_fight(env);
         }
     }
-    riskfight_native_finish_step(env);
+    riskfight_native_finish_step(env, 0);
 }
 void puf_render(Env* env) {
 #ifdef OSRS_PUFFER_RENDER
