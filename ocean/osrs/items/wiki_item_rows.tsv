@@ -1,0 +1,44 @@
+# Wiki-sourced item rows: one data row per item, appended by scripts/gen_osrs_item_rows.py into osrs_items_wiki_rows.h
+# (enum, ITEM_DATABASE row, attack style, raw-id aliases). Hand rows in osrs_items_generated.h stay as they are.
+#
+# Add an item in three steps:
+#   1. Append a row. Every number is the OSRS Wiki "Combat stats" infobox of that item (wiki_url) at the version
+#      whose id is raw_id. slot is the sim slot; weapons carry attack_speed (ticks), attack_range (tiles; magic
+#      staffs that autocast use 10 like the hand staff rows) and style (melee/ranged/magic); two_handed is the wiki
+#      "2h" slot. aliases: further raw ids with the same stats (charged / ornament / locked variants).
+#      A new row is APPENDED, never inserted: indexes and observation codes of existing rows must not move.
+#   2. python3 scripts/gen_osrs_item_rows.py
+#   3. cc -std=c11 -O2 -I. -o /tmp/gen_osrs_item_obs ocean/osrs/tools/gen_osrs_item_obs_table.c -lm
+#      /tmp/gen_osrs_item_obs ocean/osrs/osrs_item_obs_generated.h ocean/osrs/osrs_item_obs_table.inc
+#      then build ocean/osrs/tests/test_wiki_item_rows.c (cc -std=c11 -O2 -I. ... -lm) and run it.
+# Budget: item index < 255 with OSRS_STAT_ITEM_SLOTS run-time rows after the table (scripts check >= 40 free), and
+# OSRS_ITEM_CONTENT_COUNT <= OSRS_ITEM_OBS_CODE_SCALE (256; the generator refuses more).
+# Specials are NOT here: a weapon with a special the sim does not model has spec cost 0 (osrs_special_attacks.h).
+raw_id	enum	name	slot	two_handed	attack_speed	attack_range	style	attack_stab	attack_slash	attack_crush	attack_magic	attack_ranged	defence_stab	defence_slash	defence_crush	defence_magic	defence_ranged	melee_strength	ranged_strength	magic_damage	prayer	aliases	wiki_url	notes
+29000	ITEM_ECLIPSE_ATLATL	Eclipse atlatl	weapon	1	4	5	ranged	0	0	0	0	87	0	0	0	0	0	40	0	0	0		https://oldschool.runescape.wiki/w/Eclipse_atlatl	
+29796	ITEM_NOXIOUS_HALBERD	Noxious halberd	weapon	1	5	2	melee	80	132	0	0	0	0	0	0	0	0	142	0	0	0		https://oldschool.runescape.wiki/w/Noxious_halberd	
+31248	ITEM_BELLES_FOLLY	Belle's folly	weapon	0	5	1	melee	100	78	-3	0	0	20	15	-9	0	0	102	0	0	0		https://oldschool.runescape.wiki/w/Belle's_folly	
+1434	ITEM_DRAGON_MACE	Dragon mace	weapon	0	4	1	melee	40	-2	60	0	0	0	0	0	0	0	55	0	0	5		https://oldschool.runescape.wiki/w/Dragon_mace	
+8872	ITEM_BONE_DAGGER	Bone dagger	weapon	0	4	1	melee	5	3	-4	1	0	0	0	0	1	0	4	0	0	0		https://oldschool.runescape.wiki/w/Bone_dagger#(unp)	
+27665	ITEM_ACCURSED_SCEPTRE	Accursed sceptre	weapon	0	4	7	magic	0	0	0	22	0	0	0	0	20	0	0	0	0	0		https://oldschool.runescape.wiki/w/Accursed_sceptre#Charged	
+27900	ITEM_VESTAS_SPEAR_BH	Vesta's spear (bh)	weapon	1	5	1	melee	133	113	120	0	0	18	21	21	0	0	122	0	0	0		https://oldschool.runescape.wiki/w/Vesta's_spear_(bh)#Activated	
+13271	ITEM_ABYSSAL_DAGGER_P_PLUS_PLUS	Abyssal dagger (p++)	weapon	0	4	1	melee	75	40	-4	1	0	0	0	0	1	0	75	0	0	0	13269	https://oldschool.runescape.wiki/w/Abyssal_dagger#(p%2B%2B)	
+12904	ITEM_TOXIC_STAFF_OF_THE_DEAD	Toxic staff of the dead	weapon	0	4	10	magic	55	70	0	25	0	0	3	3	17	0	72	0	15	0		https://oldschool.runescape.wiki/w/Toxic_Staff_of_the_Dead#Charged	wiki attackrange 1 (bladed staff); magic autocast range 10 as the Staff of the dead row
+29031	ITEM_ECLIPSE_MOON_CHESTPLATE	Eclipse moon chestplate	body	0	0	0	none	0	0	0	-15	31	15	18	57	55	32	3	0	0	0		https://oldschool.runescape.wiki/w/Eclipse_Moon_chestplate#Used	
+29806	ITEM_ARANEA_BOOTS	Aranea boots	feet	0	0	0	none	0	0	0	5	6	0	0	0	0	0	4	0	0	1		https://oldschool.runescape.wiki/w/Aranea_boots	
+29033	ITEM_ECLIPSE_MOON_TASSETS	Eclipse moon tassets	legs	0	0	0	none	0	0	0	-15	17	9	13	37	31	17	1	0	0	0		https://oldschool.runescape.wiki/w/Eclipse_Moon_tassets#Used	
+29035	ITEM_ECLIPSE_MOON_HELM	Eclipse moon helm	head	0	0	0	none	0	0	0	-6	8	2	3	14	10	4	3	0	0	0		https://oldschool.runescape.wiki/w/Eclipse_Moon_helm#Used	
+21902	ITEM_DRAGON_CROSSBOW	Dragon crossbow	weapon	0	6	7	ranged	0	0	0	0	94	0	0	0	0	0	0	0	0	0		https://oldschool.runescape.wiki/w/Dragon_crossbow	
+8842	ITEM_VOID_KNIGHT_GLOVES	Void knight gloves	hands	0	0	0	none	0	0	0	0	0	6	6	6	4	6	0	0	0	0	24182	https://oldschool.runescape.wiki/w/Void_knight_gloves#Normal	
+21304	ITEM_OBSIDIAN_PLATELEGS	Obsidian platelegs	legs	0	0	0	none	0	0	0	0	0	46	43	41	-10	40	1	0	0	0		https://oldschool.runescape.wiki/w/Obsidian_platelegs	
+11665	ITEM_VOID_MELEE_HELM	Void melee helm	head	0	0	0	none	0	0	0	0	0	6	6	6	6	6	0	0	0	0	24185	https://oldschool.runescape.wiki/w/Void_melee_helm#Normal	
+13072	ITEM_ELITE_VOID_TOP	Elite void top	body	0	0	0	none	0	0	0	0	0	45	45	45	45	45	0	0	0	3		https://oldschool.runescape.wiki/w/Elite_void_top#Normal	
+13073	ITEM_ELITE_VOID_ROBE	Elite void robe	legs	0	0	0	none	0	0	0	0	0	30	30	30	30	30	0	0	0	3		https://oldschool.runescape.wiki/w/Elite_void_robe#Normal	
+1127	ITEM_RUNE_PLATEBODY	Rune platebody	body	0	0	0	none	0	0	0	-30	-15	82	80	72	-6	80	0	0	0	0		https://oldschool.runescape.wiki/w/Rune_platebody	
+24271	ITEM_NEITIZNOT_FACEGUARD	Neitiznot faceguard	head	0	0	0	none	0	0	0	0	0	36	34	38	3	34	6	0	0	3		https://oldschool.runescape.wiki/w/Neitiznot_faceguard	
+28474	ITEM_ICE_ANCIENT_SCEPTRE_L	Ice ancient sceptre (l)	weapon	0	4	10	magic	20	-1	50	20	0	2	3	1	15	0	60	0	10	-1	27626	https://oldschool.runescape.wiki/w/Ice_ancient_sceptre#Locked	magic range 10 as the hand staff rows
+861	ITEM_MAGIC_SHORTBOW	Magic shortbow	weapon	1	4	7	ranged	0	0	0	0	69	0	0	0	0	0	0	0	0	0		https://oldschool.runescape.wiki/w/Magic_shortbow	
+20849	ITEM_DRAGON_THROWNAXE	Dragon thrownaxe	weapon	0	5	4	ranged	0	0	0	0	36	0	0	0	0	0	0	47	0	0		https://oldschool.runescape.wiki/w/Dragon_thrownaxe	
+28869	ITEM_HUNTERS_SUNLIGHT_CROSSBOW	Hunters' sunlight crossbow	weapon	0	4	8	ranged	0	0	0	0	79	0	0	0	0	0	0	0	0	0		https://oldschool.runescape.wiki/w/Hunters'_sunlight_crossbow	
+22804	ITEM_DRAGON_KNIFE	Dragon knife	weapon	0	3	4	ranged	0	0	0	0	28	0	0	0	0	0	0	30	0	0	22810	https://oldschool.runescape.wiki/w/Dragon_knife#(unp)	
+25416	ITEM_BLOODBARK_LEGS	Bloodbark legs	legs	0	0	0	none	0	0	0	16	0	33	31	38	17	0	0	0	1	0		https://oldschool.runescape.wiki/w/Bloodbark_legs	
