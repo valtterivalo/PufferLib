@@ -482,7 +482,7 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
                 }
                 if (has_combat) s->combat_opp[i]++;
             }
-            if (pvp_is_maul(weapon) && p->special_energy >= 50) s->maul_opp[i]++;
+            if (pvp_is_maul(weapon) && p->special_energy >= osrs_spec_cost(weapon)) s->maul_opp[i]++;
         }
     }
     for (int i = 0; i < 2; i++) {

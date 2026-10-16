@@ -58,7 +58,7 @@ static inline int osrs_spec_cost(int weapon_item_idx) {
         case ITEM_ABYSSAL_DAGGER_BH_P_PLUS_PLUS: return 35;
         case ITEM_DRAGON_MACE_BH:       return 15;
         case ITEM_VOIDWAKER:            return 50;
-        case ITEM_GRANITE_MAUL:         return 50;
+        case ITEM_GRANITE_MAUL:         return 60; /* Quick Smash costs 60%; only the ornate handle version costs 50% (wiki Granite_maul) */
         case ITEM_GRANITE_MAUL_ORNATE:  return 50;
         case ITEM_DRAGON_DAGGER:        return 25;
         case ITEM_ELDER_MAUL:           return 50;
@@ -239,7 +239,7 @@ static inline SpecResult osrs_resolve_spec(
 
     case ITEM_GRANITE_MAUL_ORNATE:
     case ITEM_GRANITE_MAUL: {
-        r.spec_cost = 50;
+        r.spec_cost = osrs_spec_cost(weapon_item_idx);
         r.num_hits = 1;
         r.attack_speed_override = 1;
         if (encounter_roll_hit_chance(rng_state, att_roll, def_roll))

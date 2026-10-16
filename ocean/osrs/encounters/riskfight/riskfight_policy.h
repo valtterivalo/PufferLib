@@ -133,13 +133,18 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
         heads[head][RF_UNEQUIP] = p->equipped[gear_slot] != ITEM_NONE && has_empty;
     }
     int has_teleport = 0, one_handed_switch = 0, shield_slot = -1;
+    /* One spec of the wielded spec weapon, else of the cheapest spec weapon in the bag: the plain granite maul costs 60, the ornate 50. */
+    int wielded_spec_cost = osrs_spec_cost(p->equipped[GEAR_SLOT_WEAPON]), bag_spec_cost = 0;
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
         const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[slot]);
         if (m->gear_slot >= 0) {
             int allowed = osrs_can_equip_metadata(p, m, has_empty);
             gear_masks[m->gear_slot][slot + 1] = allowed;
-            if (m->gear_slot == GEAR_SLOT_WEAPON && !item_is_two_handed(m->item_idx))
-                one_handed_switch |= allowed;
+            if (m->gear_slot == GEAR_SLOT_WEAPON) {
+                int cost = osrs_spec_cost(m->item_idx);
+                if (cost > 0 && (!bag_spec_cost || cost < bag_spec_cost)) bag_spec_cost = cost;
+                if (!item_is_two_handed(m->item_idx)) one_handed_switch |= allowed;
+            }
             if (m->gear_slot == GEAR_SLOT_SHIELD) shield_slot = slot;
         }
         if (m->click_action == OSRS_CLICK_EAT) {
@@ -157,8 +162,9 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
     }
     heads[RF_VENGEANCE][1] = !p->veng_active && p->veng_cooldown <= 1 &&
         p->current_magic >= OSRS_VENGEANCE_MAGIC_LEVEL && s->inventory_use[agent].vengeance_sacks > 0;
+    int spec_cost = wielded_spec_cost > 0 ? wielded_spec_cost : bag_spec_cost > 0 ? bag_spec_cost : 50;
     for (int action = 1; action < RF_ACTION_DIMS[RF_SPECIAL]; action++)
-        heads[RF_SPECIAL][action] = p->special_energy >= action * 50;
+        heads[RF_SPECIAL][action] = p->special_energy >= action * spec_cost;
     heads[RF_PRIMARY][RF_TELEPORT] = has_teleport &&
         osrs_teleport_allowed(s->env.pvp_runtime.teleport[agent], s->env.tick);
     for (int action = 1; action < RF_ACTION_DIMS[RF_PRAYER]; action++)

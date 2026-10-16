@@ -76,15 +76,37 @@ static void test_lock_matrix(void) {
     assert(earliest_second(SLOT_HARD, SLOT_BREW_A) == 1);
     assert(earliest_second(SLOT_HARD, SLOT_KARB_A) == 1);
     assert(earliest_second(SLOT_BREW_A, SLOT_KARB_A) == 1);
-    /* The same-tick combos stay legal: hard food, karambwan, brew in one tick. */
-    int combo[] = {SLOT_HARD, SLOT_BREW_A, SLOT_KARB_A}; /* karambwan locks potions, so the potion goes before it */
+    /* The only same-tick triple is hard food, brew, karambwan: the karambwan locks everything, itself included, for T+3, so a brew clicked after it is rejected. */
+    int combo[] = {SLOT_HARD, SLOT_BREW_A, SLOT_KARB_A};
     reset();
     step(combo, 3);
     assert(consumed(SLOT_HARD) && consumed(SLOT_KARB_A) && consumed(SLOT_BREW_A));
+    int karb_before_brew[] = {SLOT_HARD, SLOT_KARB_A, SLOT_BREW_A};
+    reset();
+    step(karb_before_brew, 3);
+    assert(consumed(SLOT_HARD) && consumed(SLOT_KARB_A) && !consumed(SLOT_BREW_A));
     int brew_karb[] = {SLOT_BREW_A, SLOT_KARB_A};
     reset();
     step(brew_karb, 2);
     assert(consumed(SLOT_BREW_A) && consumed(SLOT_KARB_A));
+}
+
+/* The RL food, drink and combo heads queue in that order (hard food, brew, karambwan): one decision with all three heads set is the accepted triple. */
+static void test_rl_heads_are_the_accepted_triple(void) {
+    reset();
+    int actions[RF_HEADS] = {0};
+    actions[RF_FOOD] = SLOT_HARD + 1;
+    actions[RF_DRINK] = SLOT_BREW_A + 1;
+    actions[RF_COMBO] = SLOT_KARB_A + 1;
+    HumanInput* hi = &context.policy_commands[0];
+    riskfight_policy_commands(&state, 0, actions, hi);
+    assert(hi->commands.count >= 3); /* the prayer and style heads queue after the three clicks */
+    assert(hi->commands.items[0].inventory_slot == SLOT_HARD && hi->commands.items[1].inventory_slot == SLOT_BREW_A &&
+        hi->commands.items[2].inventory_slot == SLOT_KARB_A);
+    HumanCommandQueue theirs = {0};
+    state.env.players[0].current_hitpoints = 40;
+    riskfight_step_queues(&state, &context, &hi->commands, &theirs);
+    assert(consumed(SLOT_HARD) && consumed(SLOT_BREW_A) && consumed(SLOT_KARB_A));
 }
 
 static void test_karambwan_not_at_t_plus_two(void) {
@@ -99,9 +121,13 @@ static void test_karambwan_not_at_t_plus_two(void) {
     assert(consumed(SLOT_KARB_B));
 }
 
+/* Quick Smash costs 60% on the plain granite maul, 50% only with the ornate handle (wiki Granite_maul, since Sep 2019). */
 static void test_maul_costs(void) {
-    assert(osrs_spec_cost(ITEM_GRANITE_MAUL) == 50);
+    assert(osrs_spec_cost(ITEM_GRANITE_MAUL) == 60);
     assert(osrs_spec_cost(ITEM_GRANITE_MAUL_ORNATE) == 50);
+    SpecResult plain = osrs_resolve_spec(ITEM_GRANITE_MAUL, 20000, 40, 8000, 200, &(uint32_t){7});
+    SpecResult ornate = osrs_resolve_spec(ITEM_GRANITE_MAUL_ORNATE, 20000, 40, 8000, 200, &(uint32_t){7});
+    assert(plain.spec_cost == 60 && ornate.spec_cost == 50);
 }
 
 static OsrsPvpHitEvent seen[8];
@@ -216,6 +242,7 @@ int main(void) {
     riskfight_init_context((EncounterContext*)&context);
     riskfight_finalize_context((EncounterState*)&state, (EncounterContext*)&context);
     test_lock_matrix();
+    test_rl_heads_are_the_accepted_triple();
     test_karambwan_not_at_t_plus_two();
     test_maul_costs();
     test_hitsplat_types();

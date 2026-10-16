@@ -802,9 +802,10 @@ static void la_scripts(const RiskfightState* base, int tick, const LaFeasible* f
     for (int i = slot[GS_HARD_FOOD] + 1; slot[GS_HARD_FOOD] >= 0 && i < OSRS_INVENTORY_SIZE && hard_next < 0; i++)
         if (osrs_inventory_cell_metadata(&us->inventory_cells[i])->consumable_kind == OSRS_CONSUMABLE_ANGLERFISH) hard_next = i;
     if (f->eat_ok && slot[GS_HARD_FOOD] >= 0 && slot[GS_FAST_FOOD] >= 0 && slot[GS_POTION] >= 0) {
-        /* The triple clicks three distinct slots, each carried now and untouched by the other two clicks. */
+        /* The triple clicks three distinct slots, each carried now and untouched by the other two clicks. Hard food, then the brew, then the karambwan:
+         * nothing is consumed before T+3 after a karambwan, so only hard food -> brew -> karambwan lands all three on one tick (measured, DeathAudit.LockTest). */
         feasible[LA_EAT_TRIPLE] = 1;
-        HumanCommand triple[4] = {click_command(slot[GS_HARD_FOOD]), click_command(slot[GS_FAST_FOOD]), click_command(slot[GS_POTION]), attack_command()};
+        HumanCommand triple[4] = {click_command(slot[GS_HARD_FOOD]), click_command(slot[GS_POTION]), click_command(slot[GS_FAST_FOOD]), attack_command()};
         r = saved;
         la_press(&r, &scripts[LA_EAT_TRIPLE], tick, triple, 4);
         /* The staggered plan clicks the hard food's slot, then (three ticks on) the next carried one, so it exists only with two carried: a press

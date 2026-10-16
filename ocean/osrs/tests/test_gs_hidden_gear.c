@@ -23,6 +23,13 @@ int main(void) {
         assert(with.attack_bonus == without.attack_bonus);
         assert(with.bonuses.strength == without.bonuses.strength);
     }
+    /* The plain granite maul (4153) costs 60 to spec, the ornate handle one (24225) 50: an armament carries the cost of its item. */
+    GsArmament plain_maul, ornate_maul;
+    assert(gs_armed(&with_shield, (GsBonuses){0}, 4153, &plain_maul));
+    assert(gs_armed(&with_shield, (GsBonuses){0}, GS_ITEM_GRANITE_MAUL_PLUS, &ornate_maul));
+    assert(plain_maul.cost == 60 && ornate_maul.cost == 50);
+    assert(gs_item_spec_cost(4153) == 60 && gs_item_spec_cost(GS_ITEM_GRANITE_MAUL_PLUS) == 50 && gs_weapon_spec_cost(GS_ITEM_GRANITE_MAUL_PRETTY_PLUS) == 50);
+    assert(gs_item_spec_cost(GS_ITEM_VOIDWAKER) == 50);
     GsArmament with, without;
     assert(!gs_item(GS_ITEM_VOIDWAKER)->two_handed);
     assert(gs_armed(&with_shield, (GsBonuses){0}, GS_ITEM_VOIDWAKER, &with));

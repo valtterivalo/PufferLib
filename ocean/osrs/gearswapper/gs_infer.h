@@ -40,7 +40,7 @@ typedef struct {
 
 typedef struct {
     GsWeapon weapon;
-    int style, normal, has_spec, spec, interval;
+    int style, normal, has_spec, spec, interval, cost;
     GsDamage damage;
     int attack_bonus;
     GsBonuses bonuses;
@@ -246,7 +246,7 @@ static int gs_armed(const GsClient* c, GsBonuses surplus, int weapon_id, GsArmam
         if (gs_item(ids[i])->has_stats) worn[worn_count++] = gs_item(ids[i]);
     }
     GsDamage damage = gs_damage_of(style, worn, worn_count);
-    GsArmament a = {.weapon = weapon, .style = style, .interval = gs_speed_of(base, style, GS_PACE_UNKNOWN).shortest, .damage = damage,
+    GsArmament a = {.weapon = weapon, .style = style, .interval = gs_speed_of(base, style, GS_PACE_UNKNOWN).shortest, .damage = damage, .cost = gs_item_spec_cost(weapon_id),
         .attack_bonus = gs_sum_attack(damage, worn, worn_count), .bonuses = bonuses};
     a.normal = gs_max_normal(weapon, style, GS_ASSUMED_LEVELS, bonuses);
     a.has_spec = gs_max_spec(weapon, style, GS_ASSUMED_LEVELS, bonuses, &a.spec);
@@ -514,7 +514,7 @@ static int gs_pending_damage_known(const GsInfer* s, int tick, GsPid pid) {
 
 static GsAttack gs_spec_attack(const GsInfer* s, const GsArmament* a) {
     return (GsAttack){(GsStyle)a->style, gs_protected_damage(&s->c, gs_spec_style(a), gs_spec_least(a)),
-        gs_protected_damage(&s->c, gs_spec_style(a), gs_most_per_arrow(a, a->spec)), GS_WEAPON_ROWS[a->weapon].cost, a->interval, gs_spec_accuracy(&s->c, a),
+        gs_protected_damage(&s->c, gs_spec_style(a), gs_most_per_arrow(a, a->spec)), a->cost, a->interval, gs_spec_accuracy(&s->c, a),
         a->weapon == GS_W_ARMADYL_GODSWORD, gs_arrows(a->weapon)};
 }
 
@@ -691,7 +691,7 @@ static void gs_eater_observe(GsInfer* s, int tick) {
         s->wielded_weapon = weapon;
         s->wielded_since = tick;
     }
-    int cost = GS_WEAPON_ROWS[gs_weapon_kind(weapon)].cost;
+    int cost = gs_item_spec_cost(weapon);
     s->spec_wielded_since = cost ? s->wielded_since : INT_MIN;
     int reach = cost && gs_spec_energy(c) >= cost ? gs_local_spec_or_normal(c, weapon) : gs_local_normal(c, weapon);
     s->opponent_in_reach_since = s->opponent_hitpoints.high > reach ? INT_MIN : s->opponent_in_reach_since <= s->opponent_ate ? tick : s->opponent_in_reach_since;
@@ -1126,7 +1126,7 @@ static void gs_eat_situation(GsInfer* s, int tick, GsOffence offence, double tol
     const GsClient* c = &s->c;
     memset(out, 0, sizeof(*out));
     int weapon = gs_local_weapon(c);
-    int cost = GS_WEAPON_ROWS[gs_weapon_kind(weapon)].cost;
+    int cost = gs_item_spec_cost(weapon);
     int armed = c->sa_attack == 1 && cost && gs_spec_energy(c) >= cost;
     out->tick = tick;
     out->hitpoints = c->hitpoints;
@@ -1193,7 +1193,7 @@ static void gs_eat_situation(GsInfer* s, int tick, GsOffence offence, double tol
         out->attacks[out->attack_count++] = (GsAttack){(GsStyle)a->style, strike.least, gs_most_per_arrow(a, strike.most), 0, a->interval, strike.accuracy, 0, gs_arrows(a->weapon)};
         if (a->weapon == GS_W_GRANITE_MAUL) {
             out->has_maul = 1;
-            out->maul = (GsAttack){GS_MELEE, 0, gs_protected_damage(c, a->style, a->spec), 50, 1, gs_armament_accuracy(c, a), 0, 1};
+            out->maul = (GsAttack){GS_MELEE, 0, gs_protected_damage(c, a->style, a->spec), a->cost, 1, gs_armament_accuracy(c, a), 0, 1};
         } else if (a->has_spec) {
             assert(out->attack_count < GS_MAX_ATTACKS);
             out->attacks[out->attack_count++] = gs_spec_attack(s, a);
@@ -1210,7 +1210,7 @@ static void gs_eat_situation(GsInfer* s, int tick, GsOffence offence, double tol
     if (!has_ags && gs_armed(c, s->surplus, GS_ITEM_ARMADYL_GODSWORD, &hidden))
         out->hidden[out->hidden_count++] = (GsHidden){0, gs_spec_attack(s, &hidden)};
     if (!gs_granite_maul(s) && gs_armed(c, s->surplus, GS_ITEM_GRANITE_MAUL_PLUS, &hidden))
-        out->hidden[out->hidden_count++] = (GsHidden){1, (GsAttack){GS_MELEE, 0, gs_protected_damage(c, hidden.style, hidden.spec), 50, 1, gs_armament_accuracy(c, &hidden), 0, 1}};
+        out->hidden[out->hidden_count++] = (GsHidden){1, (GsAttack){GS_MELEE, 0, gs_protected_damage(c, hidden.style, hidden.spec), hidden.cost, 1, gs_armament_accuracy(c, &hidden), 0, 1}};
     for (int i = 0; i < s->pending_launch_count; i++) {
         GsSwing swing = gs_pending_remaining(s->pending_launches[i].by_pid[out->pid], tick);
         if (swing.arrows) out->swings[out->swing_count++] = swing;
@@ -1297,7 +1297,7 @@ static GsReflect gs_weapon_reflect(GsInfer* s, int tick) {
 static int gs_opponent_spec_cost(const GsInfer* s) {
     int cost = INT_MAX;
     for (int i = 0; i < s->arsenal_count; i++)
-        if (s->arsenal[i].has_spec) cost = imin(cost, GS_WEAPON_ROWS[s->arsenal[i].weapon].cost);
+        if (s->arsenal[i].has_spec) cost = imin(cost, s->arsenal[i].cost);
     return cost;
 }
 

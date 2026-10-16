@@ -144,6 +144,12 @@ static int gs_weapon_spec_cost(int item) {
     return 0;
 }
 
+/* The spec cost of a wielded item. Kinds price the spec except the granite maul, which differs by item: plain 60, ornate handle 50 */
+static int gs_item_spec_cost(int item) {
+    GsWeapon kind = gs_weapon_kind(item);
+    return kind == GS_W_GRANITE_MAUL ? gs_weapon_spec_cost(item) : GS_WEAPON_ROWS[kind].cost;
+}
+
 /* Pid.counts */
 static int gs_pid_counts(int animation, int style) {
     return gs_animation_kind(animation) == GS_KIND_ATTACK && style == GS_MELEE;

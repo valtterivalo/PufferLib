@@ -577,7 +577,7 @@ static void opp_attack_random_style(OsrsEnv* env, int* actions) {
 
 static void opp_attack_random_style_with_spec(OsrsEnv* env, Player* self, int* actions) {
     int style = rand_int(env, 3);
-    if (self->special_energy >= get_melee_spec_cost(self->melee_spec_weapon) &&
+    if (self->special_energy >= get_melee_spec_cost(self) &&
         rand_float(env) < 0.30f) {
         opp_apply_gear_switch(actions, self, OPP_STYLE_SPEC);
         opp_emit_attack(actions, 2);
@@ -602,7 +602,7 @@ static OppSpecPlan opp_plan_specs(Player* self, Player* target, int dist) {
 
     OppSpecPlan plan;
     plan.melee = opp_attack_ready(self) &&
-        self->special_energy >= get_melee_spec_cost(self->melee_spec_weapon) &&
+        self->special_energy >= get_melee_spec_cost(self) &&
         target->prayer != PRAYER_PROTECT_MELEE &&
         can_melee_range &&
         (!has_ranged_or_magic || target_hp_pct < 0.55f);
@@ -938,7 +938,7 @@ static void opp_nh_tier(OsrsEnv* env, OpponentState* opp, int* actions, const Op
         int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
         int can_spec_range = (self->frozen_ticks > 0) ? (dist <= 1) : (dist <= 3);
         int should_spec =
-            self->special_energy >= get_melee_spec_cost(self->melee_spec_weapon) &&
+            self->special_energy >= get_melee_spec_cost(self) &&
             target_hp_pct < tier->spec_target_hp_gate &&
             target->prayer != PRAYER_PROTECT_MELEE &&
             can_spec_range &&
@@ -1000,7 +1000,7 @@ static void opp_nh_basic(OsrsEnv* env, OpponentState* opp, int* actions,
 
         opp_apply_boost_potion(env, opp, actions, self, style, 0);
 
-        if (self->special_energy >= get_melee_spec_cost(self->melee_spec_weapon) &&
+        if (self->special_energy >= get_melee_spec_cost(self) &&
             rand_float(env) < spec_prob) {
             int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
             if (opp->target_fleeing_ticks >= 2 && dist > 1) {
@@ -1157,7 +1157,7 @@ static void opp_unpredictable_improved(OsrsEnv* env, OpponentState* opp, int* ac
     if (opp_attack_ready(self) && !eating_queued) {
         int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
         int can_spec_range = (self->frozen_ticks > 0) ? (dist <= 1) : (dist <= 3);
-        int should_spec = self->special_energy >= get_melee_spec_cost(self->melee_spec_weapon) &&
+        int should_spec = self->special_energy >= get_melee_spec_cost(self) &&
                           target->prayer != PRAYER_PROTECT_MELEE &&
                           can_spec_range;
 
@@ -1545,7 +1545,7 @@ static void opp_veng_fighter(OsrsEnv* env, OpponentState* opp, int* actions) {
 
         int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
         int can_spec_range = (self->frozen_ticks > 0) ? (dist <= 1) : (dist <= 3);
-        int should_spec = (self->special_energy >= get_melee_spec_cost(self->melee_spec_weapon) &&
+        int should_spec = (self->special_energy >= get_melee_spec_cost(self) &&
                           target->prayer != PRAYER_PROTECT_MELEE &&
                           can_spec_range);
 
@@ -1706,8 +1706,8 @@ static void opp_gmaul_combo(OsrsEnv* env, OpponentState* opp, int* actions) {
     if (opp_attack_ready(self) && !eating) {
         int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
 
-        int melee_spec_cost = get_melee_spec_cost(self->melee_spec_weapon);
-        int gmaul_cost = 50;
+        int melee_spec_cost = get_melee_spec_cost(self);
+        int gmaul_cost = osrs_spec_cost(ITEM_GRANITE_MAUL);
         int can_spec_range = (self->frozen_ticks > 0) ? (dist <= 1) : (dist <= 3);
         int should_combo = (has_gmaul &&
                            target_hp_pct < opp->ko_threshold &&
@@ -1831,7 +1831,7 @@ static void opp_range_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
 
             opp_apply_boost_potion(env, opp, actions, self, attack_style, 0);
 
-            int melee_spec_cost = get_melee_spec_cost(self->melee_spec_weapon);
+            int melee_spec_cost = get_melee_spec_cost(self);
             int can_melee_spec = (self->special_energy >= melee_spec_cost &&
                                  target->prayer != PRAYER_PROTECT_MELEE &&
                                  dist <= 1 && self->frozen_ticks == 0);

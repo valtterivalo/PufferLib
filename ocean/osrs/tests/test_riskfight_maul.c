@@ -64,9 +64,10 @@ static void test_double_click_needs_target_or_third_click(void) {
 
 static void test_ornate_and_ordinary_energy_costs(void) {
     const uint8_t weapons[] = {ITEM_GRANITE_MAUL_ORNATE, ITEM_GRANITE_MAUL};
-    /* Both mauls cost 50 (the plain maul was charged 60 in this sim before). */
-    const int expected_hits[] = {2, 2};
-    const int expected_energy[] = {0, 0};
+    /* Quick Smash costs 60% on the plain granite maul and 50% only with the ornate handle (wiki Granite_maul): from 100% energy the ornate maul
+     * double-specs (two hits, 0 left), the plain maul lands one hit and keeps 40. */
+    const int expected_hits[] = {2, 1};
+    const int expected_energy[] = {0, 40};
     for (int arm = 0; arm < 4; arm++) {
         int i = arm / 2;
         reset();
@@ -79,6 +80,30 @@ static void test_ornate_and_ordinary_energy_costs(void) {
         assert(state.env.players[0].just_attacked == 1);
         assert(state.spec_maul[0] == 1);
         assert(!state.env.players[0].spec_armed);
+    }
+}
+
+/* The RL special head asks for one spec's energy per click: the double-click (action 2) is open at 100% for the ornate maul and closed for the plain one. */
+static void test_special_mask_follows_the_maul_item(void) {
+    const uint8_t weapons[] = {ITEM_GRANITE_MAUL_ORNATE, ITEM_GRANITE_MAUL};
+    const int cost[] = {50, 60};
+    for (int i = 0; i < 2; i++) {
+        reset();
+        Player* us = &state.env.players[0];
+        for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+            const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&us->inventory_cells[slot]);
+            if (m->gear_slot == GEAR_SLOT_WEAPON && osrs_spec_cost(m->item_idx) > 0) us->inventory_cells[slot] = osrs_inventory_cell_empty();
+        }
+        us->equipped[GEAR_SLOT_WEAPON] = ITEM_ABYSSAL_TENTACLE;
+        us->inventory_cells[24] = osrs_inventory_cell_from_item(weapons[i]);
+        unsigned char mask[RF_MASK_SIZE];
+        for (int energy = 0; energy <= 100; energy += 10) {
+            us->special_energy = energy;
+            riskfight_write_action_mask(&state, 0, mask);
+            const unsigned char* special = mask + RF_HEAD_OFFSET[RF_SPECIAL];
+            assert(special[1] == (energy >= cost[i]));
+            assert(special[2] == (energy >= 2 * cost[i]));
+        }
     }
 }
 
@@ -199,6 +224,7 @@ int main(void) {
     riskfight_finalize_context((EncounterState*)&state, (EncounterContext*)&context);
     test_double_click_needs_target_or_third_click();
     test_ornate_and_ordinary_energy_costs();
+    test_special_mask_follows_the_maul_item();
     test_voidwaker_then_only_payable_maul();
     test_instant_special_defers_ready_ordinary_attack();
     test_switch_clears_preparation();

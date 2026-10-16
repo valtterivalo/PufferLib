@@ -68,9 +68,10 @@ static inline int pvp_magic_spec_to_item(MagicSpecWeapon w) {
     }
 }
 
-static int get_melee_spec_cost(MeleeSpecWeapon weapon) {
-    if (weapon == MELEE_SPEC_NONE) return 50;
-    int cost = osrs_spec_cost(pvp_melee_spec_to_item(weapon));
+/* The wielded item prices the spec: the plain granite maul costs 60, the ornate handle version 50, and both share MELEE_SPEC_GRANITE_MAUL. */
+static int get_melee_spec_cost(const Player* p) {
+    if (p->melee_spec_weapon == MELEE_SPEC_NONE) return 50;
+    int cost = osrs_spec_cost(p->equipped[GEAR_SLOT_WEAPON]);
     if (cost <= 0) abort();
     return cost;
 }
