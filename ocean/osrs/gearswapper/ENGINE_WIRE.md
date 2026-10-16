@@ -4,9 +4,9 @@ Owner: CDrive. Numeric definitions: `gs_engine_wire.h`. Server: `tests/gs_lookah
 Transport: a persistent child process, ASCII lines over stdin/stdout, one request per decision, one response line per request, strictly in order. stderr is diagnostics only.
 
 ## Lifecycle
-1. Plugin starts the server: `gs_lookahead_server MODEL.fit EAT_MIXTURE.fit [WORLDS HORIZON [THREADS]]`, cwd = a directory where `ocean/osrs/data/*.cmap` resolve.
+1. Plugin starts the server: `gs_lookahead_server MODEL.fit EAT_MIXTURE.fit [WORLDS HORIZON [THREADS]] [--budget-ms MS] [--min-worlds N]`, cwd = a directory where `ocean/osrs/data/*.cmap` resolve. The two flags may stand anywhere (`--budget-ms` also from env `GS_BUDGET_MS`; the flag wins); see "Anytime budget".
 2. Server loads the fits, self-warms (runs a synthetic decision stream through the full request->score->emit path), prints exactly one line
-   `READY <worst_warm_micros> <macro names joined by ';'>` and then reads stdin. The plugin blocks on READY at start-up, never at fight start.
+   `READY <worst_warm_micros> <macro names joined by ';'> BUDGET <ms> <min_worlds>` (`BUDGET 0 64` = no budget) and then reads stdin. The plugin blocks on READY at start-up, never at fight start.
    It refuses to run unless macro 0 is `continue` and macro 1 is `no new clicks`.
 3. Each game tick the plugin may send one request. A request not answered inside the plugin's deadline (default 50 ms; budget p99 < 10 ms, max < 30 ms) is a loud failure:
    automation suspends, no fallback policy exists.
@@ -24,11 +24,23 @@ Field-by-field grammar of the existing tags: header comment of `gs_lookahead_ser
 `R id server_micros best_index` then one `feasible kill death value worlds` block per READY name, in READY order (21 for the lookahead: indexes 0..17 are the spec, meal, Vengeance and alignment plans, 18..20 the upkeep drinks), then
 `A n` + n records, then optionally `PRIOR k` + k triples `side slot raw` (what the engine substituted a declared prior for; side 1 = opponent, slot 0 weapon, 1 shield, 2.. armor kit slots).
 then optionally `ASSUME n name...` = the declared priors the answer rests on (own-side observations the plugin could not complete on that tick, once per name on stderr too):
-`pending_empty` (`P UNKNOWN`: a launch, echo or proc it could not pin down, served as `P KNOWN 0`) and `own_attack_ready` (attack clock `UNKNOWN`, served as ready: `OBSERVED -1 -1`; the one thing it can get wrong is a cooldown still running).
+`pending_empty` (`P UNKNOWN`: a launch, echo or proc it could not pin down, served as `P KNOWN 0`) and `own_attack_ready` (attack clock `UNKNOWN`, served as ready: `OBSERVED -1 -1`; the one thing it can get wrong is a cooldown still running),
+then optionally `BUDGET exceeded <micros>` (see "Anytime budget"),
 or `UNAVAILABLE id reason [raw...]` when an own-side observation is missing that has no declared prior (poison state unknown, auto-retaliate unknown, attack clock interval). Opponent gear, pending hits and the first-swing clock are never a reason.
 The plugin completes what it can before it falls back on a prior: both holders of PID are sent as `P VARIANTS` (his Vengeance echo on us lands a tick later only if we hold PID; our echo on him only if he does, as `D 0 .. 2 ..` of exact damage when one damaging hit can have procced it), and an attack clock never seen is sent as ready once the plugin has watched longer than the slowest weapon plus the longest meal without a swing of ours.
 `best_index` 0 `continue` keeps the committed remainder (A echoes it); 1 `no new clicks` cancels it (`A 0`); any other macro replaces the remainder with its own plan.
 Ties go to `continue`: another macro needs a strictly better value.
+
+## Anytime budget (lookahead server)
+The decision is evaluated on common random worlds in stages (successive elimination after 16, 64, 256 worlds). A loaded host (the game client, another process) can deschedule one of the 8 worker threads and delay a whole
+decision by tens of ms, so the evaluation is anytime with a wall-clock budget: `--budget-ms MS` (default 12; `0` = off) measured from the moment the request has been read.
+- After the deadline no world beyond the minimum (`--min-worlds`, default 64: regret against 512 worlds is about 0.003..0.007 in value units at 64 and about 0.0007..0.002 at 256) is started and no new stage begins once the minimum is complete.
+  The completed worlds are always a prefix of the world sequence, so the answer is exactly what an unbudgeted run with that many worlds returns (`tests/test_lookahead_budget.c` checks byte equality); the `worlds` column of every macro says how many it got.
+  `--budget-ms 0` evaluates all of them: today's deterministic behaviour, what tests and evaluators use.
+- Below the minimum the deadline is ignored (correctness first). If that pushed the answer past the deadline the response ends in ` BUDGET exceeded <micros>` (micros past the deadline); the plugin logs it as a WARN and accepts the answer.
+- A worker that has not published its world when the others are done is waited for ~150 us (3 mean world times) and then its world is recomputed by the answering thread (same pure function, same result); the late worker discards its copy.
+  The helpers are not waited for after the answer is written either, but they must leave before the next request is parsed (the parser rewrites the stat-priced item rows the rollouts read): the server waits for them right after it has answered, while the plugin waits for the next game tick.
+- The plugin's own 50 ms deadline stays the hard failure; the budget is what keeps a normal answer far from it.
 
 ## The action list (what the plugin executes)
 `A` is a concrete, tick-indexed action list: each record is `due kind arg timing [count cand...]`, `kind` from `GsWireKind` (see header): clicks (slot, attack, spec, cast, unequip, equip, item),
@@ -80,3 +92,5 @@ and lays out the files `EngineBridge` expects (`~/.light2/opponent-loop` is the 
 
 The script finishes by starting the server once with stdin at EOF and requires its `READY` line. The server takes `MODEL.fit EAT_MIXTURE.fit [WORLDS HORIZON [THREADS]]` (defaults 512 worlds, horizon 15, 8 threads).
 The C suite is `ocean/osrs/tests/run_suite.sh [-j N] [-t SECONDS] [test_name ...]` (on Linux it needs `RAYLIB_INC`/`RAYLIB_LIB` for the render and model tests).
+
+Rule (Java executor): a policy plan (best_index >= 2) with `A 0` cancels the committed remainder, like macro 1. A policy plan answers `feasible 0 worlds 0` in its own score block when it has no estimate; the plugin accepts an infeasible best only for index >= 2 on a server that announced a non-lookahead POLICY.
