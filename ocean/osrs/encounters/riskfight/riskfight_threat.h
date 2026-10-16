@@ -51,6 +51,7 @@ typedef struct {
     uint16_t shown_raw[RF_THREAT_HIS_SLOTS];
     int shown_count;
     int built_for_shown;
+    uint8_t shield_seen, has_shield_seen; /* the last shield he wore: a one-handed weapon he is not holding is rated with it, the two-hander he holds now has pushed it off */
     uint8_t key[NUM_GEAR_SLOTS];
     int valid, count;
     RiskfightThreatSlot slots[RF_THREAT_HIS_SLOTS];
@@ -72,6 +73,7 @@ static void riskfight_threat_note_swing(RiskfightThreat* t, uint8_t weapon) {
 /** Rebuilds the slots when what he wears or has shown changed since the last build. `equipment` is what the viewer sees of him (ring and ammunition blank). */
 static void riskfight_threat_refresh(RiskfightThreat* t, const uint8_t equipment[NUM_GEAR_SLOTS]) {
     if (t->valid && t->built_for_shown == t->shown_count && !memcmp(t->key, equipment, NUM_GEAR_SLOTS)) return;
+    if (equipment[GEAR_SLOT_SHIELD] != ITEM_NONE) { t->shield_seen = equipment[GEAR_SLOT_SHIELD]; t->has_shield_seen = 1; }
     memcpy(t->key, equipment, NUM_GEAR_SLOTS);
     t->built_for_shown = t->shown_count;
     t->valid = 1;
@@ -82,7 +84,6 @@ static void riskfight_threat_refresh(RiskfightThreat* t, const uint8_t equipment
     int n = 0;
     uint8_t wielded = equipment[GEAR_SLOT_WEAPON];
     items[n] = wielded; p[n] = 1; shown[n] = 0; n++;
-    int wielded_slot = 0;
     for (int i = 0; i < t->shown_count; i++) {
         int index = osrs_item_index_from_raw_id(t->shown_raw[i]);
         if (index < 0) { fprintf(stderr, "[threat] swung weapon raw %d has no item row: no threat slot\n", t->shown_raw[i]); continue; }
@@ -90,7 +91,6 @@ static void riskfight_threat_refresh(RiskfightThreat* t, const uint8_t equipment
         for (int j = 0; j < n; j++) if (items[j] == index) at = j;
         if (at < 0) { items[n] = (uint8_t)index; p[n] = 1; shown[n++] = 1; at = n - 1; }
         else shown[at] = 1;
-        (void)wielded_slot;
     }
     uint8_t prior_items[RF_THREAT_HIS_SLOTS];
     float prior_p[RF_THREAT_HIS_SLOTS];
@@ -106,7 +106,10 @@ static void riskfight_threat_refresh(RiskfightThreat* t, const uint8_t equipment
         t->slots[i].p = p[i];
         t->slots[i].shown = shown[i];
         OsrsThreatActor who = osrs_threat_actor_assumed(osrs_threat_style_of_weapon(items[i]));
-        t->slots[i].w = osrs_threat_weapon(equipment, items[i], &who);
+        uint8_t worn[NUM_GEAR_SLOTS];
+        memcpy(worn, equipment, NUM_GEAR_SLOTS);
+        if (worn[GEAR_SLOT_SHIELD] == ITEM_NONE && t->has_shield_seen) worn[GEAR_SLOT_SHIELD] = t->shield_seen;
+        t->slots[i].w = osrs_threat_weapon(worn, items[i], &who);
     }
     t->count = n;
     OsrsThreatActor defender = osrs_threat_actor_assumed(ATTACK_STYLE_MELEE);
