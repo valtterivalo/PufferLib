@@ -71,8 +71,8 @@ static void rt_fight_reset(RtFight* f, int start_tick) {
     f->land_pending[0] = f->land_pending[1] = f->last_land = -1;
 }
 
-/* The sim's content code of a bag item as the client showed it: canonical() maps the blighted ids and the ids the server models, an id it has no row for (pies, sharks)
- * still has a content row of its own, which is what the sim's inventory would hold. */
+/* The sim's content code of a bag item as the client showed it: canonical() maps the blighted ids and the ids the server models (pies included); an id it has no row for
+ * (a shark) may still have a content row of its own, which is what a meal of the sim's inventory would be. */
 static int rt_content_code(int raw) {
     int c = canonical(raw);
     return raw_id_to_content(c == -2 ? raw : c);

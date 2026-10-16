@@ -59,7 +59,9 @@ static const int CANONICAL_FROM[] = {24592, 24595, 24598, 24601, 24603, 24605, 2
 static const int CANONICAL_TO[] = {13441, 3144, 3024, 3026, 3028, 3030, 22322, 10551, 10551, 10828, 21295};
 static const int SIM_IDS[] = {13441, 3144, 3024, 3026, 3028, 3030, 6685, 6687, 6689, 6691, 12695, 12697, 12699, 12701, 23691, 23694, 8013, 24621, 24225, 27690, 12954,
     22322, 10551, 10828, 21295, 1725, 1079, 4087, 7462, 11840, 2550, 2434, 139, 141, 143, /* prayer potion (4)..(1) */
-    27861, 27857, 24617, 27867, 22114, 29280, 29560, 29564, 12904, 8850, 4131, 7460, -1};
+    27861, 27857, 24617, 27867, 22114, 29280, 29560, 29564, 12904, 8850, 4131, 7460,
+    7218, 7220, 2313, /* summer pie, half a summer pie, the pie dish a last bite leaves: content codes 206..208, the cells a native pies kit holds */
+    -1};
 
 static int canonical(int id) {
     if (id >= 0 && id <= UINT16_MAX) id = osrs_item_canonical_raw_id((uint16_t)id);
