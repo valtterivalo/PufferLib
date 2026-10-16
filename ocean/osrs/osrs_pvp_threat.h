@@ -177,7 +177,7 @@ static inline OsrsThreatWeapon osrs_threat_weapon(const uint8_t equipment[NUM_GE
     int speed = b.attack_speed + osrs_stance_speed_mod(who->stance);
     assert(speed >= 1);
     w.speed = (uint8_t)speed;
-    int stance_att = osrs_stance_att_bonus(who->stance, style == ATTACK_STYLE_MAGIC ? ATTACK_STYLE_MAGIC : style);
+    int stance_att = osrs_stance_att_bonus(who->stance, (AttackStyle)style);
     if (style == ATTACK_STYLE_MELEE) {
         w.melee_type = (int8_t)osrs_threat_best_melee_type(&b);
         int eff_att = osrs_player_eff_level(who->attack, osrs_threat_attack_prayer(who->prayer, style), stance_att);
