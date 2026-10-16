@@ -20,6 +20,7 @@ static void riskfight_record_attack(RiskfightState* s, int agent, int hits, int 
     event[0] += hits;
     event[1] = weapon;
     event[2] = p->attack_style_this_tick;
+    riskfight_threat_note_swing(&visible->threat, (uint8_t)weapon);
     if (!instant) {
         visible->last_attack_tick = s->env.tick;
         visible->last_attack_speed = get_slot_gear_bonuses(p)->attack_speed;

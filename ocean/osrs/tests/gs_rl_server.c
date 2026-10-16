@@ -46,7 +46,7 @@ static void rt_fight_reset(RtFight* f, int start_tick) {
     f->active = 1;
     f->start_tick = start_tick;
     f->last_tick = start_tick - 1;
-    rf_net_reset(net);
+    if (net) rf_net_reset(net); /* no net: the observation-only harness (rl_explain "-", test_threat_live) */
     RiskfightVisibleOpponent* v = &f->vis;
     v->last_cast_tick = v->last_proc_tick = -1000;
     v->last_attack_tick = -1;
@@ -65,6 +65,7 @@ static void rt_observe(RiskfightVisibleOpponent* v, const RtSeen* seen, int n, c
         event[0] = 1;
         event[1] = item == ITEM_NONE ? 0 : item;
         event[2] = seen->swing_style;
+        riskfight_threat_note_swing(&v->threat, (uint8_t)item);
         /* The maul special is instant: the sim logs the hits but does not move his swing clock. */
         if (item == ITEM_NONE || !pvp_is_maul(item)) {
             v->last_attack_tick = n - 1;
@@ -188,6 +189,9 @@ static double rt_decide(Request* q, const RtSeen* seen, int new_fight, int fight
     rt_track_landing(f, n);
     memcpy(f->vis.equipment, loaded.equipment, sizeof(f->vis.equipment));
     f->vis.interacting = loaded.interacting;
+    /* The request's stat-priced item rows are rewritten every request (osrs_stat_items_clear), so item indices of an earlier tick may mean another item: rebuild. */
+    f->vis.threat.valid = 0;
+    riskfight_threat_refresh(&f->vis.threat, f->vis.equipment);
     Player* us = &s->env.players[0];
     us->x = FIGHT_AREA_BASE_X + FIGHT_AREA_WIDTH / 2;
     us->y = FIGHT_AREA_BASE_Y + FIGHT_AREA_HEIGHT / 2;
@@ -204,7 +208,8 @@ static double rt_decide(Request* q, const RtSeen* seen, int new_fight, int fight
     int actions[RF_HEADS];
     riskfight_write_observation(s, 0, obs);
     riskfight_write_action_mask(s, 0, mask);
-    rf_net_act(f->net, obs, mask, &f->rng, f->hard, RF_ACTION_DIMS, RF_HEADS, actions);
+    if (f->net) rf_net_act(f->net, obs, mask, &f->rng, f->hard, RF_ACTION_DIMS, RF_HEADS, actions);
+    else memset(actions, 0, sizeof(actions));
     *count = rt_records(actions, s, records);
     return (la_seconds() - started) * 1e6;
 }

@@ -588,4 +588,35 @@ static inline void osrs_spec_result_force_max(
     *r = forced;
 }
 
+/** What a spec's accuracy roll is made of, mirroring the multipliers inside osrs_resolve_spec: the attack roll becomes att_roll * att_num / att_den, the
+    defence roll def_roll * def_num / def_den; `certain` specs roll nothing (Voidwaker). For melee specs `attack_type` / `defence_type` are the
+    MeleeBonusType the roll reads (-1: the best bonus of the loadout / the same as the attack type), matching MELEE_SPEC_BONUS_TYPES and the defence
+    overrides of perform_attack; -1 and -1 for ranged and magic specs. */
+typedef struct { int att_num, att_den, def_num, def_den, certain, attack_type, defence_type; } OsrsSpecAccuracy;
+
+static inline OsrsSpecAccuracy osrs_spec_accuracy(int weapon_item_idx) {
+    OsrsSpecAccuracy a = {1, 1, 1, 1, 0, -1, -1};
+    switch (weapon_item_idx) {
+        case ITEM_AGS: case ITEM_BGS: case ITEM_ZGS: case ITEM_SGS: case ITEM_ANCIENT_GS:
+            a.att_num = 2; a.attack_type = MELEE_BONUS_SLASH; break;
+        case ITEM_DRAGON_CLAWS: a.attack_type = MELEE_BONUS_SLASH; break;
+        case ITEM_STATIUS_WARHAMMER: a.att_num = 5; a.att_den = 4; a.attack_type = MELEE_BONUS_CRUSH; break;
+        case ITEM_VESTAS: case ITEM_VESTAS_BLIGHTED: a.def_den = 4; a.attack_type = MELEE_BONUS_SLASH; a.defence_type = MELEE_BONUS_STAB; break;
+        case ITEM_VOIDWAKER: a.certain = 1; a.attack_type = MELEE_BONUS_SLASH; break;
+        case ITEM_GRANITE_MAUL: case ITEM_GRANITE_MAUL_ORNATE: a.attack_type = MELEE_BONUS_CRUSH; break;
+        case ITEM_DRAGON_DAGGER: a.att_num = 23; a.att_den = 20; a.attack_type = MELEE_BONUS_STAB; break;
+        case ITEM_ABYSSAL_DAGGER_BH: case ITEM_ABYSSAL_DAGGER_BH_P_PLUS_PLUS: a.att_num = 5; a.att_den = 4; a.defence_type = MELEE_BONUS_SLASH; break;
+        case ITEM_DRAGON_MACE_BH: a.att_num = 5; a.att_den = 4; a.def_num = 3; a.def_den = 5; a.defence_type = MELEE_BONUS_CRUSH; break;
+        case ITEM_ELDER_MAUL: a.att_num = 5; a.att_den = 4; a.attack_type = MELEE_BONUS_SLASH; break; /* the sim reads MELEE_SPEC_BONUS_TYPES[NONE] for it */
+        case ITEM_TOXIC_BLOWPIPE: case ITEM_ZARYTE_CROSSBOW: case ITEM_ARMADYL_CROSSBOW: case ITEM_EYE_OF_AYAK: a.att_num = 2; break;
+        case ITEM_MAGIC_SHORTBOW_I: a.att_num = 10; a.att_den = 7; break;
+        case ITEM_HEAVY_BALLISTA: a.att_num = 5; a.att_den = 4; break;
+        case ITEM_MORRIGANS_JAVELIN: a.def_den = 4; break;
+        case ITEM_VOLATILE_STAFF: a.att_num = 3; a.att_den = 2; break;
+        case ITEM_DARK_BOW: break;
+        default: assert(!"osrs_spec_accuracy called for a non-special weapon");
+    }
+    return a;
+}
+
 #endif /* OSRS_SPECIAL_ATTACKS_H */

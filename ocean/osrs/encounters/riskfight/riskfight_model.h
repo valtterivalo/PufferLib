@@ -7,6 +7,7 @@
 #include "../../osrs_encounter_visual_events.h"
 #include "../../osrs_pvp_escape.h"
 #include "../../tests/riskfight_motor.h"
+#include "riskfight_threat.h"
 
 enum { RF_PRICE_MAX_X10 = 25 };
 typedef enum { RISKFIGHT_HUMAN, RISKFIGHT_HUMAN_HELDOUT, RISKFIGHT_ALL_IN, RISKFIGHT_ESCAPER, RISKFIGHT_OPPONENTS } RiskfightOpponent;
@@ -64,7 +65,9 @@ enum {
     RF_OPPONENT_START = RF_EQUIPPED_START + NUM_GEAR_SLOTS,
     RF_HISTORY_START = RF_OPPONENT_START + NUM_GEAR_SLOTS + 14,
     RF_PRICE = RF_HISTORY_START + RF_HISTORY_TICKS * RF_EVENT_WIDTH,   /* death price: what our death costs us over what his kill wins us, scaled by 1 / RF_PRICE_MAX */
-    RF_OBS_SIZE = RF_PRICE + 1,
+    /* Appended blocks, in merge order: threat features (riskfight_threat.h), then each later block behind its own START constant. */
+    RF_THREAT_START = RF_PRICE + 1,
+    RF_OBS_SIZE = RF_THREAT_START + RF_THREAT_SIZE,
 };
 #define RF_ACTION_DIMS_INIT {30,30,30,29,29,29,2,2,3,28,5,4,30,30,30,30,30,30,30,30,7}
 static const int RF_ACTION_DIMS[RF_HEADS] = RF_ACTION_DIMS_INIT;
@@ -86,6 +89,7 @@ typedef struct {
     int pending_consume_tick, pending_bar_before, pending_damage_since;
     int last_cast_tick, last_proc_tick;
     float events[RF_HISTORY_TICKS][RF_EVENT_WIDTH];
+    RiskfightThreat threat; /* his weapons as the viewer knows them: the swings seen, the slots of riskfight_threat.h */
 } RiskfightVisibleOpponent;
 
 typedef struct {
@@ -331,6 +335,7 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
     memcpy(v->equipment, opponent->equipped, sizeof(v->equipment));
     v->equipment[GEAR_SLOT_RING] = ITEM_NONE;
     v->equipment[GEAR_SLOT_AMMO] = ITEM_NONE;
+    riskfight_threat_refresh(&v->threat, v->equipment);
     v->x = opponent->x;
     v->y = opponent->y;
     v->interacting = osrs_interaction_active(&opponent->interaction);

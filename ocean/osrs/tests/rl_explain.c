@@ -3,6 +3,7 @@
  *
  *   cc -std=c11 -O2 -I. -o /tmp/rl_explain ocean/osrs/tests/rl_explain.c -lm
  *   /tmp/rl_explain CHECKPOINT HIDDEN LAYERS RUN.requests [FROM [TO]]
+ *   /tmp/rl_explain - 0 0 RUN.requests [FROM [TO]]      no net: only the observation each request produces, its threat block printed (what the net would be given)
  *
  * Run from a directory that resolves ocean/osrs/data (the repository root or ~/.light2/engine-release/home). */
 #define GS_RL_SERVER_NO_MAIN
@@ -45,10 +46,31 @@ static void rx_gear_head(const RfNet* net, const unsigned char* mask, const Play
     printf(")");
 }
 
+/* The threat block of an observation (riskfight_threat.h) as text: his weapon slots, then ours. */
+static void rx_threat(const float* obs) {
+    const float* t = obs + RF_THREAT_START;
+    static const char* STYLE[] = {"?", "melee", "ranged", "magic"};
+    for (int i = 0; i < RF_THREAT_HIS_SLOTS; i++) {
+        const float* o = t + i * RF_THREAT_HIS_WIDTH;
+        if (o[0] == 0) continue;
+        int style = o[5] > 0 ? 1 : o[6] > 0 ? 2 : o[7] > 0 ? 3 : 0;
+        printf("    his %d p %.2f%s max %.0f hit %.3f speed %.0f %s", i, o[0], o[1] > 0 ? " SHOWN" : "", o[2] * RF_THREAT_DAMAGE_SCALE, o[3], o[4] * RF_THREAT_SPEED_SCALE, STYLE[style]);
+        if (o[8] > 0) printf(" | spec cost %.0f max %.0f hit %.3f speed %.0f", o[8] * 100, o[9] * RF_THREAT_DAMAGE_SCALE, o[10], o[11] * RF_THREAT_SPEED_SCALE);
+        printf("\n");
+    }
+    for (int i = 0; i < RF_THREAT_OURS_SLOTS; i++) {
+        const float* o = t + RF_THREAT_OURS_OFFSET + i * RF_THREAT_OURS_WIDTH;
+        if (o[0] == 0) continue;
+        printf("    ours %d max %.0f hit %.3f speed %.0f", i, o[1] * RF_THREAT_DAMAGE_SCALE, o[2], o[3] * RF_THREAT_SPEED_SCALE);
+        if (o[4] > 0) printf(" | spec cost %.0f max %.0f hit %.3f", o[4] * 100, o[5] * RF_THREAT_DAMAGE_SCALE, o[6]);
+        printf("\n");
+    }
+}
+
 int main(int argc, char** argv) {
     if (argc < 5) { fprintf(stderr, "usage: rl_explain CHECKPOINT HIDDEN LAYERS RUN.requests [FROM [TO]]\n"); return 2; }
     int from = argc > 5 ? atoi(argv[5]) : 0, to = argc > 6 ? atoi(argv[6]) : 1 << 30;
-    g_fight.net = rf_net_load(argv[1], RF_OBS_SIZE, atoi(argv[2]), atoi(argv[3]), RF_ACTION_DIMS, RF_HEADS);
+    g_fight.net = strcmp(argv[1], "-") ? rf_net_load(argv[1], RF_OBS_SIZE, atoi(argv[2]), atoi(argv[3]), RF_ACTION_DIMS, RF_HEADS) : NULL;
     g_fight.rng = 0x9e3779b9u;
     g_fight.hard = 1;
     riskfight_deployable = 1;
@@ -69,6 +91,13 @@ int main(int argc, char** argv) {
         int count;
         rt_decide(&q, &seen, new_fight, fight_start, records, &count);
         if (q.tick < from || q.tick > to) continue;
+        if (!g_fight.net) {
+            float obs[RF_OBS_SIZE];
+            riskfight_write_observation(&g_base.state, 0, obs);
+            printf("%d %s his bar %d\n", q.tick, obs_only ? "OBS" : "DEC", g_fight.vis.health_bar);
+            rx_threat(obs);
+            continue;
+        }
         /* rt_decide leaves the loaded state and the net's logits of this tick behind; the mask is recomputed from that state. */
         const RiskfightState* s = &g_base.state;
         const Player* us = &s->env.players[0];
