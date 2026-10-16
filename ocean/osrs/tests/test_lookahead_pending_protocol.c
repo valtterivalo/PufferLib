@@ -407,8 +407,19 @@ static void test_variant_worlds(void) {
     }
 }
 
+/* U carries the first damage on him that no meal has answered; absent or `none` it is no damage. */
+static void test_unanswered_damage(void) {
+    Request q = parse("U 412 37\nRA OFF_PRIOR\nP KNOWN 0\nR KNOWN 0\nEND\n");
+    CHECK(q.unanswered_since == 412 && q.unanswered_damage == 37);
+    q = parse("U none 0\nRA OFF_PRIOR\nP KNOWN 0\nR KNOWN 0\nEND\n");
+    CHECK(q.unanswered_since == WARNING_NONE && q.unanswered_damage == 0);
+    q = parse("RA OFF_PRIOR\nP KNOWN 0\nR KNOWN 0\nEND\n");
+    CHECK(q.unanswered_since == WARNING_NONE && q.unanswered_damage == 0);
+}
+
 int main(void) {
     test_boundary();
+    test_unanswered_damage();
     test_knowledge();
     observer_register_items();
     sim_init(&loaded);

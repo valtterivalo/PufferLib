@@ -103,7 +103,7 @@ static void test_raw_winner_with_shaped_loser(void) {
     assert(env->state.outcome[1] == RISKFIGHT_KILL);
     assert(env->state.rewards[0] == 19);
     assert(env->state.env.winner == 1);
-    assert(riskfight_outcome_reward(env->state.outcome[0]) == -1);
+    assert(riskfight_outcome_reward(env->state.outcome[0], env->state.death_price) == -1);
 }
 
 static void test_native_reward_kwargs(void) {
@@ -187,7 +187,7 @@ static void test_executed_chance_reward(void) {
         riskfight_step_queues(&env->state, &env->context, &commands.commands, &empty);
         assert(count == 1 && env->state.direct_ko_chance_mass[0] > 0);
         assert(env->state.chance_rewards[0] == env->context.chance_reward_coeff * env->state.direct_ko_chance_mass[0]);
-        assert(env->state.rewards[0] == riskfight_outcome_reward(env->state.outcome[0]) + env->state.chance_rewards[0]);
+        assert(env->state.rewards[0] == riskfight_outcome_reward(env->state.outcome[0], env->state.death_price) + env->state.chance_rewards[0]);
         assert(env->state.chance_rewards[1] == 0);
         assert(env->state.env.pvp_runtime.attack_chance_observer == observe_chance_count);
         assert(env->state.env.pvp_runtime.attack_chance_observer_context == &count);

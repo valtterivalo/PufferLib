@@ -892,6 +892,7 @@ static void la_dump_request(FILE* out, const Sim* sim, const LaBelief* b, int ti
         for (int i = 0; i < sim->hist.warning.unseen_count; i++) fprintf(out, " %d", sim->hist.warning.unseen[i]);
     }
     fprintf(out, "\nH %d %d %d %d %d", sim->hist.big_hit_tick, sim->hist.since_vw_spec, sim->hist.since_maul_spec, sim->hist.ready_age, sim->hist.last_swing_tick);
+    if (sim->hist.unanswered_since == WARNING_NONE) fprintf(out, "\nU none 0"); else fprintf(out, "\nU %d %d", sim->hist.unanswered_since, sim->hist.unanswered_damage);
     int pending_known = 1, pending_count[2] = {0}, variants = sim->state.pending_pid_active ? 2 : 1;
     for (int holder = 0; holder < variants; holder++) for (int source = 0; source < 2; source++) {
         int count = sim->state.pending_pid_active ? sim->state.pending_pid_count[holder][source] : sim->state.env.players[source].num_pending_hits;
