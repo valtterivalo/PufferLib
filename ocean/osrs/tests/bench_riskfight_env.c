@@ -2,7 +2,7 @@
  * Separates fight ticks from idle ticks (the wait between fights) by whether the env was waiting when stepped.
  *
  *   cc -std=gnu11 -O2 -I. -Isrc -I$RAYLIB_INC -o bench_riskfight_env ocean/osrs/tests/bench_riskfight_env.c riskfight_oppfit_bridge.o -lm -lpthread
- *   RF_OPPFIT_MODEL=... RF_OPPFIT_EAT=... bench_riskfight_env [sweeps=20000] [envs=64] [random|script|mixed] [threads=1] [stages]
+ *   RF_OPPFIT_MODEL=... RF_OPPFIT_EAT=... bench_riskfight_env [sweeps=20000] [envs=64] [random|script|mixed] [threads=1] [stages | replay [reps=5]]
  *
  * A "sweep" steps every env once, the way a buffer's worker loop does. Each thread owns `envs` envs. Policy time is outside every timer. */
 #include "riskfight_env_harness.h"
@@ -102,6 +102,38 @@ static void stages(int sweeps, int envs, HarnessPolicy policy) {
     harness_vec_destroy(&v);
 }
 
+/* The sim is deterministic, so the actions of one scripted / random pass can be replayed against freshly created envs: the replay is a pure puf_step workload
+ * (no policy code in it), for a profiler or for timing without the harness's own work. Prints the replay's ns per env step, fights and idle together. */
+static void replay(int sweeps, int envs, HarnessPolicy policy, int reps) {
+    unsigned char* actions = malloc((size_t)sweeps * envs * 2 * RF_HEADS);
+    HarnessVec v;
+    harness_vec_create(&v, envs, 7);
+    for (int sweep = 0; sweep < sweeps; sweep++) {
+        for (int i = 0; i < v.count; i++) harness_choose_actions(&v, i, policy);
+        for (int i = 0; i < v.count; i++) for (int a = 0; a < v.envs[i].num_agents; a++) for (int h = 0; h < RF_HEADS; h++)
+            actions[(((size_t)sweep * envs + i) * 2 + a) * RF_HEADS + h] = (unsigned char)v.envs[i].agents[a].actions[h];
+        memset(v.rewards, 0, v.agents * sizeof(float)); memset(v.terminals, 0, v.agents * sizeof(float));
+        for (int i = 0; i < v.count; i++) puf_step(&v.envs[i]);
+    }
+    harness_vec_destroy(&v);
+    double ns = 0; long steps = 0;
+    for (int r = 0; r < reps; r++) {
+        harness_vec_create(&v, envs, 7);
+        for (int sweep = 0; sweep < sweeps; sweep++) {
+            for (int i = 0; i < v.count; i++) for (int a = 0; a < v.envs[i].num_agents; a++) for (int h = 0; h < RF_HEADS; h++)
+                v.envs[i].agents[a].actions[h] = actions[(((size_t)sweep * envs + i) * 2 + a) * RF_HEADS + h];
+            memset(v.rewards, 0, v.agents * sizeof(float)); memset(v.terminals, 0, v.agents * sizeof(float));
+            double t0 = harness_now_ns();
+            for (int i = 0; i < v.count; i++) puf_step(&v.envs[i]);
+            ns += harness_now_ns() - t0;
+            steps += v.count;
+        }
+        harness_vec_destroy(&v);
+    }
+    printf("{\"replay_ns_per_env_step\":%.1f,\"env_steps_per_s\":%.0f}\n", ns / steps, 1e9 * steps / ns);
+    free(actions);
+}
+
 int main(int argc, char** argv) {
     int sweeps = argc > 1 ? atoi(argv[1]) : 20000;
     int envs = argc > 2 ? atoi(argv[2]) : 64;
@@ -109,6 +141,7 @@ int main(int argc, char** argv) {
     if (argc > 3) policy = !strcmp(argv[3], "random") ? POLICY_RANDOM : !strcmp(argv[3], "script") ? POLICY_SCRIPT : POLICY_MIXED;
     int threads = argc > 4 ? atoi(argv[4]) : 1;
     if (argc > 5 && !strcmp(argv[5], "stages")) { stages(sweeps, envs, policy); return 0; }
+    if (argc > 5 && !strcmp(argv[5], "replay")) { replay(sweeps, envs, policy, argc > 6 ? atoi(argv[6]) : 5); return 0; }
     assert(envs <= 4096 && threads >= 1 && threads <= 32);
     Job jobs[32] = {0};
     pthread_t pt[32];

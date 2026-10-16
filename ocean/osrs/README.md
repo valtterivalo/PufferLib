@@ -22,6 +22,27 @@
 cc -std=c11 -O2 -I. -o /tmp/t ocean/osrs/tests/test_colosseum_golden.c -lm && /tmp/t
 ```
 
+## Riskfight env throughput
+
+`puf_step` of `osrs_riskfight` (what the trainer's env workers run) is built so that a tick rewrites only what changed. The observation and mask buffers are
+persistent per agent and the env relies on that:
+
+- A tick of the wait between fights steps no sim, so after the observation written in full at the start of the wait (`wait_obs_valid`) only the three session
+  clock floats (`riskfight_session_clock`) are stored; the wait mask is not rewritten.
+- The action mask is rewritten only when `RiskfightMaskKey` (everything `riskfight_write_action_mask` reads) differs from what the buffer holds. A new input of
+  the mask writer has to be added to the key.
+- The bf16 observation store is hand-vectorized (NEON, SSE2); the threat slots' pool prior is memoized per thread (`riskfight_pool_prior_memo`).
+
+Every change must be bit-exact. `test_riskfight_env_trace.c` hashes every buffer the trainer reads after every step over 288 sessions in five cases (bf16 or
+`-DTRACE_FLOAT` observations; goldens for Apple clang arm64 and x86-64 GCC, equal before and after the work), and compares the buffers with a full recomputation
+every step. `bench_riskfight_env.c` measures fight ticks against idle ticks, single or multi-threaded, with a per-stage breakdown (`stages`) and a policy-free
+replay of one action stream for profiling (`replay`):
+
+```bash
+cc -std=gnu11 -O2 -I. -Isrc -I$RAYLIB_INC -o bench ocean/osrs/tests/bench_riskfight_env.c riskfight_oppfit_bridge.o -lm -lpthread
+RF_OPPFIT_MODEL=ocean/osrs/tests/fixtures/model.fit RF_OPPFIT_EAT=ocean/osrs/tests/fixtures/eat_mixture.fit ./bench 6000 64 script 1
+```
+
 ## Gear Swapper advisory snapshots
 
 Riskfight snapshots retain both players' committed damage queues. Unresolved PID

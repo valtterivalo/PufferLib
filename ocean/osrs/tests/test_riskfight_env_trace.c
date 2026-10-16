@@ -71,26 +71,31 @@ static Trace run_trace(int self_play, HarnessPolicy policy, int sweeps, int envs
     return t;
 }
 
-typedef struct { const char* name; int self_play; HarnessPolicy policy; int seed; uint64_t golden; } Case;
-/* The goldens are machine code dependent (libm, float contraction): these are Apple clang arm64. Elsewhere the hashes are printed and only the oracle checks. */
+/* The goldens depend on the compiler and libm (float contraction, lround): Apple clang arm64 and x86-64 GCC 13 -O2 (the trainer's host compiler) are kept; on
+ * anything else the hashes are printed and only the oracle checks. Before and after the throughput work they are the same on both. */
 #if defined(__clang__) && defined(__aarch64__)
-#define HAVE_GOLDEN 1
+#define PLATFORM 0
+#elif defined(__x86_64__) && defined(__GNUC__) && !defined(__clang__)
+#define PLATFORM 1
 #else
-#define HAVE_GOLDEN 0
+#define PLATFORM -1
 #endif
 #ifndef TRACE_FLOAT
-#define G(bf16, f32) UINT64_C(bf16)
+#define G(arm_bf16, arm_f32, x86_bf16, x86_f32) { UINT64_C(arm_bf16), UINT64_C(x86_bf16) }
 #else
-#define G(bf16, f32) UINT64_C(f32)
+#define G(arm_bf16, arm_f32, x86_bf16, x86_f32) { UINT64_C(arm_f32), UINT64_C(x86_f32) }
 #endif
+typedef struct { const char* name; int self_play; HarnessPolicy policy; int seed; uint64_t golden[2]; } Case;
 static const Case CASES[] = {
-    {"selfplay_mixed", 1, POLICY_MIXED, 11, G(0xc85f7cb53195164c, 0x9005989fda6b82b3)},
-    {"selfplay_script", 1, POLICY_SCRIPT, 23, G(0x337c05a004db078a, 0x4d77a94264c5e52d)},
-    {"selfplay_random", 1, POLICY_RANDOM, 37, G(0x962e9046a061b178, 0x937c97c7df14c08f)},
-    {"botplay_script", 0, POLICY_SCRIPT, 41, G(0x58d00c51e7c11d5e, 0x597588977e8ec357)},
-    {"botplay_mixed", 0, POLICY_MIXED, 53, G(0x6560c6690946b0f7, 0xd652e5477d62a282)},
+    {"selfplay_mixed", 1, POLICY_MIXED, 11, G(0xc85f7cb53195164c, 0x9005989fda6b82b3, 0x2c9002f782027c06, 0xe01a7b910b1dcef0)},
+    {"selfplay_script", 1, POLICY_SCRIPT, 23, G(0x337c05a004db078a, 0x4d77a94264c5e52d, 0x2f028bc4c4ee9236, 0xc1fb9d9ebfbbe317)},
+    {"selfplay_random", 1, POLICY_RANDOM, 37, G(0x962e9046a061b178, 0x937c97c7df14c08f, 0x962e9046a061b178, 0x31eafbd0ce237409)},
+    {"botplay_script", 0, POLICY_SCRIPT, 41, G(0x58d00c51e7c11d5e, 0x597588977e8ec357, 0xfa9fcab44f56761a, 0x2e1bc9496b6ad761)},
+    {"botplay_mixed", 0, POLICY_MIXED, 53, G(0x6560c6690946b0f7, 0xd652e5477d62a282, 0xc7ff185cc6431c8e, 0xa2573d4e76fe924a)},
 };
 
+
+#ifndef TRACE_BASE /* -DTRACE_BASE builds the test against a tree from before the throughput work, to compare hashes across trees */
 /* The memoized pool prior (riskfight_pool_prior_memo) against the scan of the pool, bit for bit: every kit's own gear, kits with a slot or the weapon swapped
  * for another kit's, asked repeatedly and with both caps in use. */
 static void check_prior_memo(void) {
@@ -115,20 +120,23 @@ static void check_prior_memo(void) {
     }
     printf("pool prior memo: %ld lookups equal the pool scan\n", checked);
 }
+#endif
 
 int main(int argc, char** argv) {
     setenv("RF_OPPFIT_MODEL", "ocean/osrs/tests/fixtures/model.fit", 0);
     setenv("RF_OPPFIT_EAT", "ocean/osrs/tests/fixtures/eat_mixture.fit", 0);
+#ifndef TRACE_BASE
     check_prior_memo();
+#endif
     int sweeps = argc > 1 ? atoi(argv[1]) : DEFAULT_SWEEPS;
     int envs = argc > 2 ? atoi(argv[2]) : DEFAULT_ENVS;
-    const int check = HAVE_GOLDEN && sweeps == DEFAULT_SWEEPS && envs == DEFAULT_ENVS;
+    const int check = PLATFORM >= 0 && sweeps == DEFAULT_SWEEPS && envs == DEFAULT_ENVS;
     int failed = 0;
     for (size_t c = 0; c < sizeof(CASES) / sizeof(*CASES); c++) {
         Trace t = run_trace(CASES[c].self_play, CASES[c].policy, sweeps, envs, CASES[c].seed);
         printf("%-16s hash 0x%016llx steps %ld idle %.3f sessions %ld fights %ld%s\n", CASES[c].name, (unsigned long long)t.hash, t.steps,
-            (double)t.waits / t.steps, t.sessions, t.fights, !check ? "" : t.hash == CASES[c].golden ? " ok" : " MISMATCH");
-        if (check && t.hash != CASES[c].golden) failed = 1;
+            (double)t.waits / t.steps, t.sessions, t.fights, !check ? "" : t.hash == CASES[c].golden[PLATFORM < 0 ? 0 : PLATFORM] ? " ok" : " MISMATCH");
+        if (check && t.hash != CASES[c].golden[PLATFORM]) failed = 1;
         assert(t.sessions >= envs); /* sessions of 3000 ticks complete */
     }
     return failed;
