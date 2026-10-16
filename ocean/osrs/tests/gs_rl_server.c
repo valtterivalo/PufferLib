@@ -17,6 +17,9 @@
  *       (10173) is 1 (no energy, but it spends his Soulreaper stacks). The count may arrive on the swing's tick or on the next one; either way it is charged to his
  *       last swing. The server subtracts count x osrs_spec_cost(weapon) from the session observation's estimate of his special energy, which stays at 100 on a wire
  *       that does not send it. A count with no swing of his in this tick or the one before is a malformed wire and aborts.
+ * Session block, live: [0] 1, [2] [3] 0, [1] his special energy from the V lines, [4] our reputation 0 (no client can measure it), [5] how annoyed he is: our overeats of this
+ *   fight (rt_note_meals: servings that left the G line's bag between two consecutive requests while the earlier request's hitpoints were strictly above its chance range) over
+ *   RF_OVEREAT_PATIENCE + 1, [6] hitpoints over his chance range. The counter starts at 0 at every FIGHT.
  * Every tick of a fight must reach the server with the full request body: the server owns the history ring, the consume estimates and the recurrent state.
  * A tick gap above 2 or a tick that does not advance starts a new fight. On a decision tick the response is `R id micros 2 <3 x "feasible kill death value worlds">
  * A n <n x "due kind arg timing">` (best_index 2 = replace the remainder with these clicks, due = tick + 1); on an `OBS` tick it is `O id`. UNAVAILABLE as in the
@@ -28,6 +31,10 @@
 
 enum { RT_EVENT_WIDTH = RF_EVENT_WIDTH };
 
+/* Servings of our bag by the delay clock that gates them (sim: osrs_player_food_timer, the brew's potion timer): hard food (anglerfish, shark, marlin, pie bites), the karambwan
+ * clock (karambwan, halibut) and brew doses. A pie is two servings (pie, half a pie), a brew its doses: the chain of next_content_code of the item. */
+typedef struct { int hard, karambwan, brew; } RtServings;
+
 typedef struct {
     RiskfightVisibleOpponent vis;
     int active, start_tick, last_tick;
@@ -35,11 +42,15 @@ typedef struct {
     uint32_t rng;
     int hard;
     int land_pending[2], last_land; /* fight ticks his swings land on us (-1 none), and the last landing so far (-1 none): see rt_track_landing */
+    /* Our overeats this fight (rt_note_meals): the bag, hitpoints and chance range of the previous request, which are the state the next tick starts from. */
+    int have_previous, previous_hitpoints, previous_range;
+    RtServings previous_bag;
+    int meals, overeats, bag_unexplained;
 } RtFight;
 
 static RtFight g_fight;
 
-typedef struct { int swing_raw, swing_style, hit_landed, hit_damage, veng_cast, consuming, bar_ratio, bar_scale, veng_text, swing_spec; } RtSeen;
+typedef struct { int swing_raw, swing_style, hit_landed, hit_damage, veng_cast, consuming, bar_ratio, bar_scale, veng_text, swing_spec; RtServings servings; } RtSeen;
 
 static void rt_fight_reset(RtFight* f, int start_tick) {
     RfNet* net = f->net;
@@ -58,6 +69,76 @@ static void rt_fight_reset(RtFight* f, int start_tick) {
     v->spec_est = 100;
     v->health_bar = OSRS_PLAYER_HEALTH_BAR_SCALE; /* a fight starts at a full bar, as the sim's first observation */
     f->land_pending[0] = f->land_pending[1] = f->last_land = -1;
+}
+
+/* The sim's content code of a bag item as the client showed it: canonical() maps the blighted ids and the ids the server models, an id it has no row for (pies, sharks)
+ * still has a content row of its own, which is what the sim's inventory would hold. */
+static int rt_content_code(int raw) {
+    int c = canonical(raw);
+    return raw_id_to_content(c == -2 ? raw : c);
+}
+
+enum { RT_MEAL_NONE, RT_MEAL_HARD, RT_MEAL_KARAMBWAN, RT_MEAL_BREW };
+
+/* What counts as a meal for the overeat rule, as riskfight_execute_command classifies a click: an eat click (food, karambwan, pie), or a brew. A restore, a super combat or any other
+ * potion is not a meal. */
+static int rt_meal_class(int code) {
+    if (code == 0) return RT_MEAL_NONE;
+    const OsrsItemContentMetadata* m = osrs_item_content_metadata((uint16_t)code);
+    if (m->consumable_kind == OSRS_CONSUMABLE_BREW) return RT_MEAL_BREW;
+    if (m->click_action != OSRS_CLICK_EAT) return RT_MEAL_NONE;
+    return m->consumable_kind == OSRS_CONSUMABLE_KARAMBWAN || m->consumable_kind == OSRS_CONSUMABLE_HALIBUT ? RT_MEAL_KARAMBWAN : RT_MEAL_HARD;
+}
+
+/** Servings of one item: the meals it still holds (a brew (4) is 4, half a pie 1, an anglerfish 1, a restore 0). */
+static int rt_servings(int code) {
+    int n = 0;
+    while (rt_meal_class(code) != RT_MEAL_NONE) {
+        n++;
+        code = osrs_item_content_metadata((uint16_t)code)->next_content_code;
+    }
+    return n;
+}
+
+/** The servings of a bag as the wire sent it (raw ids, before request_declare_priors rewrites them). Totals per clock, not per slot: moving an item between slots changes nothing. */
+static RtServings rt_bag_servings(const int* raw_bag) {
+    RtServings total = {0, 0, 0};
+    for (int slot = 0; slot < TAPE_BAG; slot++) {
+        int code = rt_content_code(raw_bag[slot]);
+        int servings = rt_servings(code);
+        switch (rt_meal_class(code)) {
+            case RT_MEAL_HARD: total.hard += servings; break;
+            case RT_MEAL_KARAMBWAN: total.karambwan += servings; break;
+            case RT_MEAL_BREW: total.brew += servings; break;
+            default: break;
+        }
+    }
+    return total;
+}
+
+/* Our overeats this fight, counted the way the sim counts them (riskfight_step.h: a meal eaten while the hitpoints the tick began with are strictly above his chance range).
+ * The request of tick N carries the state after tick N, which is the state tick N + 1 begins with; the meals of tick N + 1 are the servings that left the bag between request N
+ * and request N + 1, and they are judged against request N's hitpoints and chance range. Every meal of a tick shares that bar, so a triple-eat above the range is three overeats.
+ * A meal is one serving of a class gone: each class has its own delay clock (hard food, karambwan, potion), so a class cannot be eaten twice on one tick; at most three meals a
+ * tick, one per class. A class that lost two or more servings at once lost them some other way (dropped, banked): not a meal, counted in bag_unexplained.
+ * The O line's timers cannot tell the meals of a tick apart: a karambwan sets all three clocks, so karambwan alone, with a hard food or with a brew jump the same timers,
+ * a brew jumps the potion and food timers whether or not a hard food came with it, and a restore or super combat jumps what a brew does. The bag does. A tick missing from the
+ * stream (a gap of 2) is judged against the last request seen. The first request of a fight has no previous state and counts nothing. */
+static void rt_note_meals(RtFight* f, const RtServings* bag, int hitpoints, int range) {
+    if (f->have_previous) {
+        const int fallen[3] = {f->previous_bag.hard - bag->hard, f->previous_bag.karambwan - bag->karambwan, f->previous_bag.brew - bag->brew};
+        int meals = 0;
+        for (int i = 0; i < 3; i++) {
+            if (fallen[i] == 1) meals++;
+            else if (fallen[i] > 1) f->bag_unexplained++;
+        }
+        f->meals += meals;
+        if (f->previous_hitpoints > f->previous_range) f->overeats += meals;
+    }
+    f->have_previous = 1;
+    f->previous_bag = *bag;
+    f->previous_hitpoints = hitpoints;
+    f->previous_range = range;
 }
 
 /* What riskfight_observe_visible does after a sim tick, from what the client showed instead of the sim's players. `n` is the fight tick after this one. */
@@ -215,12 +296,15 @@ static double rt_decide(Request* q, const RtSeen* seen, int new_fight, int fight
     us->pvp_overheal_block = (uint8_t)rt_overheal_block(f, n);
     s->visible[0] = f->vis;
     s->env.tick = n;
+    /* Our overeats of this fight feed the session block's [5]; the chance range is the one the observation's [6] margin is taken against. */
+    rt_note_meals(f, &seen->servings, us->current_hitpoints, riskfight_chance_range(s, 0));
+    s->overeats[0] = f->overeats;
     /* Stakes: K him us in gp; the price of our death in units of his. */
     s->death_price = q->him > 0 && q->us > 0 ? fminf(RF_PRICE_MAX_X10 / 10.0f, fmaxf(0.1f, (float)((double)q->us / (double)q->him))) : 1.0f;
     s->inventory_use[0].divine_combat_ticks = OSRS_DIVINE_DURATION > n ? OSRS_DIVINE_DURATION - n : 0;
     /* A live session has no budget: the end of the session is never near (the session block reads 1 for "plenty of time left"). */
     s->session_ticks_left = RF_SESSION_OPEN;
-    /* The wire does not carry our reputation (rude teleports of the session), so it reads as none: the session block's last float is 0. */
+    /* The wire does not carry our reputation (rude teleports of the session, decaying) and nothing on a client can measure it, so it reads as none: [4] is 0. */
     s->session_rep = 0;
     float obs[RF_OBS_SIZE];
     unsigned char mask[RF_MASK_SIZE];
@@ -264,6 +348,7 @@ static int rt_parse(FILE* in, Request* q, RtSeen* seen, int* new_fight, int* fig
         if (!strncmp(line, "END", 3)) {
             FILE* body = fmemopen(text, used, "r");
             read_request(body, q);
+            seen->servings = rt_bag_servings(q->bag);
             fclose(body);
             return 1;
         }
