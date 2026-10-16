@@ -10,7 +10,8 @@
  *             rematch) he is gone, and the next fight is with a new opponent after the restock delay R, which as measured (teleport to the next fight with a
  *             new opponent) already holds the search.
  *   his teleport, a timeout   he is gone (he refilled by teleporting), a new opponent after S, our supplies kept
- * Supplies are everything in the inventory, the worn gear, hitpoints, boosted levels, special energy (regenerating over the time passed) and Vengeance. */
+ * Supplies are everything in the inventory, the worn gear, boosted levels, special energy (regenerating over the time passed) and Vengeance. Hitpoints
+ * persist as what the player eats back during the wait (riskfight_idle_eat), at the cost of the food. */
 
 /* Game ticks of an hour (0.6 s each): sessions are scored in kills minus price times deaths per hour. */
 enum { RF_TICKS_PER_HOUR = 6000 };
@@ -83,8 +84,20 @@ static void riskfight_carry_save(const RiskfightState* s, int side, RiskfightCar
     carry->seen_spec_phase = s->visible[1 - side].spec_regen_phase;
 }
 
+/** Between fights a player eats back up to his full hitpoints: his bar is full again in 69% of the measured rematches (55 pairs), he eats in 98% of the gaps
+ * (41 pairs inside one recording), and we ate in the gaps where we did not restock (scripts/measure_session_delays.py, section J). The food he eats is gone,
+ * so what persists is what the session has spent; hitpoints do not carry a fight's damage over a gap. */
+static void riskfight_idle_eat(Player* p, OsrsInventoryUseState* use, const OsrsTeleportState* teleport, int tick) {
+    if (p->current_hitpoints >= p->base_hitpoints || p->food_timer > 0) return;
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        const OsrsItemContentMetadata* meta = osrs_inventory_cell_metadata(&p->inventory_cells[slot]);
+        if (meta->click_action != OSRS_CLICK_EAT || !osrs_can_eat_consumable_kind(p, (OsrsConsumableKind)meta->consumable_kind)) continue;
+        if (osrs_player_use_inventory_with_food_clock(p, use, teleport, slot, tick, OSRS_FOOD_CONTINUOUS_CLOCK) == OSRS_INVENTORY_USE_CONSUMED) return;
+    }
+}
+
 /** Puts a side's supplies back into a freshly reset fight and lets `idle_ticks` of the session pass over them: special energy regenerates, boosts and
- * overheal drift, the Vengeance cooldown runs. Positions, timers, queues and the fight's own state stay as the reset made them. */
+ * overheal drift, the Vengeance cooldown runs, he eats (riskfight_idle_eat). Positions, timers, queues and the fight's own state stay as the reset made them. */
 static void riskfight_carry_restore(RiskfightState* s, int side, const RiskfightCarry* carry, int idle_ticks) {
     Player* p = &s->env.players[side];
     const Player* kept = &carry->player;
@@ -104,16 +117,28 @@ static void riskfight_carry_restore(RiskfightState* s, int side, const Riskfight
     osrs_refresh_player_equipment(p);
     pvp_refresh_visible_gear(p);
     p->item_effect_state = kept->item_effect_state;
+    const int has_attack_timer = p->has_attack_timer, attack_timer = p->attack_timer, attack_timer_uncapped = p->attack_timer_uncapped;
     OsrsInventoryUseState* use = &s->inventory_use[side];
     use->vengeance_sacks = carry->use.vengeance_sacks;
     use->divine_combat_ticks = carry->use.divine_combat_ticks;
     use->stat_drift_timer = carry->use.stat_drift_timer;
     for (int tick = 0; tick < idle_ticks; tick++) {
+        if (p->food_timer > 0) p->food_timer--;
+        if (p->potion_timer > 0) p->potion_timer--;
+        if (p->karambwan_timer > 0) p->karambwan_timer--;
         if (p->veng_cooldown > 0) p->veng_cooldown--;
         if (p->spec_regen_active && p->special_energy < 100) osrs_tick_special_regen(p);
         else p->item_effect_state.special_regen_ticks = 0;
         osrs_player_inventory_tick(p, use);
+        riskfight_idle_eat(p, use, &s->env.pvp_runtime.teleport[side], tick - idle_ticks);
     }
+    /* The wait is over: nothing of it lingers into tick 0 of the fight. */
+    p->food_timer = p->potion_timer = p->karambwan_timer = 0;
+    p->has_attack_timer = has_attack_timer;
+    p->attack_timer = attack_timer;
+    p->attack_timer_uncapped = attack_timer_uncapped;
+    use->potion_animation_tick_plus_one = 0;
+    reset_tick_flags(p);
 }
 
 /** Starts the next fight of a session from a reset state: the sides the transition keeps get their supplies back, aged by the delay. The estimate each

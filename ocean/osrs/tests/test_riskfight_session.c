@@ -81,6 +81,29 @@ static void test_supplies_persist_across_a_fight_boundary(void) {
     destroy();
 }
 
+/* The wait between fights is not spent bleeding: a player eats back up to full hitpoints, and the food is gone from his bag. */
+static void test_the_gap_is_spent_eating(void) {
+    env = make_env(6000, 1, 8);
+    Player* us = &env->state.env.players[0];
+    int food = count_food(us);
+    us->current_hitpoints = 80;
+    env->state.env.players[1].current_hitpoints = 0;
+    puf_step(env);
+    us = &env->state.env.players[0];
+    assert(us->current_hitpoints >= us->base_hitpoints && count_food(us) < food && count_food(us) >= food - 3);
+    assert(us->food_timer == 0 && us->attack_timer == 0 && !us->ate_food_this_tick);
+    destroy();
+    /* Without food he cannot: the hitpoints stay where the fight left them. */
+    env = make_env(6000, 1, 8);
+    us = &env->state.env.players[0];
+    empty_slots(us, 0, OSRS_INVENTORY_SIZE);
+    us->current_hitpoints = 80;
+    env->state.env.players[1].current_hitpoints = 0;
+    puf_step(env);
+    assert(env->state.env.players[0].current_hitpoints <= 88); /* natural regeneration only */
+    destroy();
+}
+
 /* A death: the price is paid, everything is refilled, the respawn delay D passes, a new opponent. */
 static void test_death_refills_and_pays_the_respawn(void) {
     env = make_env(6000, 1, 9);
@@ -139,6 +162,7 @@ static void teleports(int our_specs, int his_energy, int he_teleports, int trial
     *rematches = *rudes = 0;
     for (int trial = 0; trial < trials; trial++) {
         env = make_env(6000, 1, 100 + trial);
+        int his_food = count_food(&env->state.env.players[1]);
         env->state.env.players[1].current_hitpoints = 77;
         env->state.env.players[1].special_energy = his_energy;
         env->state.specs_used[0] = our_specs;
@@ -148,9 +172,11 @@ static void teleports(int our_specs, int his_energy, int he_teleports, int trial
         assert(env->log.self_teleports == 1);
         *rudes += env->log.rude_teleports == 1;
         *rematches += env->log.rematches == 1;
-        /* The opponent who is back is the one who was left: the hitpoints he had (natural drift aside), not a fresh 99 to 121; if he teleported he is fresh. */
-        int back = env->state.env.players[1].current_hitpoints < 100;
+        /* The opponent who is back is the one who was left: he ate up in the gap, so his bag is lighter than a fresh one; if he teleported he is fresh. */
+        const Player* him = &env->state.env.players[1];
+        int back = count_food(him) < his_food;
         assert(back == (env->log.rematches == 1 && !he_teleports));
+        if (back) assert(him->current_hitpoints >= him->base_hitpoints);
         destroy();
     }
 }
@@ -292,6 +318,7 @@ static void test_session_observation(void) {
 
 int main(void) {
     test_supplies_persist_across_a_fight_boundary();
+    test_the_gap_is_spent_eating();
     test_death_refills_and_pays_the_respawn();
     test_teleport_refills_and_costs_the_restock();
     test_rude_teleport_loses_the_opponent();

@@ -821,7 +821,237 @@ def report(recs, fights, real, pairs):
     per = collections.Counter(stamp(f) for f in real)
     P(" ".join(f"{k}[{v}]" for k, v in sorted(per.items())))
     P(f"  recordings of October without a tracked player opponent (not PvP): {168 - len(recs)}; the 1177 July-September recordings: 0 with a player opponent (grep prefilter).")
+    report_persistence(recs, fights, real, pairs)
     dump_samples(pairs)
+
+
+# ---- section J: do hit points and supplies persist across a fight boundary ------------------------------------------------------------------
+FOOD_IDS = {24592, 24595, 24590, 24589, 385, 391, 20390, 13441, 3144, 23533}                      # blighted anglerfish/karambwan/manta, shark, manta, anglerfish, karambwan
+POTION_IDS = {24598, 24601, 24603, 24605, 6685, 6687, 6689, 6691, 23575, 23577, 23579, 23581,    # blighted super restore, Saradomin brew
+              12695, 12697, 12699, 12701, 23543, 23545, 23547, 23549, 23691, 23694, 23685, 23688}  # super combat, divine super combat
+EAT_ANIM = 829
+BAR_STALE = 40       # a bar last seen more than this many ticks before the fight end is not "his bar at the end"
+BAR_FIRST = 25       # first sight of his bar must come within this many ticks of the fight start
+
+
+def last_bar(rec, opp, lo, hi):
+    for t in range(hi, lo - 1, -1):
+        row = rec.tk.get(t)
+        if row and row[6] == opp and row[7]:
+            return row[7][0], row[7][1], t
+    return None
+
+
+def first_bar(rec, opp, lo, span=BAR_FIRST):
+    for t in range(lo, lo + span + 1):
+        row = rec.tk.get(t)
+        if row and row[6] == opp and row[7]:
+            return row[7][0], row[7][1], t
+    return None
+
+
+def hp_at(rec, t):
+    i = bisect.bisect_right(rec.ks, t)
+    k = rec.ks[i - 1] if i else rec.ks[0]
+    return rec.tk[k][2]
+
+
+def inv_at(rec, t):
+    """(food items, potion items, filled slots) of our inventory at tick t from the container 93 observations, None before the first one."""
+    cur = None
+    for tt, items in rec.raw["inv"]:
+        if tt > t:
+            break
+        cur = items
+    if cur is None:
+        return None
+    return (sum(q for i, q in cur if i in FOOD_IDS), sum(1 for i, q in cur if i in POTION_IDS), len(cur))
+
+
+def gear_at(rec, opp, t):
+    cur = None
+    for tt, n, off, ids in rec.raw["opp_gear"]:
+        if n == opp and tt <= t:
+            cur = [(r - off) if r >= off else -1 for r in ids]
+    return cur
+
+
+def gap_events(a, b, who):
+    """Animation 829 count and the menu clicks of `who` ('me' or his name) in the unobserved gap between fight a and fight b, with the number of gap ticks the
+    recordings cover (the whole gap when both fights are in one recording, else only the tail of a's recording and the head of b's)."""
+    t0, t1 = a["end_tick"] if who == "me" else a["hi"], b["lo"]
+    spans = [(t0 + 1, t1 - 1, a["rec"])] if a["rec"] is b["rec"] else [(t0 + 1, a["rec"].last, a["rec"]), (b["rec"].first, t1 - 1, b["rec"])]
+    cover, eats, food, potion, pool, bank, withdraw = 0, 0, 0, 0, 0, 0, 0
+    for lo, hi, rec in spans:
+        cover += max(0, hi - lo + 1)
+        name_ = rec.me if who == "me" else a["opp"]
+        eats += sum(1 for t, n, an, x, y in rec.raw["anims"] if n == name_ and an == EAT_ANIM and lo <= t <= hi)
+        if who == "me":
+            for t, o, tg, org in rec.raw["menus"]:
+                if lo <= t <= hi:
+                    if o == "Eat":
+                        food += 1
+                    elif o == "Drink" and "ool" in tg:
+                        pool += 1
+                    elif o == "Drink":
+                        potion += 1
+                    elif o in ("Use", "Bank") and ("Bank" in tg or "Banker" in tg):
+                        bank += 1
+                    elif o.startswith("Withdraw"):
+                        withdraw += 1
+    return dict(cover=cover, eats=eats, food=food, potion=potion, pool=pool, bank=bank, withdraw=withdraw, whole=a["rec"] is b["rec"])
+
+
+def share(n, d):
+    return f"{n}/{d} = {100 * n / d:.0f}%" if d else "0/0"
+
+
+def report_persistence(recs, fights, real, pairs):
+    P = print
+    P("=" * 132)
+    P("J. DO HIT POINTS AND SUPPLIES PERSIST ACROSS A FIGHT BOUNDARY? (in-session pairs, ticks from the recordings, bar = displayed ratio/scale of the health bar over his head, scale 30)")
+    scales = collections.Counter(r[1] for f in real for r in [first_bar(f["rec"], f["opp"], f["lo"])] if r)
+    P(f"  bar scales seen at first sight: {dict(scales)}; his bar is only visible while he is our interaction target, ours is the HP of the HP orb (boosted level, can exceed 99)")
+    ex = []
+
+    # (1) rematch pairs
+    P("-" * 132)
+    P("(1) REMATCH PAIRS: fight A ends (not by death or kill), the next real fight within 10 min is vs the SAME opponent")
+    rem = [p for p in pairs if p["in_session"] and p["b"]["opp"] == p["a"]["opp"] and p["a"]["outcome"] not in ("death", "kill")]
+    for nm, sel in (("all rematches", rem), ("  we escaped (either order)", [p for p in rem if p["d_our"] is not None]), ("  nobody of us escaped (his departure / other)", [p for p in rem if p["d_our"] is None])):
+        rows = []
+        for p in sel:
+            ba = last_bar(p["a"]["rec"], p["a"]["opp"], p["a"]["lo"], p["a"]["hi"])
+            bb = first_bar(p["b"]["rec"], p["b"]["opp"], p["b"]["lo"])
+            if ba and bb and p["a"]["hi"] - ba[2] <= BAR_STALE:
+                rows.append((p, ba[0] * 30 / ba[1], bb[0] * 30 / bb[1], ba, bb))
+        P(f"{nm}: {len(sel)} pairs, both bars seen {len(rows)}")
+        if rows:
+            P(row("    bar at end of A (of 30)", [r[1] for r in rows]))
+            P(row("    ticks from that bar sighting to A's last tracked tick", [float(r[0]["a"]["hi"] - r[3][2]) for r in rows]))
+            P(row("    bar at first sight in B (of 30)", [r[2] for r in rows]))
+            P(row("    B start minus A end (of 30)", [r[2] - r[1] for r in rows]))
+            P(f"    back at a full bar (30/30) in B: {share(sum(r[4][0] >= r[4][1] for r in rows), len(rows))}; full at A end: {share(sum(r[3][0] >= r[3][1] for r in rows), len(rows))}; "
+              f"bar went up by >= 5: {share(sum(r[2] - r[1] >= 5 for r in rows), len(rows))}; within +-2: {share(sum(abs(r[2] - r[1]) <= 2 for r in rows), len(rows))}; "
+              f"went down by >= 5: {share(sum(r[2] - r[1] <= -5 for r in rows), len(rows))}")
+        if nm == "all rematches":
+            allrows = rows
+    ticks_gap = [p["d_hi"] for p in rem]
+    P(row("    ticks between A's last tracked tick and B start", ticks_gap))
+    # his consumption between the fights
+    ge = [(p, gap_events(p["a"], p["b"], "him")) for p in rem]
+    whole = [(p, g) for p, g in ge if g["whole"]]
+    P(f"  his eat/drink animations (829) in the gap, pairs inside ONE recording (whole gap observed, but he is seen only while in our scene): {len(whole)} pairs; "
+      f"with >= 1: {share(sum(g['eats'] >= 1 for p, g in whole), len(whole))}")
+    P(row("    his 829 animations per gap (one recording)", [float(g["eats"]) for p, g in whole]))
+    P(row("    gap ticks of those pairs", [float(p["d_hi"]) for p, g in whole]))
+    part = [(p, g) for p, g in ge if not g["whole"]]
+    P(f"  pairs across two recordings: {len(part)}; covered gap ticks median {pct([g['cover'] for p, g in part], .5):.0f} of {pct([p['d_hi'] for p, g in part], .5):.0f}; with >= 1 of his 829 in the covered part: {share(sum(g['eats'] >= 1 for p, g in part), len(part))}")
+    # eats vs bar change
+    withbar = {id(r[0]): r for r in allrows}
+    for lab, cond in (("he ate/drank in the gap", lambda g: g["eats"] >= 1), ("he did not (in the observed part)", lambda g: g["eats"] == 0)):
+        ds = [withbar[id(p)][2] - withbar[id(p)][1] for p, g in ge if id(p) in withbar and cond(g)]
+        if ds:
+            P(row(f"    B start minus A end, {lab}", ds))
+    # gear
+    gp = []
+    for p in rem:
+        ga = gear_at(p["a"]["rec"], p["a"]["opp"], p["a"]["hi"] + 12)
+        gb = gear_at(p["b"]["rec"], p["b"]["opp"], p["b"]["lo"] + 30)
+        if ga and gb:
+            gp.append((p, ga, gb))
+    P(f"  his observed equipment composition (equipment slots from the actor state) in both fights: {len(gp)} of {len(rem)} rematch pairs; any slot changed {share(sum(ga != gb for p, ga, gb in gp), len(gp))}; "
+      f"weapon slot (3) changed {share(sum(ga[3] != gb[3] for p, ga, gb in gp), len(gp))}; shield slot (5) changed {share(sum(ga[5] != gb[5] for p, ga, gb in gp), len(gp))}; "
+      f"slots changed per pair: {collections.Counter(sum(x != y for x, y in zip(ga, gb)) for p, ga, gb in gp)}")
+    P("    note: composition is the displayed gear, so a swap seen in only one of the fights is a change, but his inventory and spec energy are not observable")
+
+    # (2) our HP and supplies
+    P("-" * 132)
+    P("(2) OUR HP AND SUPPLIES, next real fight within 10 min, any opponent; HP = hit points shown, boosted level (a fresh start in the lobby is 99-121)")
+    cats = [("we teleported / exited (restock expected)", lambda p: p["d_our"] is not None and p["a"]["outcome"] in ("our_tp", "our_exit")),
+            ("he left first, then we escaped", lambda p: p["d_our"] is not None and p["a"]["outcome"] in ("his_tp", "his_exit")),
+            ("he left, we did NOT escape afterwards", lambda p: p["d_our"] is None and p["a"]["outcome"] in ("his_tp", "his_exit")),
+            ("kill", lambda p: p["a"]["outcome"] == "kill"), ("other end", lambda p: p["a"]["outcome"] == "other"),
+            ("our death (respawn)", lambda p: p["a"]["outcome"] == "death")]
+    hp_rows = {}
+    for nm, pred in cats:
+        sel = [p for p in pairs if p["in_session"] and pred(p)]
+        rows = []
+        for p in sel:
+            a, b = p["a"], p["b"]
+            our_e = a["esc"] if a["outcome"] in ("our_tp", "our_exit") else a["leave_esc"]
+            t_end = our_e["tick"] if our_e else a["end_tick"]
+            rows.append((p, hp_at(a["rec"], a["hi"]), hp_at(a["rec"], t_end), hp_at(b["rec"], b["lo"]), inv_at(a["rec"], a["hi"]), inv_at(b["rec"], b["lo"]), gap_events(a, b, "me")))
+        hp_rows[nm] = rows
+        P(f"{nm}: {len(sel)} pairs")
+        if not rows:
+            continue
+        P(row("    our HP at A's last tracked tick", [float(r[1]) for r in rows]))
+        P(row("    our HP at the start (lo) of B", [float(r[3]) for r in rows]))
+        P(row("    HP at B start minus HP at A's last tracked tick", [float(r[3] - r[1]) for r in rows]))
+        P(f"    HP at B start >= 99: {share(sum(r[3] >= 99 for r in rows), len(rows))}; HP rose by >= 10 across the gap: {share(sum(r[3] - r[1] >= 10 for r in rows), len(rows))}; "
+          f"HP fell: {share(sum(r[3] < r[1] for r in rows), len(rows))}")
+        wh = [r for r in rows if r[6]["whole"]]
+        P(f"    gap seen whole (same recording) {len(wh)} pairs: we ate/drank (anim 829 or Eat/Drink click) {share(sum(r[6]['eats'] >= 1 or r[6]['food'] + r[6]['potion'] >= 1 for r in wh), len(wh))}; "
+          f"drank from the pool {share(sum(r[6]['pool'] >= 1 for r in wh), len(wh))}; used the bank {share(sum(r[6]['bank'] >= 1 for r in wh), len(wh))}; withdrew items {share(sum(r[6]['withdraw'] >= 1 for r in wh), len(wh))}")
+        P(row("    our 829 animations in the gap (same recording)", [float(r[6]["eats"]) for r in wh]))
+        iv = [r for r in rows if r[4] and r[5]]
+        if iv:
+            P(row("    food items in inventory at A end", [float(r[4][0]) for r in iv]))
+            P(row("    food items in inventory at B start", [float(r[5][0]) for r in iv]))
+            P(row("    potion items at A end", [float(r[4][1]) for r in iv]))
+            P(row("    potion items at B start", [float(r[5][1]) for r in iv]))
+            P(f"    food count at B start > at A end: {share(sum(r[5][0] > r[4][0] for r in iv), len(iv))}; equal: {share(sum(r[5][0] == r[4][0] for r in iv), len(iv))}; lower: {share(sum(r[5][0] < r[4][0] for r in iv), len(iv))}")
+
+    # (3) first sight after a kill
+    P("-" * 132)
+    P("(3) FIRST SIGHT OF HIS BAR IN B, and our HP then")
+    for nm, sel in (("after our kill, NEW opponent (any gap, in-session marked)", [p for p in pairs if p["a"]["outcome"] == "kill" and p["b"]["opp"] != p["a"]["opp"]]),
+                    ("after any end, NEW opponent", [p for p in pairs if p["b"]["opp"] != p["a"]["opp"]]),
+                    ("after any end, SAME opponent (rematch)", [p for p in pairs if p["b"]["opp"] == p["a"]["opp"]])):
+        rows = []
+        for p in sel:
+            b = p["b"]
+            fb = first_bar(b["rec"], b["opp"], b["lo"])
+            rows.append((p, fb, hp_at(b["rec"], b["lo"]), hp_at(b["rec"], fb[2]) if fb else None))
+        seen = [r for r in rows if r[1]]
+        P(f"{nm}: {len(sel)} pairs, bar seen within {BAR_FIRST} ticks of lo: {len(seen)}; in-session {sum(r[0]['in_session'] for r in rows)}")
+        if seen:
+            P(row("    his bar at first sight (of 30)", [r[1][0] * 30 / r[1][1] for r in seen]))
+            P(f"    full bar at first sight: {share(sum(r[1][0] >= r[1][1] for r in seen), len(seen))}; first sight tick after lo: median {pct([r[1][2] - r[0]['b']['lo'] for r in seen], .5):.0f}")
+        P(row("    our HP at B start (lo)", [float(r[2]) for r in rows]))
+        if seen:
+            P(row("    our HP at his bar's first sight", [float(r[3]) for r in seen]))
+        if nm.startswith("after our kill"):
+            kill_rows = rows
+
+    # examples
+    P("-" * 132)
+    P("MOST INFORMATIVE PAIRS (recording, A lo-hi -> B lo; ticks as in the recording; bars of 30; HP; supplies)")
+
+    def desc(p, extra=""):
+        a, b = p["a"], p["b"]
+        ba = last_bar(a["rec"], a["opp"], a["lo"], a["hi"])
+        bb = first_bar(b["rec"], b["opp"], b["lo"])
+        iv_a, iv_b = inv_at(a["rec"], a["hi"]), inv_at(b["rec"], b["lo"])
+        g = gap_events(a, b, "me")
+        h = gap_events(a, b, "him")
+        return (f"{a['rec'].key}->{b['rec'].key if b['rec'] is not a['rec'] else 'same'} vs {a['opp']}/{b['opp']}: A {a['lo']}-{a['hi']} ({a['outcome']}), B lo {b['lo']}, gap {p['d_hi']:.0f} t ({p['clock']}); "
+                f"his bar A-end {ba[0]}/{ba[1]}@{ba[2]} -> B {bb[0]}/{bb[1]}@{bb[2]}" if ba and bb else f"{a['rec'].key}: A {a['lo']}-{a['hi']} ({a['outcome']}), B lo {b['lo']}, gap {p['d_hi']:.0f} t; his bar n/a") + \
+               f"; his 829 in gap {h['eats']}; our HP {hp_at(a['rec'], a['hi'])} -> {hp_at(b['rec'], b['lo'])}; food/potion items {iv_a and iv_a[:2]} -> {iv_b and iv_b[:2]}; our 829 {g['eats']}, pool {g['pool']}, bank {g['bank']}" + extra
+
+    def pick(sel, key, rev=True):
+        sel = [p for p in sel if key(p) is not None]
+        return max(sel, key=key) if rev and sel else (min(sel, key=key) if sel else None)
+    bardelta = {id(r[0]): r[2] - r[1] for r in allrows}
+    cands = [("his bar healed most between the fights", pick(rem, lambda p: bardelta.get(id(p)))),
+             ("his bar persisted: smallest change with a bar of <= 20/30 at A's end", pick([p for p in rem if id(p) in bardelta and (last_bar(p["a"]["rec"], p["a"]["opp"], p["a"]["lo"], p["a"]["hi"])[0] * 30 / last_bar(p["a"]["rec"], p["a"]["opp"], p["a"]["lo"], p["a"]["hi"])[1]) <= 20], lambda p: -abs(bardelta[id(p)]))),
+             ("we escaped, HP restored by restock", pick([p for p in pairs if p["in_session"] and p["d_our"] is not None], lambda p: hp_at(p["b"]["rec"], p["b"]["lo"]) - hp_at(p["a"]["rec"], p["a"]["hi"]))),
+             ("he left and we did not restock: HP carried over", pick([p for p in pairs if p["in_session"] and p["a"]["outcome"] in ("his_tp", "his_exit") and p["d_our"] is None], lambda p: -abs(hp_at(p["b"]["rec"], p["b"]["lo"]) - hp_at(p["a"]["rec"], p["a"]["hi"])))),
+             ("after a kill: new opponent first sight", next((r[0] for r in kill_rows if r[1]), None))]
+    for lab, p in cands:
+        P(f"  * {lab}:")
+        P("      " + (desc(p) if p else "no such pair"))
 
 
 def dump_samples(pairs, path="/tmp/dm_samples.tsv"):
