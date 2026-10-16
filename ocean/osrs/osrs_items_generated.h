@@ -1,6 +1,8 @@
 #ifndef OSRS_ITEMS_GENERATED_H
 #define OSRS_ITEMS_GENERATED_H
 
+#include "osrs_items_wiki_rows.h"
+
 typedef enum {
     ITEM_HELM_NEITIZNOT = 0,
     ITEM_GOD_CAPE = 1,
@@ -165,7 +167,11 @@ typedef enum {
     ITEM_MIXED_HIDE_TOP = 160,
     ITEM_ELITE_BLACK_FULL_HELM = 161,
     ITEM_ELITE_BLACK_PLATELEGS = 162,
-    NUM_ITEMS = 163,
+#define OSRS_WIKI_ITEM_ENUM(ENUM, ...) ENUM,
+    OSRS_ITEM_WIKI_ROWS(OSRS_WIKI_ITEM_ENUM)
+#undef OSRS_WIKI_ITEM_ENUM
+    NUM_HAND_ITEMS = 163,
+    NUM_ITEMS = NUM_HAND_ITEMS + OSRS_ITEM_WIKI_ROW_COUNT,
     ITEM_NONE = 255
 } ItemIndex;
 
@@ -1609,13 +1615,23 @@ static Item ITEM_DATABASE[NUM_ITEMS + OSRS_STAT_ITEM_SLOTS] = {
         .defence_stab = 24, .defence_slash = 22, .defence_crush = 20,
         .defence_magic = -4, .defence_ranged = 22, .prayer = 6
     },
-
+/* Rows appended after the hand rows come from items/wiki_item_rows.tsv (scripts/gen_osrs_item_rows.py). */
+#define OSRS_WIKI_ITEM_DB_ROW(ENUM, RAW, NAME, SLOT, TWO, SPEED, RANGE, STYLE, AS, ASL, AC, AM, AR, DS, DSL, DC, DM, DR, MS, RS, MD, PR) \
+    [ENUM] = { \
+        .item_id = RAW, .name = NAME, .slot = SLOT, .two_handed = TWO, .attack_speed = SPEED, .attack_range = RANGE, \
+        .attack_stab = AS, .attack_slash = ASL, .attack_crush = AC, .attack_magic = AM, .attack_ranged = AR, \
+        .defence_stab = DS, .defence_slash = DSL, .defence_crush = DC, .defence_magic = DM, .defence_ranged = DR, \
+        .melee_strength = MS, .ranged_strength = RS, .magic_damage = MD, .prayer = PR \
+    },
+    OSRS_ITEM_WIKI_ROWS(OSRS_WIKI_ITEM_DB_ROW)
+#undef OSRS_WIKI_ITEM_DB_ROW
 };
 static_assert(
     sizeof(ITEM_DATABASE) / sizeof(ITEM_DATABASE[0]) == NUM_ITEMS + OSRS_STAT_ITEM_SLOTS,
     "item database row count must match ItemIndex plus the stat-priced rows");
 static_assert(NUM_ITEMS + OSRS_STAT_ITEM_SLOTS < ITEM_NONE,
     "generated item indexes must remain distinct from ITEM_NONE");
-
+static_assert(ITEM_ELITE_BLACK_PLATELEGS + 1 == NUM_HAND_ITEMS,
+    "hand rows are frozen: new items are wiki rows (items/wiki_item_rows.tsv), appended after them");
 
 #endif

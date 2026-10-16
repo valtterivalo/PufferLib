@@ -34,11 +34,11 @@ int main(void) {
     CHECK("guessed numeric equipment is not observed", la_gear_status(gear).status == LA_GEAR_UNKNOWN);
     gear.source = GS_GEAR_COMPOSITION_OBSERVED;
     CHECK("physical Voidwaker and Avernic are supported", la_gear_status(gear).status == LA_GEAR_SUPPORTED);
-    gear.armor[0] = 11665;
+    gear.armor[0] = 11664;
     LaGearIssue unsupported = la_gear_status(gear);
-    CHECK("unsupported observed armor reports its exact slot and raw item", unsupported.status == LA_GEAR_ARMOR_UNSUPPORTED && unsupported.slot == 0 && unsupported.raw == 11665);
+    CHECK("unsupported observed armor reports its exact slot and raw item", unsupported.status == LA_GEAR_ARMOR_UNSUPPORTED && unsupported.slot == 0 && unsupported.raw == 11664);
     gear.armor[0] = 10828;
-    gear.weapon = 29796;
+    gear.weapon = 11838;
     CHECK("unknown weapon mechanics remain unavailable", la_gear_status(gear).status == LA_GEAR_WEAPON_UNSUPPORTED);
     gear.weapon = 27690; gear.shield = 9999;
     CHECK("unknown shield mechanics remain unavailable", la_gear_status(gear).status == LA_GEAR_SHIELD_UNSUPPORTED);
@@ -83,7 +83,7 @@ int main(void) {
             CHECK("raw aliases remain local to the forecast boundary", global_aliases == 0);
         }
     }
-    CHECK("empty equipment remains distinct from unsupported mechanics", la_item_of(-1).kind == LA_ITEM_EMPTY && la_item_of(-1).item == ITEM_NONE && la_item_of(11665).kind == LA_ITEM_UNSUPPORTED);
+    CHECK("empty equipment remains distinct from unsupported mechanics", la_item_of(-1).kind == LA_ITEM_EMPTY && la_item_of(-1).item == ITEM_NONE && la_item_of(11664).kind == LA_ITEM_UNSUPPORTED);
     gear.armor[6] = 31097;
     CHECK("Avernic treads preserve official magic damage", gs_item(31097)->has_stats && gs_item(31097)->mdmg == 2 && gs_item(31097)->mdmg == ITEM_DATABASE[ITEM_AVERNIC_TREADS].magic_damage);
     CHECK("verified Avernic treads use their existing physical item", la_item_of(31097).kind == LA_ITEM_MAPPED && la_item_of(31097).item == ITEM_AVERNIC_TREADS && la_gear_status(gear).status == LA_GEAR_SUPPORTED);

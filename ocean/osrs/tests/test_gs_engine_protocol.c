@@ -206,33 +206,33 @@ static void test_literal_plan_round_trip(void) {
 static void test_gear_priors(void) {
     static char text[1 << 13];
     const char* base = WARM_REQUESTS[0];
-    /* weapon 1434 (dragon mace, unmapped), shield 8849 (adamant defender), body 1127 (rune platebody), gloves 99999 (id with no stats at all) */
+    /* weapon 1331 (adamant scimitar, unmapped), shield 8849 (adamant defender), body 2661 (saradomin platebody), gloves 99999 (id with no stats at all) */
     const char* shield = strstr(base, "SHIELD");
     const char* o = strstr(base, " 4587 0 0 -1 OBSERVED");
     CHECK(shield && o && o < shield);
     int n = (int)(o - base), m = (int)(shield - base);
     memcpy(text, base, (size_t)n);
-    memcpy(text + n, " 1434", 5);                      /* the O record's observed weapon: an id with no sim row */
+    memcpy(text + n, " 1331", 5);                      /* the O record's observed weapon: an id with no sim row */
     memcpy(text + n + 5, o + 5, (size_t)(m - n - 5));
     n = n + (m - n);
-    strcpy(text + n, "SHIELD OBSERVED 8849\nARMOR OBSERVED 10828 6570 1725 1127 7462 99999 4131\nPS 0 KNOWN 0 0 0\nPS 1 CLEAR_PRIOR\nRA OBSERVED 1\nP KNOWN 0\nR KNOWN 0\nEND\n");
+    strcpy(text + n, "SHIELD OBSERVED 8849\nARMOR OBSERVED 10828 6570 1725 2661 7462 99999 4131\nPS 0 KNOWN 0 0 0\nPS 1 CLEAR_PRIOR\nRA OBSERVED 1\nP KNOWN 0\nR KNOWN 0\nEND\n");
     static Request q;
     parse_text(text, &q);
     CHECK(server_unavailable(&q) == NULL);
-    CHECK(q.his_weapon == 1434); /* the observation keeps the raw id */
+    CHECK(q.his_weapon == 1331); /* the observation keeps the raw id */
     CHECK(la_gear_wearable(q.belief.gear));
     /* items the Java table has stats for are priced from their own stats and kept (a PRIOR triple still reports them) */
-    CHECK(q.belief.gear.weapon == 1434);
+    CHECK(q.belief.gear.weapon == 1331);
     CHECK(la_item_of(q.belief.gear.weapon).kind == LA_ITEM_MAPPED && la_item_of(q.belief.gear.weapon).item >= NUM_ITEMS);
     CHECK(get_item_attack_style((uint8_t)la_item_of(q.belief.gear.weapon).item) == ATTACK_STYLE_MELEE);
     CHECK(q.belief.gear.shield == 8849);
-    CHECK(q.belief.gear.armor[3] == 1127);
+    CHECK(q.belief.gear.armor[3] == 2661);
     CHECK(q.belief.gear.armor[5] == -1);    /* an id the table has no stats for: bare */
     int weapon = 0, shield_triple = 0, body = 0, legs = 0;
     for (int i = 0; i < q.prior_count; i++) {
-        weapon |= q.prior[i][0] == 1 && q.prior[i][1] == 0 && q.prior[i][2] == 1434;
+        weapon |= q.prior[i][0] == 1 && q.prior[i][1] == 0 && q.prior[i][2] == 1331;
         shield_triple |= q.prior[i][0] == 1 && q.prior[i][1] == 1 && q.prior[i][2] == 8849;
-        body |= q.prior[i][0] == 1 && q.prior[i][1] == 2 + 3 && q.prior[i][2] == 1127;
+        body |= q.prior[i][0] == 1 && q.prior[i][1] == 2 + 3 && q.prior[i][2] == 2661;
         legs |= q.prior[i][0] == 1 && q.prior[i][1] == 2 + 5 && q.prior[i][2] == 99999;
     }
     CHECK(weapon && shield_triple && body && legs);
@@ -246,7 +246,7 @@ static void test_gear_priors(void) {
     FILE* out = fmemopen(line, sizeof(line), "w");
     server_respond(out, &q, 1.0);
     fclose(out);
-    CHECK(strstr(line, " PRIOR ") != NULL && strstr(line, " 1 0 1434") != NULL && strstr(line, " 1 1 8849") != NULL);
+    CHECK(strstr(line, " PRIOR ") != NULL && strstr(line, " 1 0 1331") != NULL && strstr(line, " 1 1 8849") != NULL);
     /* nothing observed about shield/armor: bare, one triple per unobserved slot, still no UNAVAILABLE */
     compose(text, sizeof(text), "SHIELD UNKNOWN\nARMOR UNKNOWN\nPS 0 KNOWN 0 0 0\nPS 1 CLEAR_PRIOR\nRA OBSERVED 1\nP KNOWN 0\nR KNOWN 0\nEND\n");
 }

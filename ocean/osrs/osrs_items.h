@@ -69,7 +69,7 @@ typedef struct {
 /* Rows after the fixed table hold items the sim has no hand-written row for, priced from their stats at run time (gearswapper/gs_stat_items.h
  * fills them from the Java item table: bonuses, speed, style, two-handedness; no special attack, no effects). The table is rewritten only at a
  * request boundary (osrs_stat_items_clear), never while worlds run. */
-#define OSRS_STAT_ITEM_SLOTS 80 /* NUM_ITEMS + slots must stay below ITEM_NONE (255) */
+#define OSRS_STAT_ITEM_SLOTS 53 /* NUM_ITEMS + slots must stay below ITEM_NONE (255); 80 before the 27 wiki rows */
 #include "osrs_items_generated.h"
 
 static int osrs_stat_item_count;
@@ -99,7 +99,12 @@ static inline int osrs_stat_item_register(const Item* row, int attack_style) {
  * https://oldschool.runescape.wiki/w/Infernal_cape#Combat_stats .
  * Raw 24224 is the locked infernal cape, not granite maul 24225. Dragon claws (cr) 28039 is the Bounty Hunter ornament of dragon claws with the same
  * stats, speed and special (https://oldschool.runescape.wiki/w/Dragon_claws_(cr)); Voidwaker (deadman) 29607 and Statius's warhammer (bh) 27908 are
- * the untradeable variants of 27690 and 22622. */
+ * the untradeable variants of 27690 and 22622. The ids from 1706 on are the charged, ornament, locked and degraded variants of hand rows whose wiki
+ * Combat stats are identical to the row's (checked per page, see items/wiki_item_rows.tsv for the format): Amulet of glory(1,2,3,5,6), Ahrim's staff 100,
+ * Torag's platelegs 100, Strength amulet (t), Dragon dagger (unp), Dark bow (yellow), Imbued Guthix cape (stats of the imbued Zamorak cape row),
+ * Climbing boots (g), Fighter torso (l), Bow of Faerdhinen (c) both colours, Abyssal tentacle (or), Heavy ballista (or), Ghommal's avernic defender 5,
+ * Morrigan's javelin (bh), Dragon platelegs (cr), Dizana's quiver / max cape (l) / blessed quiver (l) (passive quiver bonus), Armadyl godsword (Deadman).
+ * Aliases to the wiki rows are generated: OSRS_ITEM_WIKI_ALIAS_ROWS. */
 #define OSRS_ITEM_RAW_GEAR_ALIAS_ROWS(X) \
     X(1704, ITEM_GLORY) \
     X(4880, ITEM_DHAROKS_HELM) \
@@ -117,7 +122,25 @@ static inline int osrs_stat_item_register(const Item* row, int attack_style) {
     X(28055, ITEM_DRAGON_BOOTS) \
     X(28069, ITEM_FIGHTER_TORSO) \
     X(29607, ITEM_VOIDWAKER) \
-    X(33335, ITEM_SOULREAPER_AXE)
+    X(33335, ITEM_SOULREAPER_AXE) \
+    X(1706, ITEM_GLORY) X(1708, ITEM_GLORY) X(1710, ITEM_GLORY) X(11976, ITEM_GLORY) X(11978, ITEM_GLORY) \
+    X(4862, ITEM_AHRIM_STAFF) \
+    X(4970, ITEM_TORAGS_PLATELEGS) \
+    X(10364, ITEM_AMULET_OF_STRENGTH) \
+    X(1215, ITEM_DRAGON_DAGGER) \
+    X(12767, ITEM_DARK_BOW) \
+    X(21793, ITEM_GOD_CAPE) \
+    X(23413, ITEM_CLIMBING_BOOTS) \
+    X(24175, ITEM_FIGHTER_TORSO) \
+    X(25867, ITEM_BOW_OF_FAERDHINEN) X(25886, ITEM_BOW_OF_FAERDHINEN) \
+    X(26484, ITEM_ABYSSAL_TENTACLE) \
+    X(26712, ITEM_HEAVY_BALLISTA) \
+    X(27550, ITEM_AVERNIC_DEFENDER) \
+    X(27916, ITEM_MORRIGANS_JAVELIN) \
+    X(28061, ITEM_DRAGON_PLATELEGS) \
+    X(28906, ITEM_DIZANAS_QUIVER) X(28951, ITEM_DIZANAS_QUIVER) X(28957, ITEM_DIZANAS_QUIVER) \
+    X(29605, ITEM_AGS) \
+    OSRS_ITEM_WIKI_ALIAS_ROWS(X)
 
 static inline int osrs_item_index_from_raw_id(int raw) {
 #define OSRS_RAW_GEAR_ALIAS_CASE(RAW, INDEX) case RAW: return INDEX;
@@ -199,6 +222,10 @@ static inline int get_item_attack_style(uint8_t item_index) {
         case ITEM_EYE_OF_AYAK:
         case ITEM_TUMEKENS_SHADOW:
             return 3;
+#define OSRS_WIKI_ITEM_STYLE_CASE(ENUM, RAW, NAME, SLOT, TWO, SPEED, RANGE, STYLE, ...) \
+        case ENUM: return STYLE;
+        OSRS_ITEM_WIKI_ROWS(OSRS_WIKI_ITEM_STYLE_CASE)
+#undef OSRS_WIKI_ITEM_STYLE_CASE
         default:
             return item_index >= NUM_ITEMS && osrs_item_row_valid(item_index) ? osrs_stat_item_style[item_index - NUM_ITEMS] : 0;
     }
