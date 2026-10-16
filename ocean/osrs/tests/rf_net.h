@@ -14,6 +14,8 @@ typedef struct {
     float* weights;
     const float *encoder, *decoder, *gru[RF_NET_MAX_LAYERS];
     float state[RF_NET_MAX_LAYERS][RF_NET_MAX_HIDDEN];
+    /* Every head's logits of the last act, unmasked, concatenated like the mask: what rl_explain prints. */
+    float* logits;
 } RfNet;
 
 static int rf_net_align8(int n) { return (n + 7) & ~7; }
@@ -23,6 +25,7 @@ static RfNet* rf_net_load(const char* path, int input, int hidden, int layers, c
     RfNet* net = calloc(1, sizeof(*net));
     net->input = input; net->hidden = hidden; net->layers = layers;
     for (int i = 0; i < heads; i++) net->atn += dims[i];
+    net->logits = calloc(net->atn, sizeof(float));
     FILE* f = fopen(path, "rb");
     if (!f) { perror(path); exit(2); }
     fseek(f, 0, SEEK_END);
@@ -83,6 +86,7 @@ static void rf_net_act(RfNet* net, const float* obs, const unsigned char* mask, 
             const float* w = net->decoder + (size_t)(at + i) * H;
             for (int k = 0; k < H; k++) sum += x[k] * w[k];
             logits[i] = sum;
+            net->logits[at + i] = sum;
         }
         const unsigned char* m = mask + at;
         int first = -1;
