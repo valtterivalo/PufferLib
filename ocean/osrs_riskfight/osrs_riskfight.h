@@ -116,20 +116,23 @@ static inline void puf_set_bot_policy(Env* env, int bot_policy) {
     env->context.opponent = (RiskfightOpponent)bot_policy;
 }
 
-/** One float as the observation buffer holds it: round-to-nearest-even bf16, bit-identical to __float2bfloat16 for finite values, or the float itself. */
-static inline obs_t riskfight_obs_one(float value) {
+/** Stores one float into the observation buffer: round-to-nearest-even bf16, bit-identical to __float2bfloat16 for finite values, or the float itself. The bf16 is
+ * stored as its bits, never by assigning an integer to obs_t: in the trainer obs_t is __nv_bfloat16, whose conversion from an integer is numeric. */
+static inline void riskfight_obs_put(obs_t* out, float value) {
 #ifdef RF_BF16_OBS
     uint32_t bits;
     memcpy(&bits, &value, sizeof(bits));
-    return (uint16_t)((bits + 0x7FFFu + ((bits >> 16) & 1u)) >> 16);
+    const uint16_t rounded = (uint16_t)((bits + 0x7FFFu + ((bits >> 16) & 1u)) >> 16);
+    memcpy(out, &rounded, sizeof(rounded));
 #else
-    return value;
+    *out = value;
 #endif
 }
 /** Writes obs as round-to-nearest-even bf16, bit-identical to __float2bfloat16 for finite values: (bits + 0x7FFF + bit 16) >> 16, in 32-bit wrapping integer
  * arithmetic. Vectorized by hand: the compilers' -O2 cost models do not vectorize a loop whose length is not a multiple of the vector width. */
 static inline void riskfight_obs_store(obs_t* out, const float* obs) {
 #ifdef RF_BF16_OBS
+    static_assert(sizeof(obs_t) == sizeof(uint16_t), "bf16 observations are two bytes");
     int j = 0;
 #if defined(__ARM_NEON)
     const uint32x4_t bias = vdupq_n_u32(0x7FFFu), one = vdupq_n_u32(1u);
@@ -137,7 +140,8 @@ static inline void riskfight_obs_store(obs_t* out, const float* obs) {
         uint32x4_t a = vreinterpretq_u32_f32(vld1q_f32(obs + j)), b = vreinterpretq_u32_f32(vld1q_f32(obs + j + 4));
         a = vaddq_u32(a, vaddq_u32(bias, vandq_u32(vshrq_n_u32(a, 16), one)));
         b = vaddq_u32(b, vaddq_u32(bias, vandq_u32(vshrq_n_u32(b, 16), one)));
-        vst1q_u16(out + j, vcombine_u16(vshrn_n_u32(a, 16), vshrn_n_u32(b, 16)));
+        const uint16x8_t packed = vcombine_u16(vshrn_n_u32(a, 16), vshrn_n_u32(b, 16));
+        memcpy(out + j, &packed, sizeof(packed));
     }
 #elif defined(__SSE2__)
     const __m128i bias = _mm_set1_epi32(0x7FFF), one = _mm_set1_epi32(1);
@@ -151,7 +155,7 @@ static inline void riskfight_obs_store(obs_t* out, const float* obs) {
         _mm_storeu_si128((__m128i*)(out + j), _mm_packs_epi32(a, b));
     }
 #endif
-    for (; j < RF_OBS_SIZE; j++) out[j] = riskfight_obs_one(obs[j]);
+    for (; j < RF_OBS_SIZE; j++) riskfight_obs_put(out + j, obs[j]);
 #else
     memcpy(out, obs, RF_OBS_SIZE * sizeof(float));
 #endif
@@ -181,9 +185,9 @@ static void riskfight_native_observe_wait_tick(Env* env) {
     riskfight_session_clock(&env->state, clock);
     for (int i = 0; i < env->num_agents; i++) {
         obs_t* out = env->agents[i].observations + RF_SESSION_START;
-        out[0] = riskfight_obs_one(clock[0]);
-        out[3] = riskfight_obs_one(clock[1]);
-        out[4] = riskfight_obs_one(clock[2]);
+        riskfight_obs_put(out, clock[0]);
+        riskfight_obs_put(out + 3, clock[1]);
+        riskfight_obs_put(out + 4, clock[2]);
     }
 }
 /** Who plays the opponent of a fight just reset: when the script or OppFit drives him (always in a self_play 0 env, in a self-play env when the session's

@@ -8,7 +8,8 @@
 #include <stdint.h>
 #include <time.h>
 #ifndef TRACE_FLOAT
-typedef uint16_t precision_t;
+/* A struct, like the trainer's __nv_bfloat16: assigning an integer to it does not compile, so a store that wrote values where bits belong cannot pass here. */
+typedef struct { uint16_t bits; } precision_t;
 #define from_float(x) (x) /* only its definition matters: osrs_riskfight.h then stores observations as precision_t */
 #endif
 #include "../../osrs_riskfight/osrs_riskfight.h"

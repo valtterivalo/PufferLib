@@ -20,7 +20,9 @@ static void oracle_check(const Env* e, int sweep, int index) {
         riskfight_write_observation(&e->state, a, f);
         obs_t expect[RF_OBS_SIZE];
 #ifdef RF_BF16_OBS
-        for (int j = 0; j < RF_OBS_SIZE; j++) { uint32_t b; memcpy(&b, &f[j], 4); expect[j] = (uint16_t)((b + 0x7FFFu + ((b >> 16) & 1u)) >> 16); }
+        uint16_t bits16[RF_OBS_SIZE];
+        for (int j = 0; j < RF_OBS_SIZE; j++) { uint32_t b; memcpy(&b, &f[j], 4); bits16[j] = (uint16_t)((b + 0x7FFFu + ((b >> 16) & 1u)) >> 16); }
+        memcpy(expect, bits16, sizeof(bits16));
 #else
         memcpy(expect, f, sizeof(f));
 #endif
@@ -28,7 +30,7 @@ static void oracle_check(const Env* e, int sweep, int index) {
         if (e->wait_left > 0) riskfight_write_wait_mask(mask); else riskfight_write_action_mask(&e->state, a, mask);
         if (memcmp(expect, e->agents[a].observations, sizeof(expect)) || memcmp(mask, e->agents[a].action_mask, sizeof(mask))) {
             for (int j = 0; j < RF_OBS_SIZE; j++) if (memcmp(&expect[j], &e->agents[a].observations[j], sizeof(obs_t)))
-                fprintf(stderr, "obs[%d] differs: expected %g got %g\n", j, f[j], (double)e->agents[a].observations[j]);
+                fprintf(stderr, "obs[%d] differs (float %g)\n", j, f[j]);
             for (int j = 0; j < RF_MASK_SIZE; j++) if (mask[j] != e->agents[a].action_mask[j]) fprintf(stderr, "mask[%d] differs\n", j);
             fprintf(stderr, "oracle mismatch: sweep %d env %d agent %d wait_left %d\n", sweep, index, a, e->wait_left);
             abort();
