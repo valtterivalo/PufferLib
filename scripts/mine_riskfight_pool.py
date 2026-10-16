@@ -30,6 +30,7 @@ DEFAULT_DUELS = os.path.join(HOME, ".light2/c-engine/spectator.duels")
 DEFAULT_OUT = os.path.join(ROOT, "ocean/osrs/encounters/riskfight/riskfight_pool_data.h")
 DEFAULT_REPORT = "/tmp/threat-pool/pool_report.md"
 DEFAULT_ITEMS_GENERATED = os.path.join(ROOT, "ocean/osrs/osrs_items_generated.h")
+DEFAULT_ITEMS_WIKI_ROWS = os.path.join(ROOT, "ocean/osrs/osrs_items_wiki_rows.h")
 DEFAULT_ITEMS = os.path.join(ROOT, "ocean/osrs/osrs_items.h")
 DEFAULT_JAVA_ITEMS = os.path.join(ROOT, "ocean/osrs/gearswapper/gs_java_items.h")
 LIGHT_RESOURCES = os.path.join(HOME, "Projects/storm/light/plugins/gear-swapper/src/test/resources")
@@ -90,7 +91,7 @@ def display(path):
 class Items:
     """What the sim can do with a raw id: a fixed ITEM_DATABASE row (with an attack style for weapons), a stat-priced row from the Java table, or neither."""
 
-    def __init__(self, generated_path, items_path, java_path, name_paths):
+    def __init__(self, generated_path, wiki_path, items_path, java_path, name_paths):
         text = read(generated_path)
         self.fixed = {}     # raw id -> (ITEM_X, name, slot)
         by_symbol = {}
@@ -98,22 +99,35 @@ class Items:
             symbol, raw, name, slot = m.group(1), int(m.group(2)), m.group(3), m.group(4)
             by_symbol[symbol] = (raw, name, slot)
             self.fixed[raw] = (symbol, name, slot)
-        count = re.search(r"NUM_ITEMS\s*=\s*(\d+)", text)
-        if not count or int(count.group(1)) != len(by_symbol):
-            die(f"{generated_path}: parsed {len(by_symbol)} item rows, NUM_ITEMS says {count.group(1) if count else '?'}")
+        hand = re.search(r"NUM_HAND_ITEMS\s*=\s*(\d+)", text)
+        if not hand or int(hand.group(1)) != len(by_symbol):
+            die(f"{generated_path}: parsed {len(by_symbol)} hand item rows, NUM_HAND_ITEMS says {hand.group(1) if hand else '?'}")
+        wiki_text = read(wiki_path)
+        self.styled = set()  # ITEM_X symbols with an attack style
+        wiki_rows = re.findall(r'^\s*X\((ITEM_[A-Z0-9_]+), (\d+), "((?:[^"\\]|\\.)*)", (SLOT_[A-Z]+), (\d+), (\d+), (\d+), (\d+),', wiki_text, re.M)
+        wiki_count = re.search(r"#define OSRS_ITEM_WIKI_ROW_COUNT (\d+)", wiki_text)
+        if not wiki_count or int(wiki_count.group(1)) != len(wiki_rows):
+            die(f"{wiki_path}: parsed {len(wiki_rows)} wiki rows, OSRS_ITEM_WIKI_ROW_COUNT says {wiki_count.group(1) if wiki_count else '?'}")
+        for symbol, raw, name, slot, two, speed, reach, style in wiki_rows:
+            by_symbol[symbol] = (int(raw), name, slot)
+            self.fixed[int(raw)] = (symbol, name, slot)
+            if int(style) > 0:
+                self.styled.add(symbol)
         items = read(items_path)
         block = re.search(r"#define OSRS_ITEM_RAW_GEAR_ALIAS_ROWS\(X\)((?:[^\n]*\\\n)*[^\n]*)", items)
         if not block:
             die(f"{items_path}: OSRS_ITEM_RAW_GEAR_ALIAS_ROWS not found")
         self.alias = {}     # raw id -> canonical raw id of its ITEM_DATABASE row
-        for raw, symbol in re.findall(r"X\((\d+),\s*(ITEM_[A-Z0-9_]+)\)", block.group(1)):
+        wiki_alias = re.search(r"#define OSRS_ITEM_WIKI_ALIAS_ROWS\(X\)((?:[^\n]*\\\n)*[^\n]*)", wiki_text)
+        if not wiki_alias:
+            die(f"{wiki_path}: OSRS_ITEM_WIKI_ALIAS_ROWS not found")
+        for raw, symbol in re.findall(r"X\((\d+),\s*(ITEM_[A-Z0-9_]+)\)", block.group(1) + wiki_alias.group(1)):
             if symbol not in by_symbol:
                 die(f"{items_path}: alias to unknown {symbol}")
             self.alias[int(raw)] = by_symbol[symbol][0]
         body = re.search(r"static inline int get_item_attack_style\(uint8_t item_index\) \{\s*switch \(item_index\) \{(.*?)default:", items, re.S)
         if not body:
             die(f"{items_path}: get_item_attack_style not found")
-        self.styled = set()  # ITEM_X symbols with an attack style
         for labels, style in re.findall(r"((?:\s*case ITEM_[A-Z0-9_]+:)+)\s*return (\d+);", body.group(1)):
             if int(style) > 0:
                 self.styled.update(re.findall(r"case (ITEM_[A-Z0-9_]+):", labels))
@@ -402,7 +416,7 @@ def row_of(fight, items):
 
 def unknown_count(items, weapon, switches, worn):
     ids = {(weapon, WEAPON)} | {(w, WEAPON) for w in switches} | {(raw, slot) for slot, raw in enumerate(worn) if raw and slot in SIM_KIT_SLOTS}
-    return sum(1 for raw, slot in sorted(ids) if items.resolve(raw, slot) == "unknown")
+    return sum(1 for raw, slot in sorted(ids) if items.resolve(raw, slot) != "fixed")
 
 
 def archetype(items, worn):
@@ -455,7 +469,8 @@ def render_header(rows, tapes_label, duels_label, n_tape, n_duel):
            "    uint16_t weapon;                           /* raw id of the weapon he fights with most */",
            "    uint16_t switches[RISKFIGHT_POOL_SWITCHES];/* raw ids of other weapons he swung/wielded, 0 = none */",
            "    uint16_t worn[RISKFIGHT_POOL_WORN];        /* raw ids by the Light client worn slot index 0..12 (head, cape, neck, weapon(0 here), body, shield, ?, legs, ?, hands, feet, ?, ring); -1 stored as 0 */",
-           "    uint8_t unknown;                           /* count of raw ids in this row the sim item table cannot resolve */",
+           "    uint8_t unknown;                           /* count of raw ids in this row without a fixed ITEM_DATABASE row (after aliasing; stat-priced ids and weapons without an attack style count) */",
+           "    uint16_t tape_fights, duel_fights;         /* fights from our own tapes / spectated duels, fights = tape_fights + duel_fights */",
            "} RiskfightPoolRow;",
            "static const RiskfightPoolRow RISKFIGHT_POOL_ROWS[] = {"]
     for row in rows:
@@ -464,7 +479,7 @@ def render_header(rows, tapes_label, duels_label, n_tape, n_duel):
         if fights > 65535 or row["unknown"] > 255:
             die("row weight or unknown count does not fit its field")
         worn = ", ".join(map(str, row["worn"]))
-        out.append(f"    {{ {c_string(source_string(row))}, {fights}, {row['weapon']}, {{{', '.join(map(str, switches))}}}, {{{worn}}}, {row['unknown']} }},")
+        out.append(f"    {{ {c_string(source_string(row))}, {fights}, {row['weapon']}, {{{', '.join(map(str, switches))}}}, {{{worn}}}, {row['unknown']}, {len(row['sources'].get('tape', []))}, {len(row['sources'].get('duel', []))} }},")
     out.append("};")
     return "\n".join(out) + "\n"
 
@@ -478,14 +493,16 @@ def parse_header(text):
         die("header has no row table")
     rows = []
     for line in body.group(1).splitlines():
-        m = re.fullmatch(r'\s*\{ "((?:[^"\\]|\\.)*)", (\d+), (\d+), \{([\d, ]*)\}, \{([\d, ]*)\}, (\d+) \},', line)
+        m = re.fullmatch(r'\s*\{ "((?:[^"\\]|\\.)*)", (\d+), (\d+), \{([\d, ]*)\}, \{([\d, ]*)\}, (\d+), (\d+), (\d+) \},', line)
         if not m:
             die(f"header row does not parse: {line!r}")
         switches = [int(v) for v in m.group(4).split(",")]
         worn = [int(v) for v in m.group(5).split(",")]
         if len(switches) != POOL_SWITCHES or len(worn) != POOL_WORN or worn[3] != 0 or worn[12] not in (0, RECOIL_RING):
             die(f"header row has wrong arity or a weapon/ring in worn: {line!r}")
-        rows.append((m.group(1), int(m.group(2)), int(m.group(3)), switches, worn, int(m.group(6))))
+        rows.append((m.group(1), int(m.group(2)), int(m.group(3)), switches, worn, int(m.group(6)), int(m.group(7)), int(m.group(8))))
+        if rows[-1][1] != rows[-1][6] + rows[-1][7]:
+            die(f"header row weight is not tape_fights + duel_fights: {line!r}")
     return rows
 
 
@@ -640,6 +657,7 @@ def report(rows, usable, tapes, duel_fights, duels, items, args, locations):
     unknown_rows = [r for r in rows if r["unknown"]]
     unknown_fights = sum(sum(len(v) for v in r["sources"].values()) for r in unknown_rows)
     stat_fights = 0
+    pool_unknown_fights = 0
     weapon_unknown_fights = 0
     weapon_stat_fights = 0
     nospec_fights = 0
@@ -650,13 +668,15 @@ def report(rows, usable, tapes, duel_fights, duels, items, args, locations):
         ids = [(weapon, WEAPON)] + [(s, WEAPON) for s in switches[:POOL_SWITCHES]] + [(raw, slot) for slot, raw in enumerate(worn) if raw and slot in SIM_KIT_SLOTS]
         tiers = {(raw, slot): items.resolve(raw, slot) for raw, slot in ids}
         for (raw, slot), tier in tiers.items():
-            if tier == "unknown":
+            if tier != "fixed":
                 unknown_ids[(raw, slot)] += 1
-            elif tier == "stat":
+            if tier == "stat":
                 stat_ids[(raw, slot)] += 1
         if any(t == "stat" for t in tiers.values()):
             stat_fights += 1
-        if any(t == "unknown" for (r, s), t in tiers.items() if s == WEAPON):
+        if any(t != "fixed" for t in tiers.values()):
+            pool_unknown_fights += 1
+        if any(t != "fixed" for (r, s), t in tiers.items() if s == WEAPON):
             weapon_unknown_fights += 1
         if any(t == "stat" for (r, s), t in tiers.items() if s == WEAPON):
             weapon_stat_fights += 1
@@ -665,7 +685,7 @@ def report(rows, usable, tapes, duel_fights, duels, items, args, locations):
     w("\n## What the sim item table cannot represent\n")
     w("Tiers per raw id: `fixed` = hand-written ITEM_DATABASE row (or gear alias) and, for a weapon, an attack style; `stat` = priced from `gs_java_items.h` at run time (no special attack, no effect); "
       "`unknown` = neither (the live server falls back to a prior: nearest same-style special-free weapon / bare slot), also a fixed weapon row with no attack style. "
-      "The `unknown` field of a pool row counts the distinct unknown ids of the row.\n")
+      "The `unknown` field of a pool row counts the distinct ids of the row that are not `fixed` (stat-priced ids count: the pool needs fixed rows). The table below lists every such id with the fights (= row weight) it appears in.\n")
     w(f"- fights with at least one unknown id (any slot): {unknown_fights} of {n_fight} ({100*unknown_fights/max(1,n_fight):.1f}%) in {len(unknown_rows)} of {len(rows)} setups")
     w(f"- fights with an unknown WEAPON (main or switch): {weapon_unknown_fights}; with a stat-priced weapon (no special attack): {weapon_stat_fights}; "
       f"fights with any stat-priced id: {stat_fights}; fights in which a spec was swung with a weapon that is not `fixed`: {nospec_fights}\n")
@@ -739,7 +759,7 @@ def report(rows, usable, tapes, duel_fights, duels, items, args, locations):
 # ---------------------------------------------------------------- main
 
 def run(args):
-    items = Items(args.items_generated, args.items, args.java_items, args.names)
+    items = Items(args.items_generated, args.items_wiki_rows, args.items, args.java_items, args.names)
     tapes = load_tapes(args.tapes, items)
     duel_fights, duels = parse_duels(args.duels, items)
     rows, usable = build(tapes, duel_fights, items)
@@ -759,6 +779,7 @@ def main():
     ap.add_argument("--report", default=DEFAULT_REPORT, help="markdown report (not written with --check)")
     ap.add_argument("--items-generated", default=DEFAULT_ITEMS_GENERATED)
     ap.add_argument("--items", default=DEFAULT_ITEMS)
+    ap.add_argument("--items-wiki-rows", default=DEFAULT_ITEMS_WIKI_ROWS)
     ap.add_argument("--java-items", default=DEFAULT_JAVA_ITEMS)
     ap.add_argument("--names", nargs="+", default=DEFAULT_NAMES, help="JSON id -> {name} files for names the Java table lacks")
     ap.add_argument("--spectator-dir", help="spectator-combat recordings: adds the per-location split of the duels to the report (reads every recording, about 30 s)")
@@ -776,6 +797,8 @@ def main():
             die(f"{args.out}: {len(parsed)} rows, sources give {len(expected)}")
         if sum(r[1] for r in parsed) != len(usable):
             die(f"{args.out}: weights sum to {sum(r[1] for r in parsed)}, sources give {len(usable)} fights")
+        if sum(r[6] for r in parsed) != n_tape or sum(r[7] for r in parsed) != n_duel:
+            die(f"{args.out}: tape/duel weights {sum(r[6] for r in parsed)}/{sum(r[7] for r in parsed)}, sources give {n_tape}/{n_duel}")
         tape_weight = sum(len(r["sources"].get("tape", [])) for r in rows)
         duel_weight = sum(len(r["sources"].get("duel", [])) for r in rows)
         if tape_weight != n_tape or duel_weight != n_duel:
