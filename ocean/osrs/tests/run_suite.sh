@@ -51,7 +51,7 @@ export -f args_for
 # osrs_riskfight.h reaches the fitted opponent through a separately compiled C object (build.sh does the same for the env); its pvp_* entry points are renamed.
 BRIDGE="$OUT/riskfight_oppfit_bridge.o"
 export BRIDGE
-needs_bridge() { grep -q 'osrs_riskfight/osrs_riskfight.h' "ocean/osrs/tests/$1.c"; }
+needs_bridge() { grep -qE 'osrs_riskfight/osrs_riskfight.h|riskfight_env_harness.h' "ocean/osrs/tests/$1.c"; }
 export -f needs_bridge
 
 run_variant() { # label source defines...
