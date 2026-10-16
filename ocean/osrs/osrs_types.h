@@ -623,8 +623,7 @@ typedef struct {
     RangedSpecWeapon ranged_spec_weapon;
     MagicSpecWeapon magic_spec_weapon;
 
-    float bolt_proc_damage;
-    int bolt_ignores_defense;
+    int soul_stacks, soul_decay_ticks; /* Soulreaper axe: stacks held (0..5) and ticks until one decays; they stay across weapon switches (osrs_soul_*) */
 
     uint8_t equipped[NUM_GEAR_SLOTS];
     OsrsInventoryCell inventory_cells[OSRS_INVENTORY_SIZE];

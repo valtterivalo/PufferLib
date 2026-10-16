@@ -119,6 +119,7 @@ static void riskfight_write_observation_core(const RiskfightState* s, int agent,
 /** What the scripts read: the observation without its appended blocks (they read nothing from them), at the cost of the base. */
 static void riskfight_write_script_observation(const RiskfightState* s, int agent, float* obs) {
     riskfight_write_observation_core(s, agent, obs, NULL);
+    riskfight_threat_write_stacks(&s->env.players[agent], &s->visible[agent].threat, obs + RF_THREAT_START); /* the Soulreaper stacks are the one thing a script reads there */
 }
 
 /** The full observation: the base, then the appended blocks in order (threat features, session). */
@@ -364,7 +365,11 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
         voidwaker_main ? ITEM_VOIDWAKER : inventory.main_weapon != ITEM_NONE ? inventory.main_weapon : self.weapon;
     uint8_t weapon = vw_spec ? ITEM_VOIDWAKER : maul_spec ? maul_item : generic_roll ? generic_spec :
         axe_swing ? ITEM_DHAROKS_GREATAXE : main_weapon;
-    int armed_wanted = vw_spec || generic_roll;
+    /* Behead: with all five stacks held and the other side hurt, at the same rate as his other specials; it costs no energy. */
+    int stacks = (int)lroundf(obs[RF_THREAT_START + RF_THREAT_STACKS_OFFSET + 1] * OSRS_SOUL_STACKS_MAX);
+    int behead = weapon == ITEM_SOULREAPER_AXE && !vw_spec && !maul_spec && !generic_roll && stacks == OSRS_SOUL_STACKS_MAX && opponent[0] < 0.65f &&
+        riskfight_sample_event(seed, attack_tick, 26, profile->vw_pm);
+    int armed_wanted = vw_spec || generic_roll || behead;
     actions[RF_SPECIAL] = maul_spec ? maul_specs : !holding_maul && armed_wanted != (obs[13] >= 0.5f);
     /* Ranged weapons are fought on Rigour and rapid, the rest on Piety and aggressive. */
     int ranged_weapon = weapon != ITEM_NONE && get_item_attack_style(weapon) == ATTACK_STYLE_RANGED;

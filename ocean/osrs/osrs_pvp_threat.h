@@ -62,6 +62,7 @@ typedef struct {
     int attack, strength, ranged, magic, defence;
     OffensivePrayer prayer;
     FightStyle stance;
+    int soul_stacks; /* Soulreaper axe stacks held (osrs_special_attacks.h); only that weapon reads them */
 } OsrsThreatActor;
 
 /** The levels a fighter is assumed to fight with when only his gear is seen: a maxed account on piety / rigour / augury with a super combat (melee 118) or a
@@ -153,8 +154,10 @@ typedef struct {
     uint8_t item, style, speed, dharok;
     int8_t melee_type;          /* MeleeBonusType of the normal attack, -1 for ranged and magic */
     int att_roll, max_hit;      /* max_hit at full hitpoints: osrs_threat_max_hit_at scales a Dharok's */
-    int spec_cost;              /* 0: no special */
-    int spec_hits, spec_max;    /* hits of one special and the most all of them can deal */
+    uint8_t bolt, zcb;          /* ranged: the ammunition and whether it is fired from a Zaryte crossbow (bolt effects: osrs_threat_effect_max) */
+    int spec_cost;              /* special energy it costs; 0 with spec_hits > 0: a special that costs stacks (Behead) */
+    int spec_hits, spec_max;    /* hits of one special (0: none) and the most all of them can deal */
+    int spec_min;               /* least a landed special deals (Behead's minimum) */
     uint8_t spec_speed;         /* ticks until the next attack (1: the granite maul's instant special) */
     int8_t spec_type;           /* defence the special rolls against: MeleeBonusType, -1 for ranged and magic */
     int spec_att_roll, spec_def_num, spec_def_den, spec_certain;
@@ -181,7 +184,7 @@ static inline int osrs_threat_melee_attack(const EquipmentBonuses* b, int type) 
 
 /** The weapon `weapon` for bonuses `b` of a loadout that wields it (weapon row included, shield and ammunition as the loadout has them); `dharok` says the loadout is
  * a full Dharok's set. The two callers: osrs_threat_weapon (sums a loadout) and osrs_threat_weapon_swapped (derives it from what is worn). */
-static inline OsrsThreatWeapon osrs_threat_weapon_core(const EquipmentBonuses* bonuses, int dharok_set, uint8_t weapon, const OsrsThreatActor* who) {
+static inline OsrsThreatWeapon osrs_threat_weapon_core(const EquipmentBonuses* bonuses, int dharok_set, uint8_t ammo, uint8_t weapon, const OsrsThreatActor* who) {
     const EquipmentBonuses b = *bonuses;
     int style = osrs_threat_style_of_weapon(weapon);
     OsrsThreatWeapon w;
@@ -194,7 +197,9 @@ static inline OsrsThreatWeapon osrs_threat_weapon_core(const EquipmentBonuses* b
     if (style == ATTACK_STYLE_MELEE) {
         w.melee_type = (int8_t)osrs_threat_best_melee_type(&b);
         int eff_att = osrs_player_eff_level(who->attack, osrs_threat_attack_prayer(who->prayer, style), stance_att);
-        int eff_str = osrs_player_eff_level(who->strength, osrs_threat_strength_prayer(who->prayer, style), osrs_stance_str_bonus(who->stance));
+        float str_mult = osrs_threat_strength_prayer(who->prayer, style);
+        if (weapon == ITEM_SOULREAPER_AXE) str_mult = osrs_soul_strength_mult(str_mult, who->soul_stacks);
+        int eff_str = osrs_player_eff_level(who->strength, str_mult, osrs_stance_str_bonus(who->stance));
         w.att_roll = eff_att * (osrs_threat_melee_attack(&b, w.melee_type) + 64);
         w.max_hit = osrs_player_melee_max_hit(eff_str, b.melee_strength);
         w.dharok = dharok_set;
@@ -203,13 +208,28 @@ static inline OsrsThreatWeapon osrs_threat_weapon_core(const EquipmentBonuses* b
         int eff_str = osrs_player_eff_level(who->ranged, osrs_threat_strength_prayer(who->prayer, style), 0);
         w.att_roll = eff_att * (b.attack_ranged + 64);
         w.max_hit = osrs_player_ranged_max_hit(eff_str, b.ranged_strength);
+        w.bolt = ammo;
+        w.zcb = weapon == ITEM_ZARYTE_CROSSBOW;
     } else {
         int eff_att = osrs_magic_effective_attack_level(who->magic, osrs_threat_attack_prayer(who->prayer, style), who->stance);
         w.att_roll = eff_att * (b.attack_magic + 64);
         w.max_hit = (int)(30 * (1.0f + b.magic_damage / 100.0f) * 1.0f * osrs_offensive_magic_dmg_mult(who->prayer));
     }
     w.spec_cost = osrs_spec_cost(weapon);
-    if (w.spec_cost > 0) {
+    if (osrs_spec_is_stack_special(weapon)) {
+        /* Behead: the stacks' strength bonus goes first, then +6% max and min and +12% accuracy per stack, against slash defence. */
+        float str_mult = osrs_threat_strength_prayer(who->prayer, style);
+        int eff_str = osrs_player_eff_level(who->strength, str_mult, osrs_stance_str_bonus(who->stance));
+        int base_max = osrs_player_melee_max_hit(eff_str, b.melee_strength);
+        int eff_att = osrs_player_eff_level(who->attack, osrs_threat_attack_prayer(who->prayer, style), stance_att);
+        w.spec_hits = 1;
+        w.spec_max = osrs_behead_max(base_max, who->soul_stacks);
+        w.spec_min = osrs_behead_min(base_max, who->soul_stacks);
+        w.spec_speed = w.speed;
+        w.spec_type = MELEE_BONUS_SLASH;
+        w.spec_def_num = w.spec_def_den = 1;
+        w.spec_att_roll = eff_att * (b.attack_slash + 64) * (100 + 12 * who->soul_stacks) / 100;
+    } else if (w.spec_cost > 0) {
         SpecResult forced;
         osrs_spec_result_force_max(&forced, weapon, w.max_hit, 0);
         w.spec_hits = forced.num_hits;
@@ -239,7 +259,7 @@ static inline OsrsThreatWeapon osrs_threat_weapon(const uint8_t equipment[NUM_GE
     osrs_sum_equipment_bonuses(loadout, &b);
     OsrsEquipmentEffectProfile effects;
     osrs_derive_equipment_effect_profile(loadout, &effects);
-    return osrs_threat_weapon_core(&b, effects.dharok_piece_count >= 4, weapon, who);
+    return osrs_threat_weapon_core(&b, effects.dharok_piece_count >= 4, loadout[GEAR_SLOT_AMMO], weapon, who);
 }
 
 static inline void osrs_threat_bonus_item(EquipmentBonuses* b, uint8_t item, int sign) {
@@ -263,7 +283,7 @@ static inline OsrsThreatWeapon osrs_threat_weapon_swapped(const EquipmentBonuses
         osrs_threat_loadout(equipment, weapon, loadout);
         EquipmentBonuses b;
         osrs_sum_equipment_bonuses(loadout, &b);
-        return osrs_threat_weapon_core(&b, dharok_set, weapon, who);
+        return osrs_threat_weapon_core(&b, dharok_set, loadout[GEAR_SLOT_AMMO], weapon, who);
     }
     EquipmentBonuses b = *worn;
     if (worn_weapon != ITEM_NONE) osrs_threat_bonus_item(&b, worn_weapon, -1);
@@ -278,7 +298,7 @@ static inline OsrsThreatWeapon osrs_threat_weapon_swapped(const EquipmentBonuses
     }
     b.attack_speed = weapon == ITEM_NONE ? 4 : ITEM_DATABASE[weapon].attack_speed;
     b.attack_range = weapon == ITEM_NONE ? 1 : ITEM_DATABASE[weapon].attack_range;
-    return osrs_threat_weapon_core(&b, dharok_set, weapon, who);
+    return osrs_threat_weapon_core(&b, dharok_set, ammo != ITEM_NONE ? ammo : equipment[GEAR_SLOT_AMMO], weapon, who);
 }
 
 static inline int osrs_threat_defence_roll(const OsrsDefenceRolls* d, int style, int melee_type) {
@@ -293,7 +313,7 @@ static inline float osrs_threat_hit_chance(const OsrsThreatWeapon* w, const Osrs
 
 /** Chance one accuracy roll of the special lands (1 for a special that rolls none). */
 static inline float osrs_threat_spec_hit_chance(const OsrsThreatWeapon* w, const OsrsDefenceRolls* d) {
-    assert(w->spec_cost > 0);
+    assert(w->spec_hits > 0);
     if (w->spec_certain) return 1;
     int def = osrs_threat_defence_roll(d, w->style, w->spec_type) * w->spec_def_num / w->spec_def_den;
     float chance = osrs_hit_chance(w->spec_att_roll, def);
@@ -303,6 +323,25 @@ static inline float osrs_threat_spec_hit_chance(const OsrsThreatWeapon* w, const
 /** The normal max hit with a Dharok set's bonus at the attacker's hitpoints (`hp_lower`, a lower bound maximizes it). */
 static inline int osrs_threat_max_hit_at(const OsrsThreatWeapon* w, int base_hp, int hp_lower) {
     return w->dharok ? osrs_dharok_max_hit(w->max_hit, base_hp, hp_lower) : w->max_hit;
+}
+
+
+/** The most one shot can deal once the bolt's effect is counted, against a defender with `defender_hp`: `base` is the shot's own maximum (w->max_hit, or the special's).
+ * Ruby: 20% of the defender's current hitpoints capped at 100 (22%, 110 from a Zaryte crossbow); diamond: the maximum hit +15% (+26%). No effect: `base`. */
+static inline int osrs_threat_effect_max(const OsrsThreatWeapon* w, int base, int defender_hp) {
+    if (w->style != ATTACK_STYLE_RANGED) return base;
+    int effect = 0;
+    switch (w->bolt) {
+        case ITEM_RUBY_DRAGON_BOLTS_E:
+            effect = defender_hp * (w->zcb ? 22 : 20) / 100;
+            if (effect > (w->zcb ? 110 : 100)) effect = w->zcb ? 110 : 100;
+            break;
+        case ITEM_DIAMOND_BOLTS_E: case ITEM_DIAMOND_DRAGON_BOLTS_E:
+            effect = w->max_hit * (w->zcb ? 126 : 115) / 100;
+            break;
+        default: break;
+    }
+    return effect > base ? effect : base;
 }
 
 #endif

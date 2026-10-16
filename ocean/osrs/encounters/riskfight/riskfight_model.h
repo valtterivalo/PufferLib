@@ -379,7 +379,7 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
     memcpy(v->equipment, opponent->equipped, sizeof(v->equipment));
     v->equipment[GEAR_SLOT_RING] = ITEM_NONE;
     v->equipment[GEAR_SLOT_AMMO] = ITEM_NONE;
-    riskfight_threat_refresh(&v->threat, v->equipment);
+    riskfight_threat_refresh(&v->threat, v->equipment, s->env.tick);
     v->x = opponent->x;
     v->y = opponent->y;
     v->interacting = osrs_interaction_active(&opponent->interaction);

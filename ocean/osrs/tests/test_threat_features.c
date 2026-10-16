@@ -203,8 +203,8 @@ static void test_observation_block(void) {
     const float* ours = t + RF_THREAT_OURS_OFFSET;
     assert(ours[0] == 1 && ours[2] > 0 && ours[2] < 1);
     /* A swing of the Dharok's axe puts it in a slot as shown, with its own numbers. */
-    riskfight_threat_note_swing(&state.visible[0].threat, ITEM_DHAROKS_GREATAXE);
-    riskfight_threat_refresh(&state.visible[0].threat, state.visible[0].equipment);
+    riskfight_threat_note_swing(&state.visible[0].threat, ITEM_DHAROKS_GREATAXE, state.env.tick, 0);
+    riskfight_threat_refresh(&state.visible[0].threat, state.visible[0].equipment, state.env.tick);
     riskfight_write_observation(&state, 0, obs);
     int found = 0;
     for (int i = 1; i < RF_THREAT_HIS_SLOTS; i++) {
@@ -217,7 +217,7 @@ static void test_observation_block(void) {
     state.visible[0].equipment[GEAR_SLOT_HEAD] = ITEM_DHAROKS_HELM;
     state.visible[0].equipment[GEAR_SLOT_BODY] = ITEM_DHAROKS_PLATEBODY;
     state.visible[0].equipment[GEAR_SLOT_LEGS] = ITEM_DHAROKS_PLATELEGS;
-    riskfight_threat_refresh(&state.visible[0].threat, state.visible[0].equipment);
+    riskfight_threat_refresh(&state.visible[0].threat, state.visible[0].equipment, state.env.tick);
     state.visible[0].health_bar = 30;
     riskfight_write_observation(&state, 0, obs);
     float full = obs[RF_THREAT_START + 2];

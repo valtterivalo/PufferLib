@@ -60,6 +60,22 @@ int main(void) {
         for (int i = 0; i < RF_OBS_SIZE; i++) assert(obs[i] >= -1 && obs[i] <= 1.0001f);
     }
     assert(requests == 48 && swung && switched > 0);
+    /* His Soulreaper stacks from the V lines: swing_raw 28338 on five ticks, then a swing with the special animation (swing_spec), then 50 quiet ticks. */
+    {
+        RiskfightVisibleOpponent v;
+        memset(&v, 0, sizeof(v));
+        v.last_cast_tick = v.last_proc_tick = -1000; v.last_attack_tick = -1; v.pending_consume_tick = -1; v.health_bar = OSRS_PLAYER_HEALTH_BAR_SCALE;
+        RtSeen axe = {28338, 1, 0, 0, 0, 0, -1, -1, 0, 0}, quiet = {-1, 0, 0, 0, 0, 0, -1, -1, 0, 0}, behead = {28338, 1, 0, 0, 0, 0, -1, -1, 0, 1};
+        int n = 11; /* the fight tick after the one seen */
+        for (int i = 0; i < 5; i++, n++) rt_observe(&v, &axe, n, &q);
+        assert(riskfight_threat_stacks(&v.threat, n) == 5); /* read at the tick after the last swing */
+        for (int i = 0; i < 48; i++, n++) rt_observe(&v, &quiet, n, &q);
+        assert(riskfight_threat_stacks(&v.threat, n) == 5);  /* read at 64: 49 ticks after the swing of tick 14 */
+        rt_observe(&v, &quiet, n++, &q);
+        assert(riskfight_threat_stacks(&v.threat, n) == 4);
+        rt_observe(&v, &behead, n++, &q);
+        assert(riskfight_threat_stacks(&v.threat, n) == 0);
+    }
     printf("live threat block: %d requests, his Belle's folly max 50 / hit 0.5551 as hand-computed, shown after the first swing, the Ancient godsword leads on his switch (%d ticks)\n", requests, switched);
     return 0;
 }

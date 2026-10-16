@@ -20,7 +20,7 @@ static void riskfight_record_attack(RiskfightState* s, int agent, int hits, int 
     event[0] += hits;
     event[1] = weapon;
     event[2] = p->attack_style_this_tick;
-    riskfight_threat_note_swing(&visible->threat, (uint8_t)weapon);
+    riskfight_threat_note_swing(&visible->threat, (uint8_t)weapon, s->env.tick, p->used_special_this_tick);
     if (!instant) {
         visible->last_attack_tick = s->env.tick;
         visible->last_attack_speed = get_slot_gear_bonuses(p)->attack_speed;
@@ -42,7 +42,7 @@ static void riskfight_attack(RiskfightState* s, RiskfightContext* ctx, int agent
     Player* opponent = &s->env.players[1 - agent];
     int weapon = p->equipped[GEAR_SLOT_WEAPON];
     int cost = osrs_spec_cost(weapon);
-    int special = !pvp_is_maul(weapon) && p->spec_armed && cost > 0 && p->special_energy >= cost;
+    int special = !pvp_is_maul(weapon) && p->spec_armed && ((cost > 0 && p->special_energy >= cost) || osrs_spec_is_stack_special(weapon));
     AttackStyle style = get_slot_weapon_attack_style(p) == ATTACK_STYLE_RANGED ?
         ATTACK_STYLE_RANGED : ATTACK_STYLE_MELEE;
     int distance = chebyshev_distance(p->x, p->y, opponent->x, opponent->y);
