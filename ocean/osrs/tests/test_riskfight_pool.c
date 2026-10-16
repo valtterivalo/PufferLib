@@ -62,7 +62,7 @@ static void test_kits_consistent(void) {
 static void test_draws(void) {
     riskfight_init_context((EncounterContext*)&context);
     riskfight_put_int((EncounterState*)&state, (EncounterContext*)&context, "opponent_pool", 1);
-    int seen_kind[3] = {0}, seen_kit[RF_POOL_MAX] = {0}, n = 40000;
+    int seen_kind[3] = {0}, seen_kit[RF_POOL_MAX] = {0}, n = 40000, ring_drawn = 0;
     for (int i = 0; i < n; i++) {
         riskfight_reset((EncounterState*)&state, (EncounterContext*)&context, 1000 + (uint32_t)i);
         const RiskfightKit* k = context.opp_kit;
@@ -73,7 +73,7 @@ static void test_draws(void) {
         for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
             if (slot != GEAR_SLOT_RING) assert(him->equipped[slot] == k->equipment[slot]);
         if (k->equipment[GEAR_SLOT_RING] != ITEM_NONE) assert(him->equipped[GEAR_SLOT_RING] == k->equipment[GEAR_SLOT_RING]);
-        else assert(him->equipped[GEAR_SLOT_RING] != ITEM_NONE || (i % 1) == 0);
+        else ring_drawn += him->equipped[GEAR_SLOT_RING] != ITEM_NONE;
         assert(him->current_hitpoints == k->hitpoints);
         assert(him->x == FIGHT_AREA_BASE_X + FIGHT_AREA_WIDTH / 2 + k->start_offset);
         /* Everything a wielder of this kit clicks from the bag is wieldable now. */
@@ -94,6 +94,7 @@ static void test_draws(void) {
     int unseen = 0;
     for (int i = 0; i < RISKFIGHT_POOL_COUNT; i++) unseen += seen_kit[i] == 0 && RISKFIGHT_POOL[i].kind != RF_KIT_EMPIRICAL;
     assert(unseen == 0);
+    assert(ring_drawn > 0); /* kits that show no ring get one per fight: the client does not show rings */
     printf("draws: empirical %.3f archetype %.3f edge %.3f over %d resets\n", share[0], share[1], share[2], n);
 }
 
@@ -117,6 +118,15 @@ static void test_every_kit_plays(void) {
             int actions[RF_HEADS] = {0};
             actions[RF_PRIMARY] = RF_ATTACK;
             riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
+            float obs[RF_OBS_SIZE];
+            for (int side = 0; side < 1; side++) { /* our view: his own (a ranger on Rigour reads 1.25 at the prayer input) only feeds his script */
+                riskfight_write_observation(&state, side, obs);
+                /* The threat block stays in [0, 1] and nothing is NaN (older inputs such as the age of his last swing scale past 1 by design). */
+                for (int j = 0; j < RF_OBS_SIZE; j++) {
+                    int in_block = j >= RF_THREAT_START;
+                    if (!(obs[j] >= (in_block ? 0 : -8) && obs[j] <= (in_block ? 1.0001f : 8))) { printf("kit %d (%s) tick %d obs[%d] = %f\n", i, RISKFIGHT_POOL[i].source, tick, j, obs[j]); abort(); }
+                }
+            }
             const Player* him = &state.env.players[1];
             his_swings += him->attack_style_this_tick != ATTACK_STYLE_NONE;
             his_ranged += him->attack_style_this_tick == ATTACK_STYLE_RANGED;
