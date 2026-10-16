@@ -81,4 +81,27 @@ static int riskfight_pool_prior(const uint8_t visible[NUM_GEAR_SLOTS], uint8_t* 
     }
     return count;
 }
+
+/** riskfight_pool_prior memoized per thread on the nine bytes it reads (the eight visible armour slots and the wielded weapon). The pool is filled once at load,
+ * so the prior is a pure function of that key; a fight asks for it again at every rebuild of the threat slots (a new weapon seen, a stack change) with the same
+ * gear, and a scan of the whole pool costs microseconds. Direct-mapped, one table per thread (the env threads share nothing). */
+enum { RF_PRIOR_MEMO_SIZE = 2048, RF_PRIOR_MEMO_CAP = 8 };
+typedef struct { uint64_t visible; uint8_t wielded, cap, count, valid; uint8_t items[RF_PRIOR_MEMO_CAP]; float probability[RF_PRIOR_MEMO_CAP]; } RiskfightPriorMemo;
+static __thread RiskfightPriorMemo riskfight_prior_memo[RF_PRIOR_MEMO_SIZE];
+
+static int riskfight_pool_prior_memo(const uint8_t visible[NUM_GEAR_SLOTS], uint8_t* items, float* probability, int cap) {
+    assert(cap >= 1 && cap <= RF_PRIOR_MEMO_CAP);
+    uint64_t packed = 0;
+    for (size_t s = 0; s < sizeof(RF_POOL_VISIBLE_SLOTS) / sizeof(*RF_POOL_VISIBLE_SLOTS); s++) packed = packed << 8 | visible[RF_POOL_VISIBLE_SLOTS[s]];
+    const uint8_t wielded = visible[GEAR_SLOT_WEAPON];
+    RiskfightPriorMemo* e = &riskfight_prior_memo[(uint32_t)(((packed ^ ((uint64_t)wielded << 17 | cap)) * UINT64_C(0x9E3779B97F4A7C15)) >> 53)];
+    if (!e->valid || e->visible != packed || e->wielded != wielded || e->cap != cap) {
+        e->visible = packed; e->wielded = wielded; e->cap = (uint8_t)cap;
+        e->count = (uint8_t)riskfight_pool_prior(visible, e->items, e->probability, cap);
+        e->valid = 1;
+    }
+    memcpy(items, e->items, e->count * sizeof(*items));
+    memcpy(probability, e->probability, e->count * sizeof(*probability));
+    return e->count;
+}
 #endif

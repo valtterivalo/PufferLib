@@ -91,9 +91,35 @@ static const Case CASES[] = {
     {"botplay_mixed", 0, POLICY_MIXED, 53, G(0x6560c6690946b0f7, 0xd652e5477d62a282)},
 };
 
+/* The memoized pool prior (riskfight_pool_prior_memo) against the scan of the pool, bit for bit: every kit's own gear, kits with a slot or the weapon swapped
+ * for another kit's, asked repeatedly and with both caps in use. */
+static void check_prior_memo(void) {
+    uint32_t rng = 12345;
+    long checked = 0;
+    for (int round = 0; round < 3; round++) for (int k = 0; k < RISKFIGHT_POOL_COUNT; k++) for (int variant = 0; variant < 6; variant++) {
+        uint8_t visible[NUM_GEAR_SLOTS];
+        memcpy(visible, RISKFIGHT_POOL[k].equipment, NUM_GEAR_SLOTS);
+        if (variant) {
+            const RiskfightKit* other = &RISKFIGHT_POOL[xorshift32(&rng) % RISKFIGHT_POOL_COUNT];
+            int slot = RF_POOL_VISIBLE_SLOTS[xorshift32(&rng) % (sizeof(RF_POOL_VISIBLE_SLOTS) / sizeof(*RF_POOL_VISIBLE_SLOTS))];
+            visible[slot] = other->equipment[slot];
+            if (variant & 1) visible[GEAR_SLOT_WEAPON] = other->equipment[GEAR_SLOT_WEAPON];
+        }
+        for (int cap = 1; cap <= RF_PRIOR_MEMO_CAP; cap += 4) {
+            uint8_t i0[RF_PRIOR_MEMO_CAP], i1[RF_PRIOR_MEMO_CAP];
+            float p0[RF_PRIOR_MEMO_CAP], p1[RF_PRIOR_MEMO_CAP];
+            int n0 = riskfight_pool_prior(visible, i0, p0, cap), n1 = riskfight_pool_prior_memo(visible, i1, p1, cap);
+            assert(n0 == n1 && !memcmp(i0, i1, n0) && !memcmp(p0, p1, n0 * sizeof(float)));
+            checked++;
+        }
+    }
+    printf("pool prior memo: %ld lookups equal the pool scan\n", checked);
+}
+
 int main(int argc, char** argv) {
     setenv("RF_OPPFIT_MODEL", "ocean/osrs/tests/fixtures/model.fit", 0);
     setenv("RF_OPPFIT_EAT", "ocean/osrs/tests/fixtures/eat_mixture.fit", 0);
+    check_prior_memo();
     int sweeps = argc > 1 ? atoi(argv[1]) : DEFAULT_SWEEPS;
     int envs = argc > 2 ? atoi(argv[2]) : DEFAULT_ENVS;
     const int check = HAVE_GOLDEN && sweeps == DEFAULT_SWEEPS && envs == DEFAULT_ENVS;
