@@ -59,13 +59,14 @@ static RiskfightTransition riskfight_session_transition(const RiskfightState* s,
             t.refill[0] = 1;
             t.delay = riskfight_delay_draw(&RF_DELAY_RESPAWN, rng);
             break;
-        case RISKFIGHT_ESCAPE:
+        case RISKFIGHT_ESCAPE: {
             for (int side = 0; side < 2; side++) t.refill[side] = s->escaped[side];
             t.rude = riskfight_rude_teleport_of(s, 0) || riskfight_rude_teleport_of(s, 1);
             int rematch = encounter_rand_float(rng) < RF_REMATCH_PROBABILITY;
             t.rematch = rematch && !t.rude;
             t.delay = riskfight_delay_draw(t.rematch ? &RF_DELAY_REMATCH : s->escaped[0] ? &RF_DELAY_RESTOCK : &RF_DELAY_SEARCH, rng);
             break;
+        }
         case RISKFIGHT_ONGOING:
             abort();
     }
