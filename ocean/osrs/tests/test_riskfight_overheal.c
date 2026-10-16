@@ -99,11 +99,47 @@ static void test_lock_is_per_player(void) {
     assert(state.env.players[1].current_hitpoints == 121);
 }
 
+static int fish_offered(int side) {
+    unsigned char mask[RF_MASK_SIZE];
+    riskfight_write_action_mask(&state, side, mask);
+    return mask[RF_HEAD_OFFSET[RF_FOOD] + SLOT_FISH + 1];
+}
+
+/* The action mask does not offer an anglerfish at full hitpoints inside the lock (it would heal 0), and offers it again below full, with no lock, or
+ * once the lock has run out. The sim itself still accepts the click (a human can). */
+static void test_mask_hides_wasted_fish(void) {
+    reset();
+    assert(fish_offered(0) && fish_offered(1));
+    land_hit(1, 0, OSRS_HIT_DIRECT);
+    step(0, 0);
+    state.env.players[0].current_hitpoints = 99;
+    assert(!fish_offered(0) && fish_offered(1));
+    state.env.players[0].current_hitpoints = 98;
+    assert(fish_offered(0));
+    state.env.players[0].current_hitpoints = 99;
+    for (int k = 1; k < OSRS_PVP_OVERHEAL_BLOCK_TICKS; k++) {
+        step(0, 0);
+        state.env.players[0].current_hitpoints = 99;
+        assert(!fish_offered(0));
+    }
+    step(0, 0);
+    state.env.players[0].current_hitpoints = 99;
+    assert(state.env.players[0].pvp_overheal_block == 0 && fish_offered(0));
+    /* Eaten under the lock regardless: heals 0 but is consumed. */
+    reset();
+    land_hit(1, 0, OSRS_HIT_DIRECT);
+    step(0, 0);
+    state.env.players[0].current_hitpoints = 99;
+    step(1, 0);
+    assert(state.env.players[0].current_hitpoints == 99 && osrs_inventory_cell_is_empty(&state.env.players[0].inventory_cells[SLOT_FISH]));
+}
+
 int main(void) {
     test_window_edges();
     test_every_hitsplat_blocks();
     test_blocked_anglerfish_heals_to_max_only();
     test_lock_is_per_player();
+    test_mask_hides_wasted_fish();
     puts("riskfight overheal lock passed");
     return 0;
 }

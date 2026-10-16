@@ -81,7 +81,7 @@ int main(int argc, char** argv) {
             for (int i = 1; i < RF_ACTION_DIMS[h]; i++) if (pr[i] > pr[actions[h]]) actions[h] = i;
         }
         if (new_fight) printf("== FIGHT %d\n", fight_start);
-        printf("%d %s hp %d B %d-%d bar %d atk %d W %s S %s", q.tick, obs_only ? "OBS" : "DEC", us->current_hitpoints, q.belief.hp_low, q.belief.hp_high,
+        printf("%d %s hp %d lock %d B %d-%d bar %d atk %d W %s S %s", q.tick, obs_only ? "OBS" : "DEC", us->current_hitpoints, us->pvp_overheal_block, q.belief.hp_low, q.belief.hp_high,
             g_fight.vis.health_bar, osrs_interaction_active(&us->interaction), rx_item(us->equipped[GEAR_SLOT_WEAPON]), rx_item(us->equipped[GEAR_SLOT_SHIELD]));
         float pr[512];
         rx_probs(g_fight.net, mask, RF_PRIMARY, pr);

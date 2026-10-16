@@ -30,6 +30,7 @@ typedef struct {
     RfNet* net;
     uint32_t rng;
     int hard;
+    int land_pending[2], last_land; /* fight ticks his swings land on us (-1 none), and the last landing so far (-1 none): see rt_track_landing */
 } RtFight;
 
 static RtFight g_fight;
@@ -51,6 +52,7 @@ static void rt_fight_reset(RtFight* f, int start_tick) {
     v->last_attack_tick = -1;
     v->pending_consume_tick = -1;
     v->health_bar = OSRS_PLAYER_HEALTH_BAR_SCALE; /* a fight starts at a full bar, as the sim's first observation */
+    f->land_pending[0] = f->land_pending[1] = f->last_land = -1;
 }
 
 /* What riskfight_observe_visible does after a sim tick, from what the client showed instead of the sim's players. `n` is the fight tick after this one. */
@@ -106,6 +108,30 @@ static void rt_observe(RiskfightVisibleOpponent* v, const RtSeen* seen, int n, c
     } else if (bar_event) v->pending_damage_since = 0;
 }
 
+/* The anglerfish overheal lock of our side (Player.pvp_overheal_block) from what the client showed of him. The snapshot's own derivation reads the O line's
+ * his_last_ago, a plugin estimate from his attack timer that is wrong for many ticks (-1 or 0 right after a swing it did not see), so this server replaces it
+ * with the swings of the V lines: his swing at fight tick T lands on us at T + 1 (melee) or T + 2 (ranged, magic: the shortest projectile flight). rt_track_landing
+ * schedules the landing of the swing of the tick just seen (event n - 1, `n` being the fight tick after it) and books the ones that have come due; a landing
+ * `landed_ago` ticks before the tick just seen leaves 16 - landed_ago ticks of lock. (The history ring holds 16 ticks, too few to read the lock off it.) */
+static void rt_track_landing(RtFight* f, int n) {
+    int seen = n - 1;
+    const float* event = f->vis.events[seen % RF_HISTORY_TICKS];
+    if (event[0] != 0) {
+        int land = seen + ((int)event[2] == ATTACK_STYLE_MELEE ? 1 : 2);
+        for (int i = 0; i < 2; i++) if (f->land_pending[i] < 0) { f->land_pending[i] = land; break; }
+    }
+    for (int i = 0; i < 2; i++)
+        if (f->land_pending[i] >= 0 && f->land_pending[i] <= seen) {
+            if (f->land_pending[i] > f->last_land) f->last_land = f->land_pending[i];
+            f->land_pending[i] = -1;
+        }
+}
+
+static int rt_overheal_block(const RtFight* f, int n) {
+    int landed_ago = (n - 1) - f->last_land;
+    return f->last_land >= 0 && landed_ago < OSRS_PVP_OVERHEAL_BLOCK_TICKS ? OSRS_PVP_OVERHEAL_BLOCK_TICKS - landed_ago : 0;
+}
+
 typedef struct { int kind, arg; } RtRecord;
 static int rt_cmp(const void* a, const void* b) { double x = *(const double*)a, y = *(const double*)b; return x < y ? -1 : x > y; }
 
@@ -159,6 +185,7 @@ static double rt_decide(Request* q, const RtSeen* seen, int new_fight, int fight
     RiskfightState* s = &g_base.state;
     RiskfightVisibleOpponent loaded = s->visible[0];
     rt_observe(&f->vis, seen, n, q);
+    rt_track_landing(f, n);
     memcpy(f->vis.equipment, loaded.equipment, sizeof(f->vis.equipment));
     f->vis.interacting = loaded.interacting;
     Player* us = &s->env.players[0];
@@ -166,6 +193,7 @@ static double rt_decide(Request* q, const RtSeen* seen, int new_fight, int fight
     us->y = FIGHT_AREA_BASE_Y + FIGHT_AREA_HEIGHT / 2;
     f->vis.x = us->x + q->ours.ox;
     f->vis.y = us->y + q->ours.oy;
+    us->pvp_overheal_block = (uint8_t)rt_overheal_block(f, n);
     s->visible[0] = f->vis;
     s->env.tick = n;
     /* Stakes: K him us in gp; the price of our death in units of his. */

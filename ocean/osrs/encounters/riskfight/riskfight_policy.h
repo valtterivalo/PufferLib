@@ -150,7 +150,9 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
         }
         if (m->click_action == OSRS_CLICK_EAT) {
             int head = m->consumable_kind == OSRS_CONSUMABLE_HALIBUT || m->consumable_kind == OSRS_CONSUMABLE_KARAMBWAN ? RF_COMBO : RF_FOOD;
-            heads[head][slot + 1] = osrs_can_eat_consumable_kind(p, (OsrsConsumableKind)m->consumable_kind);
+            /* An anglerfish at full hitpoints inside the PvP overheal lock heals nothing (the lock only forbids the overheal), like a shark at full: not offered. */
+            int wasted = m->consumable_kind == OSRS_CONSUMABLE_ANGLERFISH && p->pvp_overheal_block > 0 && p->current_hitpoints >= p->base_hitpoints;
+            heads[head][slot + 1] = !wasted && osrs_can_eat_consumable_kind(p, (OsrsConsumableKind)m->consumable_kind);
         }
         heads[RF_DRINK][slot + 1] = m->click_action == OSRS_CLICK_DRINK && p->potion_timer == 0 &&
             (m->consumable_kind != OSRS_CONSUMABLE_DIVINE_COMBAT || p->current_hitpoints > OSRS_DIVINE_DAMAGE);
