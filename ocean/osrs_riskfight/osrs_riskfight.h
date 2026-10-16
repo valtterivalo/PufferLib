@@ -25,7 +25,7 @@ struct Log {
     float episode_return, episode_length;
     float policy_0_score, draw_rate;
     float damage_reward, direct_ko_chance_mass, chance_reward;
-    float kills, deaths, escapes, mutual_deaths, timeouts, ragged, ragger_fights, net_stake, rounds, n; /* timeouts: fights that hit the round limit (a draw); ragged: ragger fights that ended with his teleport */
+    float kills, deaths, escapes, mutual_deaths, timeouts, ragged, ragger_fights, overeats, annoyed_exits, net_stake, rounds, n; /* timeouts: fights that hit the round limit (a draw); ragged: ragger fights that ended with his teleport */
     float scripted_ticks, scripted_omissions, midfight_ticks, prefix_terminal;
     float self_teleports, opponent_teleports, both_teleports;
     float rude_teleports, rematches, tp_self_spec, tp_opp_spec, tp_both_spec, tp_opp_could_spec, tp_hp, tp_fight_tick;
@@ -210,6 +210,8 @@ static void riskfight_native_log_round(Env* env) {
         env->log.mutual_deaths += outcome == RISKFIGHT_MUTUAL_DEATH;
         env->log.timeouts += outcome == RISKFIGHT_TIMEOUT;
         env->log.ragged += outcome == RISKFIGHT_RAGGED;
+        env->log.overeats += s->overeats[0];
+        env->log.annoyed_exits += riskfight_annoyed_exit(s);
         env->log.ragger_fights += s->ragger;
         float stake = riskfight_outcome_reward(outcome, s->death_price);
         env->log.policy_0_score += 0.5f * (riskfight_outcome_reward(outcome, 1) + 1.0f);
@@ -323,7 +325,7 @@ void puf_step(Env* env) {
         riskfight_native_log_round(env);
         env->session_fights++;
         if (env->session_elapsed < budget) {
-            env->training.rep += riskfight_rude_teleport(&env->state); /* each rude teleport of ours is remembered */
+            env->training.rep += riskfight_rude_teleport(&env->state) + riskfight_annoyed_exit(&env->state); /* each rude teleport of ours, and each exit of his over our overeating, is remembered */
             env->wait_transition = riskfight_session_transition(&env->state, &env->training.rng, env->training.rep);
             env->wait_left = env->wait_transition.delay;
             if (env->wait_left == 0) riskfight_native_next_fight(env);
@@ -354,6 +356,8 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "mutual_deaths", log->mutual_deaths);
     dict_set(out, "timeouts", log->timeouts);
     dict_set(out, "ragged", log->ragged);
+    dict_set(out, "overeats", log->overeats);
+    dict_set(out, "annoyed_exits", log->annoyed_exits);
     dict_set(out, "ragger_fights", log->ragger_fights);
     dict_set(out, "net_stake", log->net_stake);
     dict_set(out, "episode_length", log->episode_length);

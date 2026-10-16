@@ -48,7 +48,7 @@ static int within(double count, double n, double p) {
     return fabs(count - n * p) <= 4.5 * sigma + 1;
 }
 
-typedef struct { int n, net, frozen_or_self_net, driven, pool, net_pool, driven_pool, net_live, net_vw, oppfit; } Tally;
+typedef struct { int n, net, frozen_or_self_net, driven, pool, net_pool, driven_pool, net_live, net_vw, net_pies, oppfit; } Tally;
 static void tally(Tally* t, const Env* e) {
     const RiskfightContext* c = &e->context;
     int net = c->self_play && !c->opp_driven;
@@ -60,10 +60,11 @@ static void tally(Tally* t, const Env* e) {
     t->driven_pool += !net && c->opp_kit != NULL;
     t->net_live += net && c->opp_kit == NULL && c->loadout[1] == &RISKFIGHT_LIVE_LOADOUT;
     t->net_vw += net && c->opp_kit == NULL && c->loadout[1] == &RISKFIGHT_VW_LOADOUT;
+    t->net_pies += net && c->opp_kit == NULL && c->loadout[1] == &RISKFIGHT_VW_PIES_LOADOUT;
     t->oppfit += c->opp_hook != NULL;
     if (net) assert(c->opp_hook == NULL); /* a net in seat 1 has no hook */
     if (!net) assert(c->opp_kit != NULL);  /* the script and OppFit wear pool kits */
-    if (net && c->opp_kit == NULL) assert(c->loadout[1] == &RISKFIGHT_LIVE_LOADOUT || c->loadout[1] == &RISKFIGHT_VW_LOADOUT);
+    if (net && c->opp_kit == NULL) assert(c->loadout[1] == &RISKFIGHT_LIVE_LOADOUT || c->loadout[1] == &RISKFIGHT_VW_LOADOUT || c->loadout[1] == &RISKFIGHT_VW_PIES_LOADOUT);
     if (c->opp_kit) assert(c->loadout[1] == &RISKFIGHT_POOL_LOADOUT[c->opp_kit - RISKFIGHT_POOL]);
 }
 
@@ -93,12 +94,13 @@ static void test_mix_fractions(void) {
     assert(pure + frozen + scripted == all.n);
     /* A net wears a pool kit with probability q, else one of ours, half and half. */
     assert(within(all.net_pool, all.net, q));
-    assert(within(all.net_live, all.net - all.net_pool, 0.5));
-    assert(all.net_live + all.net_vw == all.net - all.net_pool);
+    assert(within(all.net_live, all.net - all.net_pool, 1.0 / 3));
+    assert(within(all.net_vw, all.net - all.net_pool, 1.0 / 3));
+    assert(all.net_live + all.net_vw + all.net_pies == all.net - all.net_pool);
     assert(all.driven_pool == all.driven && all.driven > 0);
-    printf("mix: self-play %.3f frozen %.3f scripted/oppfit %.3f (expected %.3f %.3f %.3f); net pool kit %.3f (%.2f), live/vw %.3f\n",
+    printf("mix: self-play %.3f frozen %.3f scripted/oppfit %.3f (expected %.3f %.3f %.3f); net pool kit %.3f (%.2f), live %.3f of the three kits (live, vw, vw with pies)\n",
         (double)pure / all.n, (double)frozen / all.n, (double)scripted / all.n, 1 - h, h * (1 - s), h * s,
-        (double)all.net_pool / all.net, q, (double)all.net_live / (all.net_live + all.net_vw));
+        (double)all.net_pool / all.net, q, (double)all.net_live / (all.net - all.net_pool));
 }
 
 /* The mix also holds across the opponents of one session, and a rematch keeps his player. */
@@ -195,6 +197,7 @@ static void swap_seats(RiskfightState* s) {
     SWAP(s->env.players[0], s->env.players[1]);
     SWAP(s->inventory_use[0], s->inventory_use[1]);
     SWAP(s->visible[0], s->visible[1]);
+    SWAP(s->overeats[0], s->overeats[1]);
     SWAP(s->env.pvp_runtime.maul[0], s->env.pvp_runtime.maul[1]);
     SWAP(s->env.pvp_runtime.teleport[0], s->env.pvp_runtime.teleport[1]);
 }

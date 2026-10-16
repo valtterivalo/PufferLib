@@ -89,6 +89,12 @@ static void riskfight_training_clear_returns(RiskfightState* state) {
     memset(state->chance_rewards, 0, sizeof(state->chance_rewards));
 }
 
+/** One of our kits (live_loadout 3): the recorded live kit, the Voidwaker kit, or the Voidwaker kit with summer pies. */
+static const RiskfightLoadout* riskfight_training_draw_kit(RiskfightTraining* training) {
+    static const RiskfightLoadout* const kits[] = {&RISKFIGHT_LIVE_LOADOUT, &RISKFIGHT_VW_LOADOUT, &RISKFIGHT_VW_PIES_LOADOUT};
+    return kits[encounter_rand_int(&training->rng, 3)];
+}
+
 /** A scripted session opponent: a training human, or a synthetic curveball. */
 static const RiskfightProfile* riskfight_training_profile(RiskfightTraining* training) {
     RiskfightOpponent pool = RISKFIGHT_HUMAN;
@@ -197,7 +203,7 @@ static void riskfight_training_draw_opponent(RiskfightTraining* training, Riskfi
     context->opp_plain = 0;
     if (!driven) {
         context->opp_plain = !riskfight_training_draw(training, training->config.pool_probability);
-        if (context->kit_mix) context->loadout[1] = encounter_rand_int(&training->rng, 2) ? &RISKFIGHT_VW_LOADOUT : &RISKFIGHT_LIVE_LOADOUT;
+        if (context->kit_mix) context->loadout[1] = riskfight_training_draw_kit(training);
     }
 }
 
@@ -224,7 +230,7 @@ static RiskfightTrainingStart riskfight_training_new_opponent(RiskfightTraining*
 /** The first fight of a session: our kit (drawn once per session), full supplies on both sides, a new opponent. */
 static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* training,
     RiskfightState* state, RiskfightContext* context, int frozen_policy) {
-    if (context->kit_mix) context->loadout[0] = encounter_rand_int(&training->rng, 2) ? &RISKFIGHT_VW_LOADOUT : &RISKFIGHT_LIVE_LOADOUT;
+    if (context->kit_mix) context->loadout[0] = riskfight_training_draw_kit(training);
     training->rep = riskfight_training_draw(training, training->config.rep_start_probability) ? RF_REP_START_MAX * (1.0f - encounter_rand_float(&training->rng)) : 0;
     riskfight_training_draw_opponent(training, context, frozen_policy);
     riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);

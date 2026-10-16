@@ -33,6 +33,34 @@ __attribute__((constructor)) static void riskfight_build_inventory_rows(void) {
     }
 }
 
+/** His chance range: the most damage he could deal us before our next meal resolves, read off the threat block `threat` (riskfight_threat_write of the observer):
+ * the larger of the normal max hit and, with the energy for it (his estimated `spec_est`; a Behead with five stacks), the special's max over every weapon he wields
+ * or has swung, plus, while his Vengeance is up, the echo of our own best hit (3/4). The ring of recoil is not visible, so its reflection is not counted. */
+static int riskfight_chance_range_of(const float* threat, int spec_est, int his_veng) {
+    int range = 0;
+    const int stacks_full = threat[RF_THREAT_STACKS_OFFSET] * OSRS_SOUL_STACKS_MAX > OSRS_SOUL_STACKS_MAX - 0.5f;
+    for (int i = 0; i < RF_THREAT_HIS_SLOTS; i++) {
+        const float* o = threat + i * RF_THREAT_HIS_WIDTH;
+        if (o[0] < 1) continue; /* a weapon the pool only says he may carry */
+        int hit = (int)lroundf(o[2] * RF_THREAT_DAMAGE_SCALE);
+        int spec = (int)lroundf(o[9] * RF_THREAT_DAMAGE_SCALE);
+        int cost = (int)lroundf(o[8] * 100);
+        if (spec > hit && (cost > 0 ? spec_est >= cost : stacks_full)) hit = spec;
+        if (hit > range) range = hit;
+    }
+    if (his_veng) range += (int)lroundf(threat[RF_THREAT_OURS_OFFSET + 1] * RF_THREAT_DAMAGE_SCALE) * 3 / 4;
+    return range;
+}
+
+/** The chance range of `agent`'s opponent against `agent` as the sim holds it now (written the way the observation writes it). */
+static int riskfight_chance_range(const RiskfightState* s, int agent) {
+    float threat[RF_THREAT_SIZE];
+    RiskfightBagWeapons none = {{0}, 0};
+    const RiskfightVisibleOpponent* v = &s->visible[agent];
+    riskfight_threat_write(&s->env.players[agent], &none, &v->threat, v->health_bar, threat);
+    return riskfight_chance_range_of(threat, v->spec_est, v->last_cast_tick >= v->last_proc_tick);
+}
+
 /** The session block (RF_SESSION_START). [2] and [3] mark a wait between fights and how much of it is left. [0] session ticks left over RF_SESSION_HORIZON_TICKS, capped at 1: what a fight is worth depends on the time left only
  * through how many more fights fit, which stops mattering a few fight cycles out, so an open-ended session (live) reads 1, the value most of a training
  * session shows too. [1] his special energy as a player counts it: whether he can still spec decides whether leaving after our own spec is rude. [4] our reputation
@@ -44,6 +72,10 @@ static void riskfight_write_session_observation(const RiskfightState* s, int age
     out[2] = s->session_wait_left > 0;
     out[3] = s->session_wait_left >= RF_WAIT_SCALE_TICKS ? 1.0f : (float)s->session_wait_left / RF_WAIT_SCALE_TICKS;
     out[4] = fminf(1.0f, s->session_rep / RF_REP_OBS_SCALE);
+    out[5] = fminf(1.0f, (float)s->overeats[agent] / (RF_OVEREAT_PATIENCE + 1));
+    const RiskfightVisibleOpponent* v = &s->visible[agent];
+    int range = riskfight_chance_range_of(obs + RF_THREAT_START, v->spec_est, v->last_cast_tick >= v->last_proc_tick);
+    out[6] = fmaxf(-1.0f, fminf(1.0f, (float)(s->env.players[agent].current_hitpoints - range) / 121.0f));
 }
 
 /** The observation up to the price, and the weapons of the agent's bag when `bag_weapons` is given (the threat block needs them). */

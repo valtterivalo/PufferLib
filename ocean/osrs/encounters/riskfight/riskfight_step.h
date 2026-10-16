@@ -130,6 +130,11 @@ static int riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
                 for (int i = 0; i < 2; i++)
                     s->escape_supplies[agent][i] = osrs_escape_supplies(&s->env.players[i]);
             }
+            /* A meal (food, karambwan, pie or brew) eaten while the hitpoints the tick began with were already above his chance range is an overeat. The tick's
+             * first meal sets the bar for the whole tick: a triple-eat heals as one decision. */
+            if (use_result == OSRS_INVENTORY_USE_CONSUMED && (pre_click == OSRS_CLICK_EAT || pre_kind == OSRS_CONSUMABLE_BREW) &&
+                    s->tick_hitpoints[agent] > riskfight_chance_range(s, agent))
+                s->overeats[agent]++;
             if (use_result == OSRS_INVENTORY_USE_CONSUMED) {
                 switch (pre_kind) {
                     case OSRS_CONSUMABLE_BREW: s->drink_brew[agent]++; break;
@@ -376,6 +381,7 @@ static void riskfight_actor_inputs(RiskfightState* s, RiskfightContext* ctx,
     int agent, const HumanCommandQueue* queue) {
     if (s->env.players[agent].current_hitpoints <= 0 || s->escaped[agent]) return;
     int consumed = 0;
+    s->tick_hitpoints[agent] = s->env.players[agent].current_hitpoints;
     for (int n = 0; n < queue->count; n++)
         consumed |= riskfight_execute_command(s, ctx, agent, &queue->items[n]);
     s->consume_ticks[agent] += consumed;
@@ -541,6 +547,15 @@ static void riskfight_step(EncounterState* state, EncounterContext* context, con
             riskfight_script(obs, s->opponent_profile, s->script_seed[1], s->consume_ticks[1], opponent_actions);
         }
         if (ctx->opp_omit) memset(opponent_actions, 0, sizeof(opponent_actions));
+        /* Over-eating is rude: once we have overeaten more than RF_OVEREAT_PATIENCE times this fight he has had enough and leaves within a few ticks. */
+        if (!s->annoyed && s->overeats[0] > RF_OVEREAT_PATIENCE) {
+            s->annoyed = 1;
+            s->annoyed_leave_tick = s->env.tick + osrs_lowbias32(s->script_seed[1] ^ 0x616e6e6fu) % RF_ANNOYED_LEAVE_TICKS;
+        }
+        if (s->annoyed && s->env.tick >= s->annoyed_leave_tick) {
+            memset(opponent_actions, 0, sizeof(opponent_actions));
+            opponent_actions[RF_PRIMARY] = RF_TELEPORT;
+        }
         /* A ragger has swung his share: he leaves. */
         if (s->ragger && s->ragger_swings >= s->ragger_limit) {
             memset(opponent_actions, 0, sizeof(opponent_actions));

@@ -11,6 +11,9 @@
  *   otherwise a new opponent after R, the measured new-opponent delay, times (1 + RF_REP_SEARCH * rep): after a kill, a death, a teleport without a rematch, a
  *             timeout, a ragger leaving.
  *   timeout   a draw (reward 0, no price), counted in the logs; the session clock runs on.
+ * Over-eating (the user's account): eating a meal while our hitpoints are above his chance range (riskfight_chance_range) annoys him. Past RF_OVEREAT_PATIENCE
+ * overeats in a fight he teleports within RF_ANNOYED_LEAVE_TICKS, never rematches, and the exit costs a reputation point, like a rude teleport of ours. The patience is
+ * just above the user's own recordings (p90 of overeats per fight, see RF_OVEREAT_PATIENCE); a script plays an annoyed opponent the same way whoever drives him.
  * Reputation (the user's account: how people treat him): a session-level `rep`. Each rude teleport of ours adds 1; it halves every RF_REP_HALF_LIFE_TICKS. A session
  * starts with rep 0 in most cases and up to RF_REP_START_MAX in the rest, so the whole range is seen within a horizon. It lengthens the search for a new opponent
  * and, with probability min(RF_REP_RAG_CAP, RF_REP_RAG * rep), the next new opponent is a ragger. The constants are not measurable: they are chosen so that one rude
@@ -59,6 +62,8 @@ static int riskfight_delay_draw(const RiskfightDelay* delay, uint32_t* rng) {
 static int riskfight_rude_teleport_of(const RiskfightState* s, int side) {
     return s->escaped[side] && s->specs_used[side] > 0 && !osrs_escape_no_special(&s->escape_supplies[side][1 - side]);
 }
+/** He left because we overate: he teleported after losing patience (riskfight_step.h), and a fight that ended some other way before that does not count. */
+static int riskfight_annoyed_exit(const RiskfightState* s) { return s->annoyed && s->outcome[0] == RISKFIGHT_ESCAPE && s->escaped[1] && !s->escaped[0]; }
 /** Our (seat 0) rude teleport: the logged one. */
 static int riskfight_rude_teleport(const RiskfightState* s) { return riskfight_rude_teleport_of(s, 0); }
 
@@ -72,10 +77,11 @@ typedef struct {
 static RiskfightTransition riskfight_session_transition(const RiskfightState* s, uint32_t* rng, float rep) {
     RiskfightTransition t = {0};
     if (s->outcome[0] == RISKFIGHT_ONGOING) abort();
+
     if (s->outcome[0] == RISKFIGHT_ESCAPE) {
         t.rude = riskfight_rude_teleport_of(s, 0) || riskfight_rude_teleport_of(s, 1);
         int rematch = encounter_rand_float(rng) < RF_REMATCH_PROBABILITY;
-        t.rematch = rematch && !t.rude && !s->ragger;
+        t.rematch = rematch && !t.rude && !s->ragger && !s->annoyed;
     }
     t.delay = t.rematch ? riskfight_delay_draw(&RF_DELAY_REMATCH, rng) :
         (int)(riskfight_delay_draw(&RF_DELAY_RESTOCK, rng) * (1.0f + RF_REP_SEARCH * rep) + 0.5f);

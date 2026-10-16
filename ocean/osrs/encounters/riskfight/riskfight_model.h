@@ -75,15 +75,19 @@ enum {
     /* Session block (riskfight_write_session_observation): [0] session ticks left over RF_SESSION_HORIZON_TICKS, capped at 1;
      * [1] his special energy as a player counts it (100 minus the specs seen, plus the regeneration since), over 100; [2] 1 while the session is waiting between
      * fights (every tick of the wait is a step of no choice, the mask allows only the no-op), [3] the ticks of the wait left over RF_WAIT_SCALE_TICKS, capped at 1,
-     * [4] our reputation (rude teleports of this session, decaying) over RF_REP_OBS_SCALE, capped at 1. */
+     * [4] our reputation (rude teleports of this session, decaying) over RF_REP_OBS_SCALE, capped at 1, [5] how annoyed he is with us: our overeats of this fight over
+     * RF_OVEREAT_PATIENCE + 1, capped at 1 (1: he leaves), [6] our hitpoints over his chance range, (hp - range) / 121 in [-1, 1]: positive is an overeat now. */
     RF_SESSION_START = RF_THREAT_START + RF_THREAT_SIZE,
-    RF_SESSION_SIZE = 5,
+    RF_SESSION_SIZE = 7,
     RF_OBS_SIZE = RF_SESSION_START + RF_SESSION_SIZE,
 };
 /* Ticks left beyond which the end of the session no longer changes what is worth doing: several fight cycles. */
 enum { RF_SESSION_HORIZON_TICKS = 1500 };
 /* The regear delay is 250 ticks at its median and 640 at its 90th percentile, more with a reputation: waits beyond 1000 ticks read 1 in the wait-left feature. */
 enum { RF_WAIT_SCALE_TICKS = 1000 };
+/* Over-eating is rude (the user's account; the patience is calibrated on his own recordings, see riskfight_session.h): once the opponent has seen more than
+ * RF_OVEREAT_PATIENCE overeats in a fight he teleports within RF_ANNOYED_LEAVE_TICKS ticks. */
+enum { RF_OVEREAT_PATIENCE = 6, RF_ANNOYED_LEAVE_TICKS = 4 };
 /* The reputation that reads 1 in the session block (riskfight_session.h): the user's account of how a few rude teleports weigh. */
 #define RF_REP_OBS_SCALE 4.0f
 /* Ticks left of a session whose end is not modelled: what riskfight_reset leaves and the live server keeps (a live session has no budget). */
@@ -166,6 +170,10 @@ typedef struct {
     float session_rep;     /* our reputation as the session holds it (riskfight_session.h); 0 where the session is not modelled (the live server) */
     /* A ragger (riskfight_session.h): the pool's ranged kit in seat 1 that swings ragger_limit times and teleports away. */
     int ragger, ragger_limit, ragger_swings;
+    /* Over-eating (riskfight_session.h): meals of each side eaten while its hitpoints at the start of the tick were above his chance range, this fight; the hitpoints
+     * each side had when its inputs of the tick began; and the opponent's reaction: annoyed (he has had enough) and the tick he teleports. */
+    int overeats[2], tick_hitpoints[2];
+    int annoyed, annoyed_leave_tick;
 } RiskfightState;
 typedef struct {
     uint8_t equipment[NUM_GEAR_SLOTS];
@@ -232,6 +240,10 @@ static RiskfightLoadout RISKFIGHT_LIVE_LOADOUT;
  * anglerfish (sim anglerfish), 7 karambwan, 2 super restores, 2 brews, a super combat, the Vengeance sack and the house tablet, all 28 slots full
  * until the first meal. His side keeps RISKFIGHT_LIVE_LOADOUT (the opponent is observed to carry the maul). */
 static RiskfightLoadout RISKFIGHT_VW_LOADOUT;
+/* The VW kit with RF_VW_PIES summer pies in place of as many anglerfish (the training kit draw includes it, so the policy learns pies when it carries them): a pie is
+ * 2 bites of 11, a 1-tick eat delay (wiki: Summer pie, a 1-tick fast food), so from 73 a pie to 84 still leaves the next tick for a triple-eat. */
+static RiskfightLoadout RISKFIGHT_VW_PIES_LOADOUT;
+enum { RF_VW_PIES = 4 };
 
 __attribute__((constructor)) static void riskfight_build_default_loadout(void) {
     RiskfightLoadout loadout = {.hitpoints = 121, .vengeance_sacks = 100};
@@ -313,6 +325,12 @@ static void riskfight_build_vw_loadout(void) { /* called by riskfight_build_live
             loadout.inventory[slot++] = riskfight_supply_code(supplies[k].kind, supplies[k].doses);
     assert(slot == 28);
     RISKFIGHT_VW_LOADOUT = loadout;
+    RiskfightLoadout with_pies = loadout;
+    int swapped = 0;
+    for (int i = 0; i < 28 && swapped < RF_VW_PIES; i++)
+        if (osrs_item_content_metadata(loadout.inventory[i])->consumable_kind == OSRS_CONSUMABLE_ANGLERFISH) { with_pies.inventory[i] = riskfight_supply_code(OSRS_CONSUMABLE_SUMMER_PIE, 2); swapped++; }
+    assert(swapped == RF_VW_PIES);
+    RISKFIGHT_VW_PIES_LOADOUT = with_pies;
 }
 
 #include "riskfight_kits.h"
