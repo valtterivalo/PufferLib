@@ -148,6 +148,6 @@ On the live trace (fight from tick 75), s4t0 never teleports, but on tick 75 it 
 - **Canonical bag view (7c358ba8c, riskfight_bag.h):** the net sees bag cells sorted by content, and actions map back to physical slots. Sweep 6's anchor scored 7.50 per hour (8.19 unshuffled, 0.30 shuffled without it). s6t0 on both live traces:
   - no teleport (p 0.00 on every tick);
   - no brew at full HP;
-  - the opening drink is a super restore, as in the sim: prayer was 89 of 99.
+  - the opening drink is a super restore. It starts at 121 HP, so a brew was drunk before the fight and drained attack and strength; the restore undoes that drain. It is not wasted on 89/99 prayer, as I first reported (the user corrected this).
 
   Installed 2026-10-17.
