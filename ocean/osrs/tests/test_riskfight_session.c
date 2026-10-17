@@ -135,6 +135,7 @@ static void test_teleport_costs_a_regear(void) {
     empty_slots(us, 0, 12);
     us->current_hitpoints = 40;
     us->special_energy = 20;
+    env->state.env.players[1].special_energy = 20; /* both spent: a kosher teleport, which may be followed by a rematch like the one expected_teleport_delay draws */
     int rematch;
     int expected = expected_teleport_delay(env->training.rng, &rematch);
     int before = env->session_elapsed;
@@ -154,16 +155,16 @@ static void test_teleport_costs_a_regear(void) {
     destroy();
 }
 
-/* Many teleports: after a rude one (ours after our special, while he can still spec) the opponent never returns; after others he does, the same player with the
- * same kit and profile, regeared. */
-static void teleports(int our_specs, int his_energy, int he_teleports, int trials, int* rematches, int* rudes) {
+/* Many teleports: after a rude one (not kosher, riskfight_norms.h: here a special of either side still unspent) the opponent never returns; after others he does, the
+ * same player with the same kit and profile, regeared. The kosher cases are tested in full in test_riskfight_norms.c. */
+static void teleports(int our_energy, int his_energy, int he_teleports, int trials, int* rematches, int* rudes) {
     *rematches = *rudes = 0;
     for (int trial = 0; trial < trials; trial++) {
         env = make_env(6000, 1, 100 + trial);
         const RiskfightProfile* his_profile = env->state.opponent_profile;
         env->state.env.players[1].current_hitpoints = 77;
         env->state.env.players[1].special_energy = his_energy;
-        env->state.specs_used[0] = our_specs;
+        env->state.env.players[0].special_energy = our_energy;
         actions[0][RF_PRIMARY] = RF_TELEPORT;
         actions[1][RF_PRIMARY] = he_teleports ? RF_TELEPORT : 0;
         puf_step(env);
@@ -181,34 +182,41 @@ static void teleports(int our_specs, int his_energy, int he_teleports, int trial
 
 static void test_rude_teleport_loses_the_opponent(void) {
     int rematches, rudes;
-    teleports(1, 100, 0, 300, &rematches, &rudes);
+    teleports(0, 100, 0, 300, &rematches, &rudes); /* our special spent, his not: rude */
     assert(rudes == 300 && rematches == 0);
-    teleports(0, 100, 0, 300, &rematches, &rudes); /* no special of ours: polite */
+    teleports(100, 100, 0, 300, &rematches, &rudes); /* nobody has specced: rude too */
+    assert(rudes == 300 && rematches == 0);
+    teleports(100, 0, 0, 300, &rematches, &rudes); /* his spent, ours not: rude */
+    assert(rudes == 300 && rematches == 0);
+    teleports(0, 0, 0, 300, &rematches, &rudes);   /* both spent: kosher */
     assert(rudes == 0 && rematches > 0);
     int polite = rematches;
-    teleports(1, 0, 0, 300, &rematches, &rudes);   /* he has nothing left to spec with: polite */
-    assert(rudes == 0 && rematches > 0);
     assert(polite > 300 * RF_REMATCH_PROBABILITY / 2 && polite < 300 * (1 + RF_REMATCH_PROBABILITY) / 2 + 1);
-    teleports(0, 100, 1, 300, &rematches, &rudes); /* both teleport: he comes back as often */
-    assert(rudes == 0 && rematches > 300 * RF_REMATCH_PROBABILITY / 2);
+    teleports(0, 100, 1, 300, &rematches, &rudes); /* both teleport, ours rude: no rematch */
+    assert(rudes == 300 && rematches == 0);
     /* The rule at its source. */
     RiskfightState s;
     memset(&s, 0, sizeof(s));
     s.outcome[0] = RISKFIGHT_ESCAPE;
     s.escaped[0] = 1;
-    s.specs_used[0] = 1;
-    s.escape_supplies[0][1].special_energy = 100;
-    s.escape_supplies[0][1].minimum_spec_cost = 50;
-    assert(riskfight_rude_teleport(&s));
+    for (int side = 0; side < 2; side++) {
+        s.escape_supplies[0][side].special_energy = 100;
+        s.escape_supplies[0][side].minimum_spec_cost = 50;
+        s.escape_supplies[0][side].hard_food = s.escape_supplies[0][side].restore_doses = s.escape_supplies[0][side].boost_doses = 1;
+    }
+    assert(riskfight_rude_teleport(&s));              /* nobody has specced */
+    s.escape_supplies[0][0].special_energy = 49;
+    assert(riskfight_rude_teleport(&s));              /* ours spent, his could still spec */
     s.escape_supplies[0][1].special_energy = 49;
-    assert(!riskfight_rude_teleport(&s));
+    assert(!riskfight_rude_teleport(&s));             /* both spent */
     s.escape_supplies[0][1].special_energy = 100;
-    s.specs_used[0] = 0;
-    assert(!riskfight_rude_teleport(&s));
-    s.specs_used[0] = 1;
+    s.escape_supplies[0][0].special_energy = 100;
+    s.escape_supplies[0][0].hard_food = 0;
+    assert(!riskfight_rude_teleport(&s));             /* out of hard food */
     s.escaped[0] = 0;
     s.escaped[1] = 1; /* his teleport is not ours */
     assert(!riskfight_rude_teleport(&s));
+    s.escape_supplies[0][0].hard_food = 1; /* stocked again, specials unspent: rude */
     uint32_t rng = 1;
     for (int i = 0; i < 200; i++) {
         s.escaped[0] = 1; s.escaped[1] = 0;
@@ -271,11 +279,11 @@ static void test_rude_teleports_build_reputation(void) {
     }
     assert(near_share(started, sessions, RF_REP_START_PROBABILITY) && most > 2.5f);
     destroy();
-    /* A polite teleport leaves it as it is, a rude one (after our special, he could still spec) adds 1. */
+    /* A kosher teleport leaves it as it is, a rude one (nobody has specced) adds 1. */
     for (int rude = 0; rude < 2; rude++) {
         env = make_env(6000, 1, 82);
-        env->state.specs_used[0] = rude;
-        env->state.env.players[1].special_energy = 100;
+        env->state.env.players[0].special_energy = rude ? 100 : 0; /* rude: nobody has specced; polite: both have */
+        env->state.env.players[1].special_energy = rude ? 100 : 0;
         actions[0][RF_PRIMARY] = RF_TELEPORT;
         puf_step(env);
         assert(env->log.rude_teleports == rude);

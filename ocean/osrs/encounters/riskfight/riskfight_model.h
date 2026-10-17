@@ -76,9 +76,10 @@ enum {
      * [1] his special energy as a player counts it (100 minus the specs seen, plus the regeneration since), over 100; [2] 1 while the session is waiting between
      * fights (every tick of the wait is a step of no choice, the mask allows only the no-op), [3] the ticks of the wait left over RF_WAIT_SCALE_TICKS, capped at 1,
      * [4] our reputation (rude teleports of this session, decaying) over RF_REP_OBS_SCALE, capped at 1, [5] how annoyed he is with us: our overeats of this fight over
-     * RF_OVEREAT_PATIENCE + 1, capped at 1 (1: he leaves), [6] our hitpoints over his chance range, (hp - range) / 121 in [-1, 1]: positive is an overeat now. */
+     * RF_OVEREAT_PATIENCE + 1, capped at 1 (1: he leaves), [6] our hitpoints over his chance range, (hp - range) / 121 in [-1, 1]: positive is an overeat now,
+     * [7] 1 when a teleport now would be kosher, 0 when rude (riskfight_norms.h: both specials spent, or a supply class of ours out). */
     RF_SESSION_START = RF_THREAT_START + RF_THREAT_SIZE,
-    RF_SESSION_SIZE = 7,
+    RF_SESSION_SIZE = 8,
     RF_OBS_SIZE = RF_SESSION_START + RF_SESSION_SIZE,
 };
 /* Ticks left beyond which the end of the session no longer changes what is worth doing: several fight cycles. */

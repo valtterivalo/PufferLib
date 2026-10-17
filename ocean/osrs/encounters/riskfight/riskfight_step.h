@@ -533,6 +533,18 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
     }
 }
 
+/** The prayers the plugin keeps up for a deployed net (riskfight_deployable masks the prayer heads: the net never clicks one): the normal answer to being attacked is
+ * to put on Smite and Piety, and the plugin does so when the fight starts. Written into the net's actions before they are stepped, as a refresh every tick, which is what
+ * the plugin's "prayer on" amounts to for the sim: they are up from the first tick, drain prayer as in the game (encounter_drain_all_prayers: Piety and Smite together,
+ * shortened by the prayer bonus of the gear), go off when the bar runs dry (riskfight_execute_command refuses to set one with no prayer left) and come back on the
+ * tick after a restore. Scripts keep their own prayers, so this is for the net's seat only (the callers that hold net actions). Before this the masked heads sent
+ * action 0 every tick: Piety forced OFF, no overhead, so a deployed net trained against a script on Piety fought with no prayer at all, and the live O line
+ * (piety 1, smite) was a state training never showed it. */
+static void riskfight_plugin_prayers(int* actions) {
+    actions[RF_PRAYER] = OFFENSIVE_PRAYER_PIETY;
+    actions[RF_OVERHEAD] = ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE;
+}
+
 static void riskfight_step(EncounterState* state, EncounterContext* context, const int* actions) {
     RiskfightState* s = (RiskfightState*)state;
     RiskfightContext* ctx = (RiskfightContext*)context;

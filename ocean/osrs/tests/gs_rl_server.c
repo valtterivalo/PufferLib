@@ -19,7 +19,7 @@
  *       that does not send it. A count with no swing of his in this tick or the one before is a malformed wire and aborts.
  * Session block, live: [0] 1, [2] [3] 0, [1] his special energy from the V lines, [4] our reputation 0 (no client can measure it), [5] how annoyed he is: our overeats of this
  *   fight (rt_note_meals: servings that left the G line's bag between two consecutive requests while the earlier request's hitpoints were strictly above its chance range) over
- *   RF_OVEREAT_PATIENCE + 1, [6] hitpoints over his chance range. The counter starts at 0 at every FIGHT.
+ *   RF_OVEREAT_PATIENCE + 1, [6] hitpoints over his chance range, [7] whether a teleport now is kosher (riskfight_norms.h, from the G line's bag, our special energy, [1] and the threat block; the shared observation writer fills it). The counter starts at 0 at every FIGHT.
  * Every tick of a fight must reach the server with the full request body: the server owns the history ring, the consume estimates and the recurrent state.
  * A tick gap above 2 or a tick that does not advance starts a new fight. On a decision tick the response is `R id micros 2 <3 x "feasible kill death value worlds">
  * A n <n x "due kind arg timing">` (best_index 2 = replace the remainder with these clicks, due = tick + 1); on an `OBS` tick it is `O id`. UNAVAILABLE as in the

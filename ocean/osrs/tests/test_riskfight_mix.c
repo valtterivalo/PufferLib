@@ -300,26 +300,27 @@ static void test_start_views_mirror(void) {
 }
 
 /* The session rules for seat 1 are the rules for seat 0, mirrored. */
-static RiskfightState teleport_state(int leaver, int leaver_specs, int other_energy) {
+static RiskfightState teleport_state(int leaver, int leaver_energy, int other_energy) {
     RiskfightState s;
     memset(&s, 0, sizeof(s));
     s.outcome[0] = s.outcome[1] = RISKFIGHT_ESCAPE;
     s.escaped[leaver] = 1;
-    s.specs_used[leaver] = leaver_specs;
     s.escape_supplies[leaver][1 - leaver].special_energy = other_energy;
     s.escape_supplies[leaver][1 - leaver].minimum_spec_cost = 50;
-    s.escape_supplies[leaver][leaver].special_energy = 100;
+    s.escape_supplies[leaver][leaver].special_energy = leaver_energy;
     s.escape_supplies[leaver][leaver].minimum_spec_cost = 50;
+    for (int side = 0; side < 2; side++) /* every supply class stocked: only the specials decide (riskfight_norms.h) */
+        s.escape_supplies[leaver][side].hard_food = s.escape_supplies[leaver][side].restore_doses = s.escape_supplies[leaver][side].boost_doses = 1;
     return s;
 }
 
 static void test_session_rules_are_symmetric(void) {
     const int trials = 4000;
     int rematches[2][3] = {{0}}, rudes[2][3] = {{0}};
-    const struct { int specs, energy; } cases[3] = {{1, 100}, {0, 100}, {1, 0}}; /* rude, polite (no spec of his own), polite (nothing left to spec) */
+    const struct { int own, energy; } cases[3] = {{0, 100}, {100, 100}, {0, 0}}; /* rude (ours spent, his not), rude (nobody has specced), kosher (both spent) */
     for (int leaver = 0; leaver < 2; leaver++)
         for (int c = 0; c < 3; c++) {
-            RiskfightState s = teleport_state(leaver, cases[c].specs, cases[c].energy);
+            RiskfightState s = teleport_state(leaver, cases[c].own, cases[c].energy);
             uint32_t rng = 7 + 100 * (uint32_t)c;
             for (int i = 0; i < trials; i++) {
                 RiskfightTransition t = riskfight_session_transition(&s, &rng, 0);
@@ -330,15 +331,15 @@ static void test_session_rules_are_symmetric(void) {
             }
         }
     for (int leaver = 0; leaver < 2; leaver++) {
-        assert(rudes[leaver][0] == trials && rematches[leaver][0] == 0);                  /* a rude teleport loses the opponent, whoever leaves */
-        for (int c = 1; c < 3; c++) assert(rudes[leaver][c] == 0 && within(rematches[leaver][c], trials, RF_REMATCH_PROBABILITY));
+        for (int c = 0; c < 2; c++) assert(rudes[leaver][c] == trials && rematches[leaver][c] == 0); /* a rude teleport loses the opponent, whoever leaves */
+        assert(rudes[leaver][2] == 0 && within(rematches[leaver][2], trials, RF_REMATCH_PROBABILITY));
     }
     /* Both leave: rude if either was. */
     RiskfightState both = teleport_state(0, 0, 100);
     both.escaped[1] = 1;
-    both.specs_used[1] = 1;
     both.escape_supplies[1][0].special_energy = 100;
     both.escape_supplies[1][0].minimum_spec_cost = 50;
+    for (int side = 0; side < 2; side++) both.escape_supplies[1][side].hard_food = both.escape_supplies[1][side].restore_doses = both.escape_supplies[1][side].boost_doses = 1;
     uint32_t rng = 3;
     for (int i = 0; i < 300; i++) {
         RiskfightTransition t = riskfight_session_transition(&both, &rng, 0);
