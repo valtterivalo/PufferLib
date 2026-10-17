@@ -6,8 +6,8 @@
  * Every fight starts after a regear at the bank (the user's account: everyone regears): both sides full supplies, special energy 100, prayer and stats restored,
  * 121 hitpoints (an anglerfish overheal), nothing carried over. The time between two fights is one regear delay:
  *   rematch   after a teleport that was not rude, with probability RF_REMATCH_PROBABILITY: the same opponent (his kit, profile, price) after M, the measured rematch
- *             delay. A rude teleport (a side's own, after its own special, while the other still had special energy for his) is never followed by a rematch, and
- *             neither is a fight against a ragger.
+ *             delay. A rude teleport (riskfight_norms.h: a side's own, unless both sides had spent their special or the teleporter had run out of a supply class)
+ *             is never followed by a rematch, and neither is a fight against a ragger.
  *   otherwise a new opponent after R, the measured new-opponent delay, times (1 + RF_REP_SEARCH * rep): after a kill, a death, a teleport without a rematch, a
  *             timeout, a ragger leaving.
  *   timeout   a draw (reward 0, no price), counted in the logs; the session clock runs on.
@@ -58,9 +58,12 @@ static int riskfight_delay_draw(const RiskfightDelay* delay, uint32_t* rng) {
     return (int)(delay->ticks[below] + fraction * (delay->ticks[below + 1] - delay->ticks[below]) + 0.5f);
 }
 
-/** A teleport of `side` after its own special while the other side could still spec: the other takes it as a rude exit. Read at the end of the fight. */
+/** A teleport of `side` that was not kosher (riskfight_norms.h), judged on the supplies of both sides at the tick it was clicked: the other side takes it as a rude
+ * exit. Read at the end of the fight. The rule is the same in both seats, for a net, the script or OppFit. A rude exit of his changes nothing for us but the end
+ * of the fight and the rematch: rude play makes the other player stop fighting the rude one (the user's account), so the pairing ends the same way whoever left, and
+ * we pay the longer wait for a new opponent. The reputation is ours alone (how people treat us) and is not touched by what he does. */
 static int riskfight_rude_teleport_of(const RiskfightState* s, int side) {
-    return s->escaped[side] && s->specs_used[side] > 0 && !osrs_escape_no_special(&s->escape_supplies[side][1 - side]);
+    return s->escaped[side] && !riskfight_teleport_kosher(&s->escape_supplies[side][side], &s->escape_supplies[side][1 - side]);
 }
 /** He left because we overate: he teleported after losing patience (riskfight_step.h), and a fight that ended some other way before that does not count. */
 static int riskfight_annoyed_exit(const RiskfightState* s) { return s->annoyed && s->outcome[0] == RISKFIGHT_ESCAPE && s->escaped[1] && !s->escaped[0]; }

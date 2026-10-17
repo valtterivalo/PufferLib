@@ -1,6 +1,7 @@
 #ifndef OSRS_RISKFIGHT_POLICY_H
 #define OSRS_RISKFIGHT_POLICY_H
 #include "riskfight_model.h"
+#include "riskfight_norms.h"
 
 enum {
     RF_OBSERVATION_TICK_SCALE = 1024,
@@ -71,7 +72,9 @@ static inline void riskfight_session_clock(const RiskfightState* s, float out[3]
 /** The session block (RF_SESSION_START). [2] and [3] mark a wait between fights and how much of it is left. [0] session ticks left over RF_SESSION_HORIZON_TICKS, capped at 1: what a fight is worth depends on the time left only
  * through how many more fights fit, which stops mattering a few fight cycles out, so an open-ended session (live) reads 1, the value most of a training
  * session shows too. [1] his special energy as a player counts it: whether he can still spec decides whether leaving after our own spec is rude. [4] our reputation
- * (RF_REP_OBS_SCALE rude teleports read 1): it lengthens the wait for a new opponent and makes ragging more likely. */
+ * (RF_REP_OBS_SCALE rude teleports read 1): it lengthens the wait for a new opponent and makes ragging more likely. [7] 1 when a teleport now would be kosher
+ * (riskfight_norms.h), 0 when it would be rude: it costs no rematch and a reputation point. A player knows this: his own bag and special energy, his estimate of the
+ * other side's special energy ([1]) against the special weapons the threat block says he holds. In the live server the same code reads the G line's bag. */
 static void riskfight_write_session_observation(const RiskfightState* s, int agent, float* obs) {
     float* out = obs + RF_SESSION_START;
     float clock[3];
@@ -85,6 +88,7 @@ static void riskfight_write_session_observation(const RiskfightState* s, int age
     const RiskfightVisibleOpponent* v = &s->visible[agent];
     int range = riskfight_chance_range_of(obs + RF_THREAT_START, v->spec_est, v->last_cast_tick >= v->last_proc_tick);
     out[6] = fmaxf(-1.0f, fminf(1.0f, (float)(s->env.players[agent].current_hitpoints - range) / 121.0f));
+    out[7] = riskfight_teleport_kosher_now(&s->env.players[agent], obs + RF_THREAT_START, v->spec_est);
 }
 
 /** The observation up to the price, and the weapons of the agent's bag when `bag_weapons` is given (the threat block needs them). */

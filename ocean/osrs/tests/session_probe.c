@@ -54,6 +54,8 @@ int main(int argc, char** argv) {
     if (tp > 0) {
         printf("at our teleports (n=%.0f): our special used %.3f, his used %.3f, both %.3f, his energy could spec %.3f, we could not spec any more %.3f, rude %.3f\n", tp,
             l->tp_self_spec / tp, l->tp_opp_spec / tp, l->tp_both_spec / tp, l->tp_opp_could_spec / tp, l->tp_self_no_special / tp, l->rude_teleports / tp);
+        printf("  supply classes out at our teleports: hard food %.3f, prayer restores %.3f, combat boost %.3f; his rude teleports per session %.3f\n",
+            l->tp_no_hard_food / tp, l->tp_no_restore / tp, l->self_escape_no_boost / tp, l->opponent_rude_teleports / sessions);
         printf("  supplies left: hp %.1f, eat items %.2f, potion doses %.2f, fight tick %.1f; healing class none %.3f other %.3f double %.3f triple %.3f, no boost %.3f\n",
             l->tp_hp / tp, l->tp_food / tp, l->tp_potion_doses / tp, l->tp_fight_tick / tp, l->self_escape_healing[0] / tp, l->self_escape_healing[1] / tp,
             l->self_escape_healing[2] / tp, l->self_escape_healing[3] / tp, l->self_escape_no_boost / tp);

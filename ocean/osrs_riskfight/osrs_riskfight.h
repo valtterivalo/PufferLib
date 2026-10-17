@@ -33,8 +33,8 @@ struct Log {
     float kills, deaths, escapes, mutual_deaths, timeouts, ragged, ragger_fights, overeats, annoyed_exits, net_stake, rounds, n; /* timeouts: fights that hit the round limit (a draw); ragged: ragger fights that ended with his teleport */
     float scripted_ticks, scripted_omissions, midfight_ticks, prefix_terminal;
     float self_teleports, opponent_teleports, both_teleports;
-    float rude_teleports, rematches, tp_self_spec, tp_opp_spec, tp_both_spec, tp_opp_could_spec, tp_hp, tp_fight_tick;
-    float tp_food, tp_potion_doses, tp_self_no_special;
+    float rude_teleports, opponent_rude_teleports, rematches, tp_self_spec, tp_opp_spec, tp_both_spec, tp_opp_could_spec, tp_hp, tp_fight_tick;
+    float tp_food, tp_potion_doses, tp_self_no_special, tp_no_hard_food, tp_no_restore;
     float self_escape_healing[4], self_escape_no_boost, self_escape_both_no_special;
     float drink_brew, drink_sanfew, drink_combat;
     float eat_marlin, eat_halibut, eat_pie;
@@ -233,6 +233,7 @@ static void riskfight_native_log_round(Env* env) {
     env->log.self_teleports += s->escaped[0];
     env->log.opponent_teleports += s->escaped[1];
     env->log.both_teleports += s->escaped[0] && s->escaped[1];
+    env->log.opponent_rude_teleports += riskfight_rude_teleport_of(s, 1);
     if (s->escaped[0]) {
         const OsrsEscapeSupplies* supplies = &s->escape_supplies[0][0];
         env->log.self_escape_healing[supplies->healing]++;
@@ -249,6 +250,8 @@ static void riskfight_native_log_round(Env* env) {
         env->log.tp_food += supplies->food;
         env->log.tp_potion_doses += supplies->potion_doses;
         env->log.tp_self_no_special += osrs_escape_no_special(supplies);
+        env->log.tp_no_hard_food += osrs_escape_no_hard_food(supplies);
+        env->log.tp_no_restore += osrs_escape_no_restore(supplies);
         env->log.tp_fight_tick += s->escape_tick[0];
     }
     if (env->session_fights == 0) {
@@ -358,6 +361,8 @@ void puf_step(Env* env) {
     int actions[2 * RF_HEADS] = {0};
     for (int i = 0; i < env->num_agents; i++)
         for (int j = 0; j < RF_HEADS; j++) actions[i * RF_HEADS + j] = (int)env->agents[i].actions[j];
+    if (riskfight_deployable)
+        for (int i = 0; i < env->num_agents; i++) riskfight_plugin_prayers(actions + i * RF_HEADS); /* the plugin's Piety and Smite for every net seat */
     int stop_issued = actions[RF_PRIMARY] == RF_STOP;
     env->context.opp_omit = riskfight_training_omit(&env->training);
     env->training.omissions += env->context.opp_omit;
@@ -460,6 +465,9 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "direct_ko_chance_mass", log->direct_ko_chance_mass);
     dict_set(out, "chance_reward", log->chance_reward);
     dict_set(out, "rude_teleports", log->rude_teleports);
+    dict_set(out, "opponent_rude_teleports", log->opponent_rude_teleports);
+    dict_set(out, "tp_no_hard_food", log->tp_no_hard_food);
+    dict_set(out, "tp_no_restore", log->tp_no_restore);
     dict_set(out, "rematches", log->rematches);
     dict_set(out, "tp_self_spec", log->tp_self_spec);
     dict_set(out, "tp_opp_spec", log->tp_opp_spec);
