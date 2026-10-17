@@ -129,3 +129,4 @@ Session 20261017T134203, fight 75-124 against a Voidwaker user.
   | net per hour | 8.43 | 8.04 |
 
 - **s3t34** (sweep 3's best by probe, 10.65 net/h vs s3t0 8.17, 512x1): on the live trace it also teleports at 115-120 (p 0.63-0.93). At 75-82 it drinks a super restore and a brew at 121 HP, the brew draining stats for nothing. Not installed.
+- **What the net received at 119-124** (rl_explain now prints the session block and the kosher predicates): kosher 0 on every tick (no_spec 1; no_food, no_restore and no_boost 0; his cheapest spec 50 against his estimated 50), reputation 0, HP margin over his chance range +0.01 at 68 HP. The live input agrees with the manual classification: the net knew the teleport was rude and that 68 sat at the edge of his Voidwaker spec range. It is a pricing decision, not a reconstruction bug.

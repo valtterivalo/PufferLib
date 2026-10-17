@@ -113,6 +113,16 @@ int main(int argc, char** argv) {
         printf("%d %s hp %d lock %d B %d-%d bar %d atk %d W %s S %s", q.tick, obs_only ? "OBS" : "DEC", us->current_hitpoints, us->pvp_overheal_block, q.belief.hp_low, q.belief.hp_high,
             g_fight.vis.health_bar, osrs_interaction_active(&us->interaction), rx_item(us->equipped[GEAR_SLOT_WEAPON]), rx_item(us->equipped[GEAR_SLOT_SHIELD]));
         printf(" spec us %d him~%d", us->special_energy, g_fight.vis.spec_est);
+        {
+            /* The session block as the net received it, and the kosher input's predicates (riskfight_norms.h). */
+            static float o[RF_OBS_SIZE];
+            riskfight_write_observation(s, 0, o);
+            const float* sb = o + RF_SESSION_START;
+            const OsrsEscapeSupplies own = osrs_escape_supplies(us);
+            printf(" | sess rep %.2f annoy %.2f margin %.2f kosher %.0f (no_spec %d no_food %d no_restore %d no_boost %d his_cheapest %d)", sb[4], sb[5], sb[6], sb[7],
+                osrs_escape_no_special(&own), osrs_escape_no_hard_food(&own), osrs_escape_no_restore(&own), osrs_escape_no_boost(&own),
+                riskfight_threat_cheapest_spec(o + RF_THREAT_START));
+        }
         float pr[512];
         rx_probs(g_fight.net, mask, RF_PRIMARY, pr);
         printf(" | prim none %.2f atk %.2f stop %.2f tp %.2f", pr[0], pr[RF_ATTACK], pr[RF_STOP], pr[RF_TELEPORT]);
