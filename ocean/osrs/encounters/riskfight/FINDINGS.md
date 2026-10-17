@@ -118,3 +118,14 @@ Session 20261017T134203, fight 75-124 against a Voidwaker user.
 
 - **Reading:** a coherent defensive choice: low HP while food-locked, a healthy opponent who still has a Voidwaker spec, our boost faded. The policy prices staying (his spec could KO from 68) above the rude cost (no rematch, +1 reputation: 1.5x search, 15% raggers). The user says players would eat up and fight on.
 - **Open:** either the rude cost is too small, or the sim's death risk in this state is too high (opponent spec timing), or both. Measure P(death within 10 ticks | this state) in the sim against recordings before changing either.
+- **Death risk check (DeathRisk agent, /tmp/deathrisk):** P(we die within 15 ticks | HP 55-80, his bar ≥ 15/30, his spec affordable) is 1.33% in our recordings (95% CI 0.26-2.71%, deaths in 6 of 131 fights) and 0.52% in the sim with s3t0 kept from teleporting (CI 0.40-0.65%). The sim does not overstate the threat. The teleport is the policy's pricing.
+- **In the sim these nets are almost never rude:** 0.00-0.04 rude teleports per 3000-tick session for sweep 3's top six (probe with real starts and the live price table). The live state (attack/strength drained to 105 by brews with super combat unused, food-locked at 68, he holds a Voidwaker spec) is rare in training.
+- **Stronger reputation (rep-knobs branch, sweep 3 trial-0 config, seed 73):**
+
+  | | defaults | search 2.0, rag 0.3, half-life 6000 |
+  |---|---|---|
+  | rude share of our teleports | 9 of 331 | 0 of 545 |
+  | teleports per session | 1.10 | 1.82 |
+  | net per hour | 8.43 | 8.04 |
+
+- **s3t34** (sweep 3's best by probe, 10.65 net/h vs s3t0 8.17, 512x1): on the live trace it also teleports at 115-120 (p 0.63-0.93). At 75-82 it drinks a super restore and a brew at 121 HP, the brew draining stats for nothing. Not installed.
