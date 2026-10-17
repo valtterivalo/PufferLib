@@ -177,3 +177,9 @@ Live, s6t0 drank super restores at full prayer with nothing drained (prayer 87-9
   - In the live fight above, it ate only at 13-53 HP and never armed a special.
   - Its teleport intent (p 0.7-0.93) falls in ticks 167-174, after the 65 hit, at 34-52 HP, kosher (both specs spent).
   - Sweep 8 trains with the threat masks.
+- **His one-tick threat is a combo, not a max (c7d3c64bb).** `riskfight_chance_range_of` now takes one opening hit (a normal hit, or a special he can afford), adds every instant maul special the remaining energy pays for (a maul the pool only says he may carry counts too: it hides in the bag), and adds his Vengeance echo while it is up. The old max-of-weapons made the meal gate unsafe: an axe hit plus a maul special in one tick can kill from above the axe's max. Regression: `test_riskfight_threat_masks::test_combo_range`.
+- **His Vengeance at fight start is usually up.** In the user's recordings, 107 of 123 fights showed a proc before any cast, so the strict "only after a seen cast" rule was wrong. Rule now: up from fight start; down after a proc or after a damaging hit of ours with no proc; up again on a seen cast. Shared by the sim, `gs_rl_server` and the overeat measurement. Re-measured patience: p90 7, so `RF_OVEREAT_PATIENCE` = 8.
+  - On the live fight: range 146 at tick 125 (opening hit + two ornate maul specials), 63-71 at ticks 146-160 (Vengeance down since our hit at 124).
+- **Timing block (7900537a1, RF_OBS_SIZE 461):** his readiness min/max including his meals' attack delay, his next-tick damage bound (the normal hit only when ready, instant maul specials always), and his hitpoints bounds on the damage scale.
+  - Live trace: 3-4 ticks / 88 before his maul spec at 145, 4-4 / 0 right after his axe swing at 167.
+  - Sweep 10 trains with it; s7t18 (461-incompatible) stays installed from c7d3c64bb.
