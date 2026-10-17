@@ -83,7 +83,8 @@ static void test_ornate_and_ordinary_energy_costs(void) {
     }
 }
 
-/* The RL special head asks for one spec's energy per click: the double-click (action 2) is open at 100% for the ornate maul and closed for the plain one. */
+/* The RL special head asks for one spec's energy per click: the double-click (action 2) is open at 100% for the ornate maul and closed for the plain one. His bar is
+ * at its lowest so the KO gate (riskfight_threat_gates: k x spec max + in flight >= his bar's lower bound) passes for any k and only the energy decides. */
 static void test_special_mask_follows_the_maul_item(void) {
     const uint8_t weapons[] = {ITEM_GRANITE_MAUL_ORNATE, ITEM_GRANITE_MAUL};
     const int cost[] = {50, 60};
@@ -96,6 +97,7 @@ static void test_special_mask_follows_the_maul_item(void) {
         }
         us->equipped[GEAR_SLOT_WEAPON] = ITEM_ABYSSAL_TENTACLE;
         us->inventory_cells[24] = osrs_inventory_cell_from_item(weapons[i]);
+        state.visible[0].health_bar = 1;
         unsigned char mask[RF_MASK_SIZE];
         for (int energy = 0; energy <= 100; energy += 10) {
             us->special_energy = energy;
