@@ -33,10 +33,11 @@ typedef struct { uint16_t ticks[RF_DELAY_DECILES]; } RiskfightDelay;
 
 #include "riskfight_delays.h"
 
-/* The user's account of the session world; none of these is measurable. The first three are the defaults of the env keys (RiskfightRepRules). */
-enum { RF_REP_HALF_LIFE_TICKS = 1500 };       /* rep halves over half a session */
-static const float RF_REP_SEARCH = 0.5f;       /* the search for a new opponent takes R * (1 + RF_REP_SEARCH * rep) */
-static const float RF_REP_RAG = 0.15f;         /* probability that a new opponent is a ragger, per point of rep ... */
+/* The user's account of the session world; none of these is measurable. The first three are the defaults of the env keys (RiskfightRepRules). Strengthened on
+ * 2026-10-17 (FINDINGS.md): at 0.5 / 0.15 / 1500 a rude reset still paid against a 1% death risk; at these values rude teleports fell from 9 of 331 to 0 of 545. */
+enum { RF_REP_HALF_LIFE_TICKS = 6000 };       /* rep halves over two sessions: a name sticks */
+static const float RF_REP_SEARCH = 2.0f;       /* the search for a new opponent takes R * (1 + RF_REP_SEARCH * rep) */
+static const float RF_REP_RAG = 0.3f;          /* probability that a new opponent is a ragger, per point of rep ... */
 static const float RF_REP_RAG_CAP = 0.6f;      /* ... up to this */
 static const float RF_REP_START_PROBABILITY = 0.3f; /* a session starts with a reputation in this share of the cases ... */
 static const float RF_REP_START_MAX = 3.0f;    /* ... drawn uniformly from (0, RF_REP_START_MAX] */
