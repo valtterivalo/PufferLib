@@ -29,11 +29,11 @@ raw_id	enum	name	slot	two_handed	attack_speed	attack_range	style	attack_stab	att
 29033	ITEM_ECLIPSE_MOON_TASSETS	Eclipse moon tassets	legs	0	0	0	none	0	0	0	-15	17	9	13	37	31	17	1	0	0	0		https://oldschool.runescape.wiki/w/Eclipse_Moon_tassets#Used	
 29035	ITEM_ECLIPSE_MOON_HELM	Eclipse moon helm	head	0	0	0	none	0	0	0	-6	8	2	3	14	10	4	3	0	0	0		https://oldschool.runescape.wiki/w/Eclipse_Moon_helm#Used	
 21902	ITEM_DRAGON_CROSSBOW	Dragon crossbow	weapon	0	6	7	ranged	0	0	0	0	94	0	0	0	0	0	0	0	0	0		https://oldschool.runescape.wiki/w/Dragon_crossbow	
-8842	ITEM_VOID_KNIGHT_GLOVES	Void knight gloves	hands	0	0	0	none	0	0	0	0	0	6	6	6	4	6	0	0	0	0	24182	https://oldschool.runescape.wiki/w/Void_knight_gloves#Normal	
+8842	ITEM_VOID_KNIGHT_GLOVES	Void knight gloves	hands	0	0	0	none	0	0	0	0	0	6	6	6	4	6	0	0	0	0	24182,27002	https://oldschool.runescape.wiki/w/Void_knight_gloves#Normal	(l)(or) ornament shares the stats
 21304	ITEM_OBSIDIAN_PLATELEGS	Obsidian platelegs	legs	0	0	0	none	0	0	0	0	0	46	43	41	-10	40	1	0	0	0		https://oldschool.runescape.wiki/w/Obsidian_platelegs	
 11665	ITEM_VOID_MELEE_HELM	Void melee helm	head	0	0	0	none	0	0	0	0	0	6	6	6	6	6	0	0	0	0	24185	https://oldschool.runescape.wiki/w/Void_melee_helm#Normal	
-13072	ITEM_ELITE_VOID_TOP	Elite void top	body	0	0	0	none	0	0	0	0	0	45	45	45	45	45	0	0	0	3		https://oldschool.runescape.wiki/w/Elite_void_top#Normal	
-13073	ITEM_ELITE_VOID_ROBE	Elite void robe	legs	0	0	0	none	0	0	0	0	0	30	30	30	30	30	0	0	0	3		https://oldschool.runescape.wiki/w/Elite_void_robe#Normal	
+13072	ITEM_ELITE_VOID_TOP	Elite void top	body	0	0	0	none	0	0	0	0	0	45	45	45	45	45	0	0	0	3	24178,27003	https://oldschool.runescape.wiki/w/Elite_void_top#Normal	locked and (l)(or) share the stats
+13073	ITEM_ELITE_VOID_ROBE	Elite void robe	legs	0	0	0	none	0	0	0	0	0	30	30	30	30	30	0	0	0	3	24180,27004	https://oldschool.runescape.wiki/w/Elite_void_robe#Normal	locked and (l)(or) share the stats
 1127	ITEM_RUNE_PLATEBODY	Rune platebody	body	0	0	0	none	0	0	0	-30	-15	82	80	72	-6	80	0	0	0	0		https://oldschool.runescape.wiki/w/Rune_platebody	
 24271	ITEM_NEITIZNOT_FACEGUARD	Neitiznot faceguard	head	0	0	0	none	0	0	0	0	0	36	34	38	3	34	6	0	0	3		https://oldschool.runescape.wiki/w/Neitiznot_faceguard	
 28474	ITEM_ICE_ANCIENT_SCEPTRE_L	Ice ancient sceptre (l)	weapon	0	4	10	magic	20	-1	50	20	0	2	3	1	15	0	60	0	10	-1	27626	https://oldschool.runescape.wiki/w/Ice_ancient_sceptre#Locked	magic range 10 as the hand staff rows
@@ -43,7 +43,26 @@ raw_id	enum	name	slot	two_handed	attack_speed	attack_range	style	attack_stab	att
 22804	ITEM_DRAGON_KNIFE	Dragon knife	weapon	0	3	4	ranged	0	0	0	0	28	0	0	0	0	0	0	30	0	0	22810	https://oldschool.runescape.wiki/w/Dragon_knife#(unp)	
 25416	ITEM_BLOODBARK_LEGS	Bloodbark legs	legs	0	0	0	none	0	0	0	16	0	33	31	38	17	0	0	0	1	0		https://oldschool.runescape.wiki/w/Bloodbark_legs	
 11838	ITEM_SARADOMIN_SWORD	Saradomin sword	weapon	1	4	1	melee	0	82	60	0	0	0	0	0	0	0	82	0	0	2		https://oldschool.runescape.wiki/w/Saradomin_sword	special Saradomin's Lightning in osrs_special_attacks.h
-4401	ITEM_TEAM_44_CAPE	Team-44 cape	cape	0	0	0	none	0	0	0	0	0	0	1	1	0	2	0	0	0	0		https://oldschool.runescape.wiki/w/Team-44_cape	
+4401	ITEM_TEAM_44_CAPE	Team-44 cape	cape	0	0	0	none	0	0	0	0	0	0	1	1	0	2	0	0	0	0	3763,1007	https://oldschool.runescape.wiki/w/Team-44_cape	Fremennik blue cloak and Red cape share the stats
 8839	ITEM_VOID_KNIGHT_TOP	Void knight top	body	0	0	0	none	0	0	0	0	0	45	45	45	45	45	0	0	0	0	24177	https://oldschool.runescape.wiki/w/Void_knight_top#Normal	
 8840	ITEM_VOID_KNIGHT_ROBE	Void knight robe	legs	0	0	0	none	0	0	0	0	0	30	30	30	30	30	0	0	0	0	24179	https://oldschool.runescape.wiki/w/Void_knight_robe#Normal	
 11126	ITEM_COMBAT_BRACELET	Combat bracelet	hands	0	0	0	none	7	7	7	3	7	5	5	5	3	5	6	0	0	0	11118,11120,11122,11124,11972,11974	https://oldschool.runescape.wiki/w/Combat_bracelet	
+29289	ITEM_MIXED_HIDE_CAPE	Mixed hide cape	cape	0	0	0	none	0	0	0	-15	5	2	2	2	5	1	1	0	0	0		https://oldschool.runescape.wiki/w/Mixed_hide_cape	
+11664	ITEM_VOID_RANGER_HELM	Void ranger helm	head	0	0	0	none	0	0	0	0	0	6	6	6	6	6	0	0	0	0	24184,27006	https://oldschool.runescape.wiki/w/Void_ranger_helm#Normal	
+33639	ITEM_NECKLACE_OF_RUPTURE	Necklace of rupture	neck	0	0	0	none	0	0	0	0	20	0	0	0	0	0	0	8	0	3		https://oldschool.runescape.wiki/w/Necklace_of_rupture	
+12610	ITEM_BOOK_OF_LAW	Book of Law	shield	0	0	0	none	0	0	0	0	10	0	0	0	0	0	0	0	0	5		https://oldschool.runescape.wiki/w/Book_of_Law	
+21000	ITEM_TWISTED_BUCKLER	Twisted buckler	shield	0	0	0	none	-7	-8	-7	-10	18	22	24	22	26	58	0	10	0	0		https://oldschool.runescape.wiki/w/Twisted_buckler	
+29286	ITEM_MIXED_HIDE_BOOTS	Mixed hide boots	feet	0	0	0	none	0	0	0	-10	5	4	5	6	3	3	2	0	0	0		https://oldschool.runescape.wiki/w/Mixed_hide_boots	
+21733	ITEM_GUARDIAN_BOOTS	Guardian boots	feet	0	0	0	none	0	0	0	-3	-1	32	32	32	-3	24	3	0	0	2		https://oldschool.runescape.wiki/w/Guardian_boots	
+1013	ITEM_PINK_SKIRT	Pink skirt	legs	0	0	0	none	0	0	0	0	0	0	0	0	0	0	0	0	0	0		https://oldschool.runescape.wiki/w/Pink_skirt	
+31095	ITEM_AVERNIC_TREADS_PR_ET	Avernic treads (pr)(et)	feet	0	0	0	none	5	5	5	11	15	21	25	25	10	10	6	2	2	0		https://oldschool.runescape.wiki/w/Avernic_treads_(pr)(et)	
+6130	ITEM_ROCK_SHELL_LEGS	Rock-shell legs	legs	0	0	0	none	0	0	0	-21	-7	51	49	47	-4	49	0	0	0	0		https://oldschool.runescape.wiki/w/Rock-shell_legs	
+3751	ITEM_BERSERKER_HELM	Berserker helm	head	0	0	0	none	0	0	0	-5	-5	31	29	33	0	30	3	0	0	0		https://oldschool.runescape.wiki/w/Berserker_helm	
+23389	ITEM_SPIKED_MANACLES	Spiked manacles	feet	0	0	0	none	0	0	0	-3	-1	0	0	0	-4	0	4	0	0	0		https://oldschool.runescape.wiki/w/Spiked_manacles	
+19641	ITEM_BLACK_SLAYER_HELMET_I	Black slayer helmet (i)	head	0	0	0	none	0	0	0	3	3	30	32	27	10	30	0	0	0	0		https://oldschool.runescape.wiki/w/Black_slayer_helmet_(i)#Nightmare_Zone	
+29283	ITEM_MIXED_HIDE_LEGS	Mixed hide legs	legs	0	0	0	none	3	-1	-2	-10	14	20	23	22	16	20	0	0	0	0		https://oldschool.runescape.wiki/w/Mixed_hide_legs	
+22284	ITEM_BLACK_DHIDE_SHIELD	Black d'hide shield	shield	0	0	0	none	-15	-15	-11	-10	7	21	18	16	15	14	0	0	0	0		https://oldschool.runescape.wiki/w/Black_d'hide_shield	
+27021	ITEM_COLOSSAL_BLADE	Colossal blade	weapon	1	6	1	melee	-4	98	65	-4	0	0	0	0	0	-1	100	0	0	0		https://oldschool.runescape.wiki/w/Colossal_blade	
+4749	ITEM_TORAGS_PLATEBODY	Torag's platebody	body	0	0	0	none	0	0	0	-30	-10	122	120	107	-6	132	0	0	0	0	4964,4965,4966,4967	https://oldschool.runescape.wiki/w/Torag's_platebody#Undamaged	degraded 100-25 variants share the undamaged stats
+10887	ITEM_BARRELCHEST_ANCHOR	Barrelchest anchor	weapon	1	6	1	melee	-2	10	92	0	0	0	0	0	0	0	100	0	0	0		https://oldschool.runescape.wiki/w/Barrelchest_anchor#Fixed	special Sunder (50%) not modelled: no special
+30955	ITEM_ARKAN_BLADE	Arkan blade	weapon	0	4	1	melee	55	70	0	0	0	0	0	0	0	0	64	0	0	1		https://oldschool.runescape.wiki/w/Arkan_blade	special Flames of Ralos (30%) not modelled: no special

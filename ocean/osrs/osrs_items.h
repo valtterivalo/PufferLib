@@ -69,7 +69,7 @@ typedef struct {
 /* Rows after the fixed table hold items the sim has no hand-written row for, priced from their stats at run time (gearswapper/gs_stat_items.h
  * fills them from the Java item table: bonuses, speed, style, two-handedness; no special attack, no effects). The table is rewritten only at a
  * request boundary (osrs_stat_items_clear), never while worlds run. */
-#define OSRS_STAT_ITEM_SLOTS 53 /* NUM_ITEMS + slots must stay below ITEM_NONE (255); 80 before the 27 wiki rows */
+#define OSRS_STAT_ITEM_SLOTS 40 /* NUM_ITEMS + slots must stay below ITEM_NONE (255); 40 is the floor scripts/gen_osrs_item_rows.py keeps */
 #include "osrs_items_generated.h"
 
 static int osrs_stat_item_count;
@@ -104,6 +104,11 @@ static inline int osrs_stat_item_register(const Item* row, int attack_style) {
  * Torag's platelegs 100, Strength amulet (t), Dragon dagger (unp), Dark bow (yellow), Imbued Guthix cape (stats of the imbued Zamorak cape row),
  * Climbing boots (g), Fighter torso (l), Bow of Faerdhinen (c) both colours, Abyssal tentacle (or), Heavy ballista (or), Ghommal's avernic defender 5,
  * Morrigan's javelin (bh), Dragon platelegs (cr), Dizana's quiver / max cape (l) / blessed quiver (l) (passive quiver bonus), Armadyl godsword (Deadman).
+ * The block after Armadyl godsword (Deadman) maps riskfight pool ids whose wiki Combat stats (and weapon speed) equal the row's: Dizana's quiver (l),
+ * Blessed Dizana's quiver, Dizana's max cape; Verac's helm, Karil's leathertop, Torag's helm 100; Dragon dart(p++); Imbued ancient cape, Imbued Zamorak
+ * cape (Deadman), Imbued Zamorak max cape; Crystal body / legs variants; Ghommal's avernic defender 6; Rune platelegs (t), Rune plateskirt; Zamorak and
+ * Bandos d'hide boots; Masori assembler; Amulet of fury (or); Amulet of glory (t3, t6); Elidinis' ward (or); Infernal max cape; Fire max cape; Magma helm;
+ * Black d'hide chaps (g); Mystic (light) set.
  * Aliases to the wiki rows are generated: OSRS_ITEM_WIKI_ALIAS_ROWS. */
 #define OSRS_ITEM_RAW_GEAR_ALIAS_ROWS(X) \
     X(1704, ITEM_GLORY) \
@@ -140,6 +145,29 @@ static inline int osrs_stat_item_register(const Item* row, int attack_style) {
     X(28061, ITEM_DRAGON_PLATELEGS) \
     X(28906, ITEM_DIZANAS_QUIVER) X(28951, ITEM_DIZANAS_QUIVER) X(28957, ITEM_DIZANAS_QUIVER) \
     X(29605, ITEM_AGS) \
+    X(21780, ITEM_GOD_CAPE) X(29613, ITEM_GOD_CAPE) X(34633, ITEM_GOD_CAPE) \
+    X(10356, ITEM_GLORY) X(11964, ITEM_GLORY) \
+    X(4111, ITEM_MYSTIC_TOP) \
+    X(1093, ITEM_RUNE_PLATELEGS) X(2625, ITEM_RUNE_PLATELEGS) \
+    X(4113, ITEM_MYSTIC_BOTTOM) \
+    X(4940, ITEM_KARILS_TOP) \
+    X(12436, ITEM_FURY) \
+    X(21285, ITEM_INFERNAL_CAPE) \
+    X(4952, ITEM_TORAGS_HELM) \
+    X(4976, ITEM_VERACS_HELM) \
+    X(27253, ITEM_ELIDINIS_WARD_F) \
+    X(28902, ITEM_DIZANAS_QUIVER) X(28953, ITEM_DIZANAS_QUIVER) X(28955, ITEM_DIZANAS_QUIVER) \
+    X(27374, ITEM_AVAS_ASSEMBLER) \
+    X(27697, ITEM_CRYSTAL_BODY) X(27733, ITEM_CRYSTAL_BODY) \
+    X(27701, ITEM_CRYSTAL_LEGS) X(27713, ITEM_CRYSTAL_LEGS) \
+    X(19924, ITEM_BLESSED_DHIDE_BOOTS) X(19936, ITEM_BLESSED_DHIDE_BOOTS) \
+    X(4109, ITEM_MYSTIC_HAT) \
+    X(4117, ITEM_MYSTIC_BOOTS) \
+    X(12383, ITEM_BLACK_DHIDE_CHAPS) \
+    X(11234, ITEM_DRAGON_DART) \
+    X(27552, ITEM_AVERNIC_DEFENDER) \
+    X(13199, ITEM_SERPENTINE_HELM) \
+    X(13329, ITEM_FIRE_CAPE) \
     OSRS_ITEM_WIKI_ALIAS_ROWS(X)
 
 static inline int osrs_item_index_from_raw_id(int raw) {

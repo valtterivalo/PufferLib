@@ -2,7 +2,7 @@
 #ifndef OSRS_ITEMS_WIKI_ROWS_H
 #define OSRS_ITEMS_WIKI_ROWS_H
 
-#define OSRS_ITEM_WIKI_ROW_COUNT 32
+#define OSRS_ITEM_WIKI_ROW_COUNT 51
 
 /* X(enum, raw_id, name, slot, two_handed, speed, range, attack_style, attack stab/slash/crush/magic/ranged, defence stab/slash/crush/magic/ranged,
  *   melee_strength, ranged_strength, magic_damage, prayer); attack_style: 0 none, 1 melee, 2 ranged, 3 magic (get_item_attack_style). */
@@ -39,14 +39,40 @@
     X(ITEM_VOID_KNIGHT_TOP, 8839, "Void knight top", SLOT_BODY, 0, 0, 0, 0, 0, 0, 0, 0, 0, 45, 45, 45, 45, 45, 0, 0, 0, 0) \
     X(ITEM_VOID_KNIGHT_ROBE, 8840, "Void knight robe", SLOT_LEGS, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30, 30, 30, 30, 30, 0, 0, 0, 0) \
     X(ITEM_COMBAT_BRACELET, 11126, "Combat bracelet", SLOT_HANDS, 0, 0, 0, 0, 7, 7, 7, 3, 7, 5, 5, 5, 3, 5, 6, 0, 0, 0) \
+    X(ITEM_MIXED_HIDE_CAPE, 29289, "Mixed hide cape", SLOT_CAPE, 0, 0, 0, 0, 0, 0, 0, -15, 5, 2, 2, 2, 5, 1, 1, 0, 0, 0) \
+    X(ITEM_VOID_RANGER_HELM, 11664, "Void ranger helm", SLOT_HEAD, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 6, 6, 0, 0, 0, 0) \
+    X(ITEM_NECKLACE_OF_RUPTURE, 33639, "Necklace of rupture", SLOT_NECK, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 8, 0, 3) \
+    X(ITEM_BOOK_OF_LAW, 12610, "Book of Law", SLOT_SHIELD, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 5) \
+    X(ITEM_TWISTED_BUCKLER, 21000, "Twisted buckler", SLOT_SHIELD, 0, 0, 0, 0, -7, -8, -7, -10, 18, 22, 24, 22, 26, 58, 0, 10, 0, 0) \
+    X(ITEM_MIXED_HIDE_BOOTS, 29286, "Mixed hide boots", SLOT_FEET, 0, 0, 0, 0, 0, 0, 0, -10, 5, 4, 5, 6, 3, 3, 2, 0, 0, 0) \
+    X(ITEM_GUARDIAN_BOOTS, 21733, "Guardian boots", SLOT_FEET, 0, 0, 0, 0, 0, 0, 0, -3, -1, 32, 32, 32, -3, 24, 3, 0, 0, 2) \
+    X(ITEM_PINK_SKIRT, 1013, "Pink skirt", SLOT_LEGS, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) \
+    X(ITEM_AVERNIC_TREADS_PR_ET, 31095, "Avernic treads (pr)(et)", SLOT_FEET, 0, 0, 0, 0, 5, 5, 5, 11, 15, 21, 25, 25, 10, 10, 6, 2, 2, 0) \
+    X(ITEM_ROCK_SHELL_LEGS, 6130, "Rock-shell legs", SLOT_LEGS, 0, 0, 0, 0, 0, 0, 0, -21, -7, 51, 49, 47, -4, 49, 0, 0, 0, 0) \
+    X(ITEM_BERSERKER_HELM, 3751, "Berserker helm", SLOT_HEAD, 0, 0, 0, 0, 0, 0, 0, -5, -5, 31, 29, 33, 0, 30, 3, 0, 0, 0) \
+    X(ITEM_SPIKED_MANACLES, 23389, "Spiked manacles", SLOT_FEET, 0, 0, 0, 0, 0, 0, 0, -3, -1, 0, 0, 0, -4, 0, 4, 0, 0, 0) \
+    X(ITEM_BLACK_SLAYER_HELMET_I, 19641, "Black slayer helmet (i)", SLOT_HEAD, 0, 0, 0, 0, 0, 0, 0, 3, 3, 30, 32, 27, 10, 30, 0, 0, 0, 0) \
+    X(ITEM_MIXED_HIDE_LEGS, 29283, "Mixed hide legs", SLOT_LEGS, 0, 0, 0, 0, 3, -1, -2, -10, 14, 20, 23, 22, 16, 20, 0, 0, 0, 0) \
+    X(ITEM_BLACK_DHIDE_SHIELD, 22284, "Black d'hide shield", SLOT_SHIELD, 0, 0, 0, 0, -15, -15, -11, -10, 7, 21, 18, 16, 15, 14, 0, 0, 0, 0) \
+    X(ITEM_COLOSSAL_BLADE, 27021, "Colossal blade", SLOT_WEAPON, 1, 6, 1, 1, -4, 98, 65, -4, 0, 0, 0, 0, 0, -1, 100, 0, 0, 0) \
+    X(ITEM_TORAGS_PLATEBODY, 4749, "Torag's platebody", SLOT_BODY, 0, 0, 0, 0, 0, 0, 0, -30, -10, 122, 120, 107, -6, 132, 0, 0, 0, 0) \
+    X(ITEM_BARRELCHEST_ANCHOR, 10887, "Barrelchest anchor", SLOT_WEAPON, 1, 6, 1, 1, -2, 10, 92, 0, 0, 0, 0, 0, 0, 0, 100, 0, 0, 0) \
+    X(ITEM_ARKAN_BLADE, 30955, "Arkan blade", SLOT_WEAPON, 0, 4, 1, 1, 55, 70, 0, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 1) \
 
 /* X(raw_id, enum): ids that share the stats of a wiki row (charged and ornament variants). */
 #define OSRS_ITEM_WIKI_ALIAS_ROWS(X) \
     X(13269, ITEM_ABYSSAL_DAGGER_P_PLUS_PLUS) \
     X(24182, ITEM_VOID_KNIGHT_GLOVES) \
+    X(27002, ITEM_VOID_KNIGHT_GLOVES) \
     X(24185, ITEM_VOID_MELEE_HELM) \
+    X(24178, ITEM_ELITE_VOID_TOP) \
+    X(27003, ITEM_ELITE_VOID_TOP) \
+    X(24180, ITEM_ELITE_VOID_ROBE) \
+    X(27004, ITEM_ELITE_VOID_ROBE) \
     X(27626, ITEM_ICE_ANCIENT_SCEPTRE_L) \
     X(22810, ITEM_DRAGON_KNIFE) \
+    X(3763, ITEM_TEAM_44_CAPE) \
+    X(1007, ITEM_TEAM_44_CAPE) \
     X(24177, ITEM_VOID_KNIGHT_TOP) \
     X(24179, ITEM_VOID_KNIGHT_ROBE) \
     X(11118, ITEM_COMBAT_BRACELET) \
@@ -55,5 +81,11 @@
     X(11124, ITEM_COMBAT_BRACELET) \
     X(11972, ITEM_COMBAT_BRACELET) \
     X(11974, ITEM_COMBAT_BRACELET) \
+    X(24184, ITEM_VOID_RANGER_HELM) \
+    X(27006, ITEM_VOID_RANGER_HELM) \
+    X(4964, ITEM_TORAGS_PLATEBODY) \
+    X(4965, ITEM_TORAGS_PLATEBODY) \
+    X(4966, ITEM_TORAGS_PLATEBODY) \
+    X(4967, ITEM_TORAGS_PLATEBODY) \
 
 #endif
