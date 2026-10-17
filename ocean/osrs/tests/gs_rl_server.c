@@ -250,6 +250,78 @@ static int rt_records(const int* actions, const RiskfightState* s, RtRecord* out
     return n;
 }
 
+/* Centre-to-centre distance between two bag slots on the client (4 columns x 7 rows, slot = row * 4 + col, pitch 42 px across and 36 px down). */
+static double rt_slot_distance(int a, int b) {
+    return hypot(42.0 * (a % 4 - b % 4), 36.0 * (a / 4 - b / 4));
+}
+
+/* Which physical copy of a consumable the client clicks. The net picks a canonical bag entry, and among identical copies (same content code) the one it maps to is
+ * arbitrary; the cursor has to travel to it, and a triple eat (hard food, potion, karambwan) must land all three clicks inside one tick. The sim's motor model does not
+ * see slot geometry, so this is a live-only choice that leaves the net's decision (which item) alone and moves only the click (which copy), over the CLICK_SLOT records
+ * of `records` that land on an eat or drink item:
+ * - two or more CLICK_SLOT records in the batch: the copies that minimise the summed rt_slot_distance between consecutive CLICK_SLOT records in record order (gear,
+ *   hard food, potion, karambwan, teleport), searched exactly; gear and teleport clicks stay where they are and anchor the path; no two clicks share a slot; ties go to
+ *   the lowest slots;
+ * - a single eat click (hard food, karambwan): the copy whose distance to the nearest drink slot (brew, restore, combat, any potion) is largest, keeping the copies next
+ *   to the potions for the triple eats; ties go to the lowest slot;
+ * - anything else (a lone potion, gear, a teleport, unequips) is unchanged. */
+static void rt_choose_copies(const Player* p, RtRecord* records, int count) {
+    enum { MOVABLE = 3 };
+    const OsrsInventoryCell* cells = p->inventory_cells;
+    int click[GS_WIRE_MAX_RECORDS], slot[GS_WIRE_MAX_RECORDS], clicks = 0;
+    for (int i = 0; i < count; i++)
+        if (records[i].kind == GS_WIRE_CLICK_SLOT) { click[clicks] = i; slot[clicks++] = records[i].arg; }
+    int movable[GS_WIRE_MAX_RECORDS], moves = 0;
+    for (int c = 0; c < clicks; c++) {
+        int action = osrs_inventory_cell_metadata(&cells[slot[c]])->click_action;
+        if (action == OSRS_CLICK_EAT || action == OSRS_CLICK_DRINK) movable[moves++] = c;
+    }
+    if (moves == 0) return;
+    if (clicks == 1) {
+        if (osrs_inventory_cell_metadata(&cells[slot[0]])->click_action != OSRS_CLICK_EAT) return;
+        int best = -1;
+        double best_gap = -1;
+        for (int s = 0; s < OSRS_INVENTORY_SIZE; s++) {
+            if (cells[s].content_code != cells[slot[0]].content_code) continue;
+            double gap = INFINITY;
+            for (int d = 0; d < OSRS_INVENTORY_SIZE; d++)
+                if (osrs_inventory_cell_metadata(&cells[d])->click_action == OSRS_CLICK_DRINK) gap = fmin(gap, rt_slot_distance(s, d));
+            if (gap > best_gap) { best_gap = gap; best = s; }
+        }
+        records[click[0]].arg = best;
+        return;
+    }
+    assert(moves <= MOVABLE); /* one per meal head: food, drink, combo */
+    int fixed[OSRS_INVENTORY_SIZE] = {0};
+    for (int c = 0; c < clicks; c++) fixed[slot[c]] = 1;
+    for (int m = 0; m < moves; m++) fixed[slot[movable[m]]] = 0;
+    int candidates[MOVABLE][OSRS_INVENTORY_SIZE], options[MOVABLE];
+    for (int m = 0; m < moves; m++) {
+        options[m] = 0;
+        for (int s = 0; s < OSRS_INVENTORY_SIZE; s++)
+            if (!fixed[s] && cells[s].content_code == cells[slot[movable[m]]].content_code) candidates[m][options[m]++] = s;
+    }
+    int pick[MOVABLE] = {0}, best_slot[GS_WIRE_MAX_RECORDS];
+    double best = INFINITY;
+    for (;;) {
+        int trial[GS_WIRE_MAX_RECORDS], distinct = 1;
+        memcpy(trial, slot, sizeof(int) * (size_t)clicks);
+        for (int m = 0; m < moves; m++) {
+            trial[movable[m]] = candidates[m][pick[m]];
+            for (int k = 0; k < m; k++) distinct &= trial[movable[k]] != trial[movable[m]];
+        }
+        if (distinct) {
+            double path = 0;
+            for (int c = 1; c < clicks; c++) path += rt_slot_distance(trial[c - 1], trial[c]);
+            if (path < best) { best = path; memcpy(best_slot, trial, sizeof(int) * (size_t)clicks); }
+        }
+        int m = moves - 1;
+        while (m >= 0 && ++pick[m] == options[m]) pick[m--] = 0;
+        if (m < 0) break;
+    }
+    for (int c = 0; c < clicks; c++) records[click[c]].arg = best_slot[c];
+}
+
 /* One tick: snapshot, our exact state, the visible-opponent state this server owns, the net, the clicks. Returns micros. */
 static double rt_decide(Request* q, const RtSeen* seen, int new_fight, int fight_start, RtRecord* records, int* count) {
     double started = la_seconds();
@@ -297,6 +369,7 @@ static double rt_decide(Request* q, const RtSeen* seen, int new_fight, int fight
     else memset(actions, 0, sizeof(actions));
     riskfight_bag_to_physical(us, actions); /* the net picks entries of the canonical bag; the client clicks the slot that holds it */
     *count = rt_records(actions, s, records);
+    rt_choose_copies(us, records, *count); /* which copy of that item the client clicks: rt_choose_copies */
     return (la_seconds() - started) * 1e6;
 }
 
