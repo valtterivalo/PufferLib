@@ -18,13 +18,15 @@ typedef struct {
 /** Slot order as it is: what the scripts read (riskfight_write_script_observation). */
 static const RiskfightBagOrder RF_BAG_PHYSICAL = {{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27}};
 
+/* The bag key keeps the slot in 5 bits; a typedef so the check compiles as C and as CUDA C++. */
+typedef char riskfight_bag_slot_fits_5_bits[OSRS_INVENTORY_SIZE <= 32 ? 1 : -1];
+
 static inline uint32_t riskfight_bag_key(const OsrsInventoryCell* cells, int slot) {
     uint32_t code = cells[slot].content_code;
     return ((code == 0 ? (uint32_t)UINT16_MAX + 1 : code) << 5) | (uint32_t)slot;
 }
 
 static inline RiskfightBagOrder riskfight_bag_order(const Player* p) {
-    _Static_assert(OSRS_INVENTORY_SIZE <= 32, "the bag key keeps the slot in 5 bits");
     const OsrsInventoryCell* cells = p->inventory_cells;
     RiskfightBagOrder order;
     uint32_t keys[OSRS_INVENTORY_SIZE];
