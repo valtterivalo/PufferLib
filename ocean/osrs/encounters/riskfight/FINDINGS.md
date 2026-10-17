@@ -186,3 +186,21 @@ Live, s6t0 drank super restores at full prayer with nothing drained (prayer 87-9
 - **The scripted opponent now does the hit + maul combo** (`riskfight_script_combo`, `test_riskfight_combo`). Before, `riskfight_script` picked one weapon per tick and never followed a hit with a maul special.
   - Live timing (s1437, game ticks 440-441): axe animation and our 54 hitsplat on 440, then the maul's 1667 and its 0 + 23 on 441. In the tapes, 18 of 29 maul specials come exactly one tick after his swing; none is detectable on the swing's own tick. The engine cannot do it on one tick either: inputs resolve before the actor-pass swing, so a maul switch on the swing's tick cancels the axe swing. So the script swings on tick t and mauls on t + 1, using the existing instant path (equip, k special clicks, target click). Both land on t + 1 when we hold the PID.
   - Rate per swing, by margin = our HP before his swing - (opening max + k x maul spec max) (`scripts/measure_combos.py`, `tests/combo_tapes.c`, 123 fights; 263 swings of fighters who mauled in that fight, with energy for one maul special): margin < -40: 8/111 (72 per mille); -40 to 0: 3/146 (21); >= 0: 0/6. 10 of the 11 combos were k = 2 (100 energy, ornate maul).
+
+## 2026-10-18, s7t18 live (run-20261017T211323Z.1437, 5 fights): pies, STOP, a near death
+
+- **Pies and STOP are learned preferences, not a sim/live mismatch.** In the sim (s7t18, 4,573 fights, argmax) the net bit a pie 0.18 times per pie-kit fight and took 11% pies among the food choices of a pie bag (pies are 29% of its hard food). It used STOP while attacking on 0.30% of attacking steps. Live rates on this session predict about 0.5 pie bites and 0.6 STOPs: seeing none is consistent. STOP can pay in the engine (the timer runs on, and re-attacking swings on a chosen tick), but the net has learned almost no use for holding a swing.
+- **Near death in fight 411 (98 to 8 HP):**
+  - He hit 71 with the axe at tick 435, 54 at 440, then a double maul special at 441 (0 + 23).
+  - Our triple eat at 438 (angler, restore, karambwan) lost the karambwan to the next tick. The clicks landed at +281, +462 and +679 ms against a ~480 ms server cutoff, so the karambwan came alone at 439 and re-armed all three timers through 442.
+  - Across the recordings since 10-15, batches of 3 clicks miss the tick 60% of the time by the client's tick and ~100% by the 480 ms cutoff. The sweep trains with the motor model (`--env.motor=1`, riskfight_motor.h, fitted on 11,202 clicks, first/second/third click at 261/437/639 ms), so the net trains with this. The live order (karambwan last) is what lost the karambwan.
+- **The Saradomin sword had no item row:**
+  - his main weapon got no threat slot live;
+  - the 2 pool kits with it were dropped.
+
+  Fixed with the sword (Saradomin's Lightning implemented per the wiki), 4 more item rows and 39 aliases (bd940cb02); the pool went from 273 to 342 kits. 148 raws still have no row: the uint8 item index is full (NUM_ITEMS 214, stat slots at the 40 floor). The item content code scale is now 512.
+- **The sim's opponents never did the combo:**
+  - Axe kits are scripted, one weapon per tick.
+  - Live, the combo is an axe swing at t, then maul special(s) at t+1. 18 of 29 recorded maul specials came one tick after his swing, and none on the swing tick.
+  - Measured on the user's 123 fights, 11 combos in 1,730 eligible swings. Rate per swing: 7.2% when our HP is more than 40 below his combo max, 2.1% from -40 to 0, never above it.
+  - The script now does it at those rates (d73aa408a, scripts/measure_combos.py).
