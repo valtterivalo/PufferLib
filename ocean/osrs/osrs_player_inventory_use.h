@@ -42,6 +42,19 @@ static inline int osrs_player_self_damage(Player* p, int damage, int hp_floor) {
     return dealt;
 }
 
+/** The food an eat click of `kind` eats. */
+static inline FoodType osrs_consumable_food_type(OsrsConsumableKind kind) {
+    switch (kind) {
+        case OSRS_CONSUMABLE_MARLIN: return FOOD_MARLIN;
+        case OSRS_CONSUMABLE_HALIBUT: return FOOD_HALIBUT;
+        case OSRS_CONSUMABLE_SUMMER_PIE: return FOOD_SUMMER_PIE;
+        case OSRS_CONSUMABLE_SHARK_FOOD: return FOOD_SHARK;
+        case OSRS_CONSUMABLE_ANGLERFISH: return FOOD_ANGLERFISH;
+        case OSRS_CONSUMABLE_KARAMBWAN: return FOOD_KARAMBWAN;
+        default: abort();
+    }
+}
+
 static inline void osrs_player_inventory_drink_effect(void* player, OsrsConsumableKind kind) {
     Player* p = (Player*)player;
     switch (kind) {
@@ -92,23 +105,12 @@ static inline OsrsInventoryUseResult osrs_player_use_inventory_with_food_clock(
                 return OSRS_INVENTORY_USE_NONE;
             osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_EQUIP);
             return OSRS_INVENTORY_USE_CONSUMED;
-        case OSRS_CLICK_EAT: {
-            FoodType food;
-            switch (kind) {
-                case OSRS_CONSUMABLE_MARLIN: food = FOOD_MARLIN; break;
-                case OSRS_CONSUMABLE_HALIBUT: food = FOOD_HALIBUT; break;
-                case OSRS_CONSUMABLE_SUMMER_PIE: food = FOOD_SUMMER_PIE; break;
-                case OSRS_CONSUMABLE_SHARK_FOOD: food = FOOD_SHARK; break;
-                case OSRS_CONSUMABLE_ANGLERFISH: food = FOOD_ANGLERFISH; break;
-                case OSRS_CONSUMABLE_KARAMBWAN: food = FOOD_KARAMBWAN; break;
-                default: abort();
-            }
-            if (!osrs_player_eat_food_effects_with_clock(p, food, clock).consumed)
+        case OSRS_CLICK_EAT:
+            if (!osrs_player_eat_food_effects_with_clock(p, osrs_consumable_food_type(kind), clock).consumed)
                 return OSRS_INVENTORY_USE_NONE;
             osrs_inventory_cell_consume_eat(cell);
             osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_EAT);
             return OSRS_INVENTORY_USE_CONSUMED;
-        }
         case OSRS_CLICK_DRINK: {
             if (kind == OSRS_CONSUMABLE_DIVINE_COMBAT &&
                 p->current_hitpoints <= OSRS_DIVINE_DAMAGE) return OSRS_INVENTORY_USE_NONE;

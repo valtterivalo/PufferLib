@@ -151,3 +151,10 @@ On the live trace (fight from tick 75), s4t0 never teleports, but on tick 75 it 
   - the opening drink is a super restore. It starts at 121 HP, so a brew was drunk before the fight and drained attack and strength; the restore undoes that drain. It is not wasted on 89/99 prayer, as I first reported (the user corrected this).
 
   Installed 2026-10-17.
+
+## 2026-10-17, useful consumables only (branch useful-consumables)
+
+Live, s6t0 drank super restores at full prayer with nothing drained (prayer 87-90 of 90, every stat at its boosted 118). Two causes:
+- **The mask offered every drink and every karambwan.** `riskfight_consumable_useful` now gates the drink, food and combo heads. Restores (super restore, sanfew; blighted ids map to the plain kinds) are offered when a level they restore is below base, or prayer is missing at least the dose's restore (`osrs_consumable_prayer_restore_amount`); a prayer potion only on the prayer rule. Boosts (super combat, divine, ranging) are offered when a level they boost is below base + boost. A brew is offered when hitpoints or defence is below its cap; drained attack and strength are no reason. A meal is offered when it heals something (`osrs_eat_food`): below base, or an anglerfish outside the overheal lock below base + 22. Partial waste stays allowed. `RiskfightMaskKey` carries one useful bit per bag slot.
+- **The sim's prayer level was 99.** Both seats (and so the live server, whose snapshot has no recorded levels for us) had base prayer 99, while the user's is 90. `RF_PRAYER_LEVEL` = 90 now, for both seats, since in self-play either seat plays the user.
+- On the live trace (ticks 123-174, `rl_explain`, s6t0), the net's restore drinks fell from 13 to 0; wholly wasted meals stayed at 0.

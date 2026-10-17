@@ -197,6 +197,44 @@ __attribute__((constructor)) static void riskfight_build_mask_template(void) {
     assert(offset == RF_MASK_SIZE);
 }
 
+/** Whether eating or drinking a bag consumable of `kind` now would change something (the user's rule), from the engine's own effect code:
+ * - super restore, sanfew: a level it restores (attack, strength, defence, ranged, magic: encounter_apply_stat_restore) below base, or prayer missing at least the dose's prayer restore;
+ *   prayer potion: that prayer rule alone (osrs_consumable_prayer_restore_amount, the amount osrs_player_inventory_drink_effect adds);
+ * - super combat, divine super combat, ranging: a level it boosts below base + its boost (encounter_super_combat_boost, encounter_ranging_boost);
+ * - brew: hitpoints below base + its heal or defence below base + its boost (encounter_apply_brew_heal, encounter_brew_drain_stats); the drain of the others is no reason;
+ * - food, karambwan: a heal above 0 (osrs_eat_food: below base, an anglerfish outside the overheal lock below base + 22); a partial heal counts.
+ * A drink the riskfight engine gives no effect (osrs_player_inventory_drink_effect aborts on it) is never useful. */
+static int riskfight_consumable_useful(const Player* p, OsrsConsumableKind kind) {
+    switch (kind) {
+        case OSRS_CONSUMABLE_SUPER_RESTORE:
+        case OSRS_CONSUMABLE_SANFEW:
+            if (p->current_attack < p->base_attack || p->current_strength < p->base_strength || p->current_defence < p->base_defence ||
+                p->current_ranged < p->base_ranged || p->current_magic < p->base_magic) return 1;
+            /* fall through: the prayer rule */
+        case OSRS_CONSUMABLE_PRAYER_RESTORE:
+            return p->base_prayer - p->current_prayer >= osrs_consumable_prayer_restore_amount(kind, p->base_prayer);
+        case OSRS_CONSUMABLE_SUPER_COMBAT:
+        case OSRS_CONSUMABLE_DIVINE_COMBAT:
+            return p->current_attack < p->base_attack + osrs_super_combat_boost_amount(p->base_attack) ||
+                p->current_strength < p->base_strength + osrs_super_combat_boost_amount(p->base_strength) ||
+                p->current_defence < p->base_defence + osrs_super_combat_boost_amount(p->base_defence);
+        case OSRS_CONSUMABLE_RANGING:
+            return p->current_ranged < p->base_ranged + osrs_ranging_boost_amount(p->base_ranged);
+        case OSRS_CONSUMABLE_BREW:
+            return p->current_hitpoints < p->base_hitpoints + osrs_brew_heal_amount(p->base_hitpoints) ||
+                p->current_defence < p->base_defence + osrs_brew_defence_boost_amount(p->base_defence);
+        case OSRS_CONSUMABLE_MARLIN:
+        case OSRS_CONSUMABLE_HALIBUT:
+        case OSRS_CONSUMABLE_SUMMER_PIE:
+        case OSRS_CONSUMABLE_SHARK_FOOD:
+        case OSRS_CONSUMABLE_ANGLERFISH:
+        case OSRS_CONSUMABLE_KARAMBWAN:
+            return osrs_eat_food(osrs_consumable_food_type(kind), p->current_hitpoints, p->base_hitpoints, 0, p->pvp_overheal_block > 0).hp_healed > 0;
+        default:
+            return 0;
+    }
+}
+
 /** The net's mask: its bag actions index the canonical order of riskfight_bag.h. */
 static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsigned char* mask) {
     const Player* p = &s->env.players[agent];
@@ -230,11 +268,12 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
         }
         if (m->click_action == OSRS_CLICK_EAT) {
             int head = m->consumable_kind == OSRS_CONSUMABLE_HALIBUT || m->consumable_kind == OSRS_CONSUMABLE_KARAMBWAN ? RF_COMBO : RF_FOOD;
-            /* An anglerfish at full hitpoints inside the PvP overheal lock heals nothing (the lock only forbids the overheal), like a shark at full: not offered. */
-            int wasted = m->consumable_kind == OSRS_CONSUMABLE_ANGLERFISH && p->pvp_overheal_block > 0 && p->current_hitpoints >= p->base_hitpoints;
-            heads[head][entry + 1] = !wasted && osrs_can_eat_consumable_kind(p, (OsrsConsumableKind)m->consumable_kind);
+            /* A meal that heals nothing is not offered: an anglerfish at full hitpoints inside the PvP overheal lock (the lock only forbids the overheal) like a shark at full. */
+            heads[head][entry + 1] = riskfight_consumable_useful(p, (OsrsConsumableKind)m->consumable_kind) &&
+                osrs_can_eat_consumable_kind(p, (OsrsConsumableKind)m->consumable_kind);
         }
         heads[RF_DRINK][entry + 1] = m->click_action == OSRS_CLICK_DRINK && p->potion_timer == 0 &&
+            riskfight_consumable_useful(p, (OsrsConsumableKind)m->consumable_kind) &&
             (m->consumable_kind != OSRS_CONSUMABLE_DIVINE_COMBAT || p->current_hitpoints > OSRS_DIVINE_DAMAGE);
         has_teleport |= m->click_action == OSRS_CLICK_TELEPORT;
     }
@@ -275,15 +314,17 @@ static void riskfight_write_wait_mask(unsigned char* mask) {
     for (int head = 0; head < RF_HEADS; head++) mask[RF_HEAD_OFFSET[head]] = 1;
 }
 
-/** Everything riskfight_write_action_mask reads, reduced to what its result depends on (hitpoints only through the three comparisons it makes, the timers only
- * through "is zero", the veng cooldown only through "<= 1"). The mask changes on about one agent-tick in six, so the env, which keeps the last mask in the agent's
+/** Everything riskfight_write_action_mask reads, reduced to what its result depends on (hitpoints only through the comparisons it makes, the timers only
+ * through "is zero", the veng cooldown only through "<= 1", the levels and the overheal lock only through each bag slot's riskfight_consumable_useful bit).
+ * The mask changes on about one agent-tick in six, so the env, which keeps the last mask in the agent's
  * buffer, rewrites it only when the key differs. `valid` is 0 while the buffer holds something else (the wait mask); `buffer` guards against the buffer moving.
  * ADD EVERY NEW INPUT OF riskfight_write_action_mask HERE: test_riskfight_env_trace.c compares the buffer with a fresh mask every step. */
 typedef struct {
     uint16_t cells[OSRS_INVENTORY_SIZE];
     uint8_t equipped[NUM_GEAR_SLOTS];
-    uint8_t below_full, at_full, above_divine, food_ready, karambwan_ready, potion_ready, overheal_block, prayer, magic_ok, veng_active, veng_cooled, has_sacks,
+    uint8_t below_full, above_divine, food_ready, karambwan_ready, potion_ready, prayer, magic_ok, veng_active, veng_cooled, has_sacks,
         teleport_ok, deployable, valid;
+    uint32_t useful; /* bit `slot`: riskfight_consumable_useful of that physical slot's eat or drink item */
     int special_energy;
     const unsigned char* buffer;
 } RiskfightMaskKey;
@@ -291,15 +332,18 @@ typedef struct {
 static inline void riskfight_mask_key(const RiskfightState* s, int agent, const unsigned char* buffer, RiskfightMaskKey* key) {
     const Player* p = &s->env.players[agent];
     memset(key, 0, sizeof(*key));
-    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) key->cells[slot] = p->inventory_cells[slot].content_code;
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        key->cells[slot] = p->inventory_cells[slot].content_code;
+        const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[slot]);
+        if ((m->click_action == OSRS_CLICK_EAT || m->click_action == OSRS_CLICK_DRINK) && riskfight_consumable_useful(p, (OsrsConsumableKind)m->consumable_kind))
+            key->useful |= 1u << slot;
+    }
     memcpy(key->equipped, p->equipped, NUM_GEAR_SLOTS);
     key->below_full = p->current_hitpoints < p->base_hitpoints;
-    key->at_full = p->current_hitpoints >= p->base_hitpoints;
     key->above_divine = p->current_hitpoints > OSRS_DIVINE_DAMAGE;
     key->food_ready = p->food_timer == 0;
     key->karambwan_ready = p->karambwan_timer == 0;
     key->potion_ready = p->potion_timer == 0;
-    key->overheal_block = p->pvp_overheal_block > 0;
     key->prayer = p->current_prayer > 0;
     key->magic_ok = p->current_magic >= OSRS_VENGEANCE_MAGIC_LEVEL;
     key->veng_active = p->veng_active != 0;
