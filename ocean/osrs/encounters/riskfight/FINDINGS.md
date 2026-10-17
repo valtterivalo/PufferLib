@@ -130,3 +130,14 @@ Session 20261017T134203, fight 75-124 against a Voidwaker user.
 
 - **s3t34** (sweep 3's best by probe, 10.65 net/h vs s3t0 8.17, 512x1): on the live trace it also teleports at 115-120 (p 0.63-0.93). At 75-82 it drinks a super restore and a brew at 121 HP, the brew draining stats for nothing. Not installed.
 - **What the net received at 119-124** (rl_explain now prints the session block and the kosher predicates): kosher 0 on every tick (no_spec 1; no_food, no_restore and no_boost 0; his cheapest spec 50 against his estimated 50), reputation 0, HP margin over his chance range +0.01 at 68 HP. The live input agrees with the manual classification: the net knew the teleport was rude and that 68 sat at the edge of his Voidwaker spec range. It is a pricing decision, not a reconstruction bug.
+
+## 2026-10-17, s4t0 (sweep 4 trial 0, stronger reputation): brews at 121 HP on the first tick
+
+On the live trace (fight from tick 75), s4t0 never teleports, but on tick 75 it drinks a Saradomin brew at 121 HP with p 1.00. With 118 attack/strength that drains about 13 of each for +2 defence.
+- **The sim gives an opening brew no value.** In 4000 rollouts from a 121 HP, 118-stat start, a forced brew gets 0.33 kills in 50 ticks against 0.46 without. Left alone in the sim, the net drinks a super restore on tick 0, never a brew.
+- **The sim had a mechanics bug:** a brew above its cap lowered HP and defence (121 became 115). Fixed on `brew-fix` (51e058ae1), with tests.
+- **Cause of the live brew: slot positions.** Bisecting the live tick-75 observation against the sim's, substituting sim values, needs 18 entries to move the brew below 0.5, 16 of them inventory rows. The training kits keep a fixed layout (restores 21-22, brews 23-24, combat 25); the user's bag keeps restores 4/8, brews 13/15, combat 20. The net learned the slots, not the contents.
+- **Two more mismatches:**
+  - The live server starts his health bar at full while the sim's first observation has 0.
+  - The live start offset is the observed one, while the matched sim start was 0,0.
+- **Fix:** permute the bag per fight in training, and match the server's tick-0 bar to the sim's (`layout-fix`).
