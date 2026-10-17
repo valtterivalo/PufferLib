@@ -52,7 +52,9 @@ static RtFight g_fight;
 
 typedef struct { int swing_raw, swing_style, hit_landed, hit_damage, veng_cast, consuming, bar_ratio, bar_scale, veng_text, swing_spec; RtServings servings; } RtSeen;
 
-static void rt_fight_reset(RtFight* f, int start_tick) {
+/* A fight starts with the bar the sim's first observation gives him (riskfight_start_apply): the bar the client shows on the fight's first request, hit or not
+ * (the start row's bar), and the full bar when none shows (a start without a bar draws regeared hitpoints, which read 30). */
+static void rt_fight_reset(RtFight* f, int start_tick, const RtSeen* seen) {
     RfNet* net = f->net;
     uint32_t rng = f->rng;
     int hard = f->hard;
@@ -67,7 +69,7 @@ static void rt_fight_reset(RtFight* f, int start_tick) {
     v->last_attack_tick = -1;
     v->pending_consume_tick = -1;
     v->spec_est = 100;
-    v->health_bar = OSRS_PLAYER_HEALTH_BAR_SCALE; /* a fight starts at a full bar, as the sim's first observation */
+    v->health_bar = seen->bar_scale == OSRS_PLAYER_HEALTH_BAR_SCALE && seen->bar_ratio >= 0 ? seen->bar_ratio : OSRS_PLAYER_HEALTH_BAR_SCALE;
     f->land_pending[0] = f->land_pending[1] = f->last_land = -1;
 }
 
@@ -272,8 +274,8 @@ static int rt_records(const int* actions, const RiskfightState* s, RtRecord* out
 static double rt_decide(Request* q, const RtSeen* seen, int new_fight, int fight_start, RtRecord* records, int* count) {
     double started = la_seconds();
     RtFight* f = &g_fight;
-    if (new_fight) rt_fight_reset(f, fight_start);
-    else if (!f->active || q->tick <= f->last_tick || q->tick - f->last_tick > 2) rt_fight_reset(f, q->tick);
+    if (new_fight) rt_fight_reset(f, fight_start, seen);
+    else if (!f->active || q->tick <= f->last_tick || q->tick - f->last_tick > 2) rt_fight_reset(f, q->tick, seen);
     f->last_tick = q->tick;
     int n = q->tick - f->start_tick + 1;
     RiskfightSnapshot snap;

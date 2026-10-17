@@ -53,11 +53,13 @@ static void test_servings(void) {
     puts("servings: client ids, doses, pie bites, rearrangement");
 }
 
+static const RtSeen NO_BAR = {-1, 0, 0, 0, 0, 0, -1, -1, 0, 0};
+
 static RtFight fight(void) {
     RtFight f;
     memset(&f, 0, sizeof(f));
     f.net = NULL;
-    rt_fight_reset(&f, 100);
+    rt_fight_reset(&f, 100, &NO_BAR);
     return f;
 }
 
@@ -102,7 +104,7 @@ static void test_triple_eat_counting(void) {
     rt_note_meals(&f, &bag, 99, 60);
     assert(f.meals == 1 && f.overeats == 1);
     /* A new fight starts at zero. */
-    rt_fight_reset(&f, 500);
+    rt_fight_reset(&f, 500, &NO_BAR);
     assert(f.meals == 0 && f.overeats == 0 && !f.have_previous);
     puts("triple-eat: one bar for the tick's meals, hp == range is polite, two servings of a class at once is not a meal");
 }

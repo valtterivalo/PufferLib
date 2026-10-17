@@ -141,3 +141,6 @@ On the live trace (fight from tick 75), s4t0 never teleports, but on tick 75 it 
   - The live server starts his health bar at full while the sim's first observation has 0.
   - The live start offset is the observed one, while the matched sim start was 0,0.
 - **Fix:** permute the bag per fight in training, and match the server's tick-0 bar to the sim's (`layout-fix`).
+- **Done (`layout-fix`):**
+  - Training permutes both bags uniformly at every fight (`riskfight_training_shuffle_bags`, on the training RNG), so nets trained from here see no fixed layout. The scripts and OppFit find items by content (kind and item slot tables), and the mask follows the contents.
+  - The bar: the "0" is the regear start (`fight_starts 0`), whose first observation is tick 0 with an empty history. Training uses `fight_starts 1`, and there the first observation is tick 1. That observation shows the start's bar: the bar the client showed on that tick, hit or not, or full when none showed. The server's first request is that tick (n = 1). It used to take a bar only from a hitsplat, so a bar that was showing without a hit read as full. `rt_fight_reset` now takes the bar the client shows. `test_rl_server_start_bar` checks all 161 starts, and only one of them was wrong before (start 53: bar 18, no hit).
