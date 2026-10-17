@@ -45,6 +45,7 @@ static void test_overeat_definition(void) {
     env = make_env(5, 1);
     RiskfightState* s = &env->state;
     Player* us = &s->env.players[0];
+    s->visible[0].spec_est = 0; /* with energy, a maul he may carry stacks on the range and can push it past 121, where no meal is ever an overeat */
     int range = riskfight_chance_range(s, 0);
     assert(range > 0 && range < 121);
     float obs[RF_OBS_SIZE];
@@ -74,6 +75,7 @@ static void test_overeat_definition(void) {
     env = make_env(6, 1);
     s = &env->state;
     us = &s->env.players[0];
+    s->visible[0].spec_est = 0;
     range = riskfight_chance_range(s, 0);
     us->current_hitpoints = range;
     HumanCommand triple[] = {click(slot_of(us, OSRS_CONSUMABLE_ANGLERFISH)), click(slot_of(us, OSRS_CONSUMABLE_KARAMBWAN)), click(slot_of(us, OSRS_CONSUMABLE_BREW))};
@@ -84,6 +86,7 @@ static void test_overeat_definition(void) {
     env = make_env(7, 1);
     s = &env->state;
     us = &s->env.players[0];
+    s->visible[0].spec_est = 0;
     range = riskfight_chance_range(s, 0);
     us->current_hitpoints = range + 1;
     HumanCommand combat[] = {click(slot_of(us, OSRS_CONSUMABLE_SUPER_COMBAT))};
@@ -100,21 +103,34 @@ static void test_overeat_definition(void) {
     destroy();
 }
 
-/* The chance range follows what he holds: his Vengeance adds the echo of our hit only after a cast of his was seen that has not proc'd (none seen at the start of a
- * fight, so it is down there), and a weapon he has not shown does not count. */
+/** One tick of what the sim shows of him (riskfight_observe_visible): his cast graphic, his "Taste vengeance!", a hitsplat of `damage` on him (-1: none). */
+static void shown(RiskfightState* s, int cast, int proc, int damage) {
+    Player* him = &s->env.players[1];
+    s->env.tick++;
+    him->cast_veng_this_tick = cast;
+    him->said_taste_vengeance_this_tick = proc;
+    him->hit_landed_this_tick = damage >= 0;
+    him->hit_damage = damage > 0 ? damage : 0;
+    riskfight_observe_visible(s, 0, 0);
+}
+
+/* The chance range follows what he holds: his Vengeance adds the echo of our hit while it is up, which it is from the start of a fight (fighters cast it before)
+ * until it is shown down (a hit of ours lands on him for damage without a proc, or a proc), and again after a seen cast; a weapon he has not shown does not count. */
 static void test_chance_range_terms(void) {
     env = make_env(8, 1);
     RiskfightState* s = &env->state;
-    RiskfightVisibleOpponent* v = &s->visible[0];
-    v->last_cast_tick = v->last_proc_tick = -1000; /* nothing seen: down */
-    int unseen = riskfight_chance_range(s, 0);
-    v->last_cast_tick = v->last_proc_tick = 5; /* a tie: down */
-    int tie = riskfight_chance_range(s, 0);
-    v->last_proc_tick = 4; /* cast after the last proc: up */
+    const RiskfightVisibleOpponent* v = &s->visible[0];
+    assert(riskfight_his_veng_up(v)); /* the start of a fight */
     int with_veng = riskfight_chance_range(s, 0);
-    v->last_proc_tick = 6; /* it proc'd after the cast: down */
+    shown(s, 0, 0, 0); /* a miss on him: proves nothing */
+    assert(riskfight_his_veng_up(v) && riskfight_chance_range(s, 0) == with_veng);
+    shown(s, 0, 0, 12); /* a damaging hit without a proc: down */
     int without = riskfight_chance_range(s, 0);
-    assert(with_veng > without && unseen == without && tie == without);
+    assert(!riskfight_his_veng_up(v) && with_veng > without);
+    shown(s, 1, 0, -1); /* a seen cast: up */
+    assert(riskfight_his_veng_up(v) && riskfight_chance_range(s, 0) == with_veng);
+    shown(s, 0, 1, 20); /* it proc'd: down */
+    assert(!riskfight_his_veng_up(v) && riskfight_chance_range(s, 0) == without);
     destroy();
 }
 

@@ -16,7 +16,7 @@ int main(void) {
         RiskfightState* s = &sim.state;
         RiskfightVisibleOpponent mine;
         memset(&mine, 0, sizeof(mine));
-        mine.last_cast_tick = mine.last_proc_tick = -1000;
+        mine.last_cast_tick = mine.last_proc_tick = -1000; mine.veng_up = 1;
         mine.last_attack_tick = -1;
         mine.pending_consume_tick = -1;
         mine.health_bar = OSRS_PLAYER_HEALTH_BAR_SCALE;
@@ -53,7 +53,7 @@ int main(void) {
             bad |= mine.health_bar != sim_v->health_bar;
             bad |= mine.spec_est != sim_v->spec_est;
             bad |= mine.last_attack_tick != sim_v->last_attack_tick;
-            bad |= mine.last_cast_tick != sim_v->last_cast_tick || mine.last_proc_tick != sim_v->last_proc_tick;
+            bad |= mine.last_cast_tick != sim_v->last_cast_tick || mine.last_proc_tick != sim_v->last_proc_tick || mine.veng_up != sim_v->veng_up;
             bad |= mine.consume_food_est != sim_v->consume_food_est || mine.consume_potion_est != sim_v->consume_potion_est ||
                 mine.consume_karam_est != sim_v->consume_karam_est || mine.consume_delay_est != sim_v->consume_delay_est;
             for (int i = 0; i < RF_HISTORY_TICKS; i++)

@@ -7,8 +7,9 @@
  * net). After each tick an oracle applies the sim's own rule to the same tick: the meals are the bag slots that held a meal and changed (the slotwise reading of
  * scripts/measure_overeats.py, independent of the server's serving totals), they are clicked into a copy of the sim state of the previous request in the order the sim allows
  * (food, brew, karambwan) through riskfight_execute_command with tick_hitpoints = that request's hitpoints, so the sim's own overeat counter is the oracle; the server's count must
- * equal it per tick and per fight, and the observation's [5] must read it. His Vengeance is in the range only after a cast the V lines showed this fight with no "Taste
- * vengeance!" since (riskfight_his_veng_up): never at the start of a fight; checked against the V lines read here. */
+ * equal it per tick and per fight, and the observation's [5] must read it. His Vengeance is in the range while it is up (riskfight_his_veng_up): from the start of a fight
+ * until the V lines show it down (a "Taste vengeance!", or a hit landing on him for damage without one), then again after a cast they show (a cast on the tick of a proc
+ * while it was down is the cast that proc'd); checked against the V lines read here. */
 #define GS_RL_SERVER_NO_MAIN
 #include <unistd.h>
 #include "gs_rl_server.c"
@@ -133,7 +134,7 @@ static Totals replay(const char* path) {
     RtSeen seen;
     int new_fight, fight_start, obs_only;
     int have_last = 0, fight_meals = 0, fight_overeats = 0, fight_oracle = 0, fight_requests = 0, fight_index = -1, last_start = -1000000, fight_unexplained = 0;
-    int cast_seen = -1, proc_seen = -1, veng_ticks = 0; /* fight ticks of his last cast and proc as the V lines show them (-1 none this fight) */
+    int up = 1, veng_ticks = 0; /* his Vengeance as this fight's V lines show it */
     while (rt_parse(in, &q, &seen, &new_fight, &fight_start, &obs_only)) {
         request_declare_priors(&q);
         const char* unavailable = server_unavailable(&q);
@@ -149,7 +150,7 @@ static Totals replay(const char* path) {
             fight_index++;
             t.fights++;
             fight_meals = fight_overeats = fight_oracle = fight_requests = fight_unexplained = 0;
-            cast_seen = proc_seen = -1;
+            up = 1;
             assert(g_fight.meals == 0 && g_fight.overeats == 0);
         }
         fight_requests++;
@@ -162,10 +163,11 @@ static Totals replay(const char* path) {
         int range = riskfight_chance_range(s, 0);
         assert(range == g_fight.previous_range && s->env.players[0].current_hitpoints == g_fight.previous_hitpoints);
         assert(fabsf(obs[RF_SESSION_START + 6] - fmaxf(-1.0f, fminf(1.0f, (float)(s->env.players[0].current_hitpoints - range) / 121.0f))) < 1e-6f);
-        if (seen.veng_cast) cast_seen = fight_requests;
-        if (seen.veng_text) proc_seen = fight_requests;
-        assert(riskfight_his_veng_up(&s->visible[0]) == (cast_seen > proc_seen));
-        veng_ticks += cast_seen > proc_seen;
+        int was_up = up;
+        if (seen.veng_text || (seen.hit_landed && seen.hit_damage > 0)) up = 0;
+        if (seen.veng_cast && (!seen.veng_text || was_up)) up = 1;
+        assert(riskfight_his_veng_up(&s->visible[0]) == up);
+        veng_ticks += up;
         if (!fresh && have_last) {
             /* The oracle: the slots that held a meal and changed since the previous request, clicked into the sim state that request left (the sim state before this tick's meals). */
             int hard_slot = -1, brew_slot = -1, karambwan_slot = -1, meals = 0;

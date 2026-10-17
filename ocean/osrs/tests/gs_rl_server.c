@@ -65,7 +65,7 @@ static void rt_fight_reset(RtFight* f, int start_tick, const RtSeen* seen) {
     f->last_tick = start_tick - 1;
     if (net) rf_net_reset(net); /* no net: the observation-only harness (rl_explain "-", test_threat_live) */
     RiskfightVisibleOpponent* v = &f->vis;
-    v->last_cast_tick = v->last_proc_tick = -1000;
+    v->last_cast_tick = v->last_proc_tick = -1000; v->veng_up = 1;
     v->last_attack_tick = -1;
     v->pending_consume_tick = -1;
     v->spec_est = 100;
@@ -171,8 +171,7 @@ static void rt_observe(RiskfightVisibleOpponent* v, const RtSeen* seen, int n, c
             for (int i = 0; i < seen->swing_spec; i++) riskfight_spec_est_seen(v, osrs_spec_cost(v->last_swing_item));
     }
     if (seen->hit_landed && seen->bar_scale == OSRS_PLAYER_HEALTH_BAR_SCALE && seen->bar_ratio >= 0) v->health_bar = seen->bar_ratio;
-    if (seen->veng_cast) v->last_cast_tick = n;
-    if (seen->veng_text) v->last_proc_tick = n;
+    riskfight_veng_seen(v, n, seen->veng_cast, seen->veng_text, seen->hit_landed ? seen->hit_damage : 0);
     if (v->consume_food_est > 0) v->consume_food_est--;
     if (v->consume_potion_est > 0) v->consume_potion_est--;
     if (v->consume_karam_est > 0) v->consume_karam_est--;

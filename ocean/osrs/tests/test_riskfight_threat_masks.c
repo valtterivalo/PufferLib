@@ -20,7 +20,8 @@ enum { SLOT_SHARK, SLOT_KARAMBWAN, SLOT_BREW };
 static Player* us(void) { return &state.env.players[0]; }
 static RiskfightVisibleOpponent* him(void) { return &state.visible[0]; }
 
-/** Seat 0 rested with a shark, a karambwan and a brew in the bag, nothing in flight, his Vengeance never seen. */
+/** Seat 0 rested with a shark, a karambwan and a brew in the bag, nothing in flight, his Vengeance as at the start of a fight (up: nothing seen), his special energy
+ * spent (so his range is one hit: no maul special stacks on it). */
 static void reset(void) {
     riskfight_reset((EncounterState*)&state, (EncounterContext*)&context, 11);
     Player* p = us();
@@ -33,7 +34,8 @@ static void reset(void) {
     p->inventory_cells[SLOT_SHARK] = osrs_inventory_cell_from_content_code(riskfight_supply_code(OSRS_CONSUMABLE_SHARK_FOOD, 0));
     p->inventory_cells[SLOT_KARAMBWAN] = osrs_inventory_cell_from_content_code(riskfight_supply_code(OSRS_CONSUMABLE_KARAMBWAN, 0));
     p->inventory_cells[SLOT_BREW] = osrs_inventory_cell_from_content_code(riskfight_supply_code(OSRS_CONSUMABLE_BREW, 4));
-    him()->last_cast_tick = him()->last_proc_tick = -1000;
+    him()->last_cast_tick = him()->last_proc_tick = -1000; him()->veng_up = 1;
+    him()->spec_est = 0;
     memset(&held, 0, sizeof(held));
 }
 
@@ -77,31 +79,47 @@ static void test_meals(void) {
     printf("meals: his chance range %d; offered at hp %d, not at %d\n", range, range, range + 1);
 }
 
+/** His Vengeance as the viewer tracks it (riskfight_veng_seen, the sim's and the live server's): up at the fight's start, down after a hit of ours lands on him for
+ * damage without a proc or after a proc, up again only after a seen cast. While up the range carries the echo of our best hit, and the meal gate follows. */
 static void test_vengeance(void) {
     reset();
     us()->current_hitpoints = 50;
     RiskfightVisibleOpponent* v = him();
-    int unseen = riskfight_chance_range(&state, 0);
-    v->last_cast_tick = v->last_proc_tick = 5;
-    assert(riskfight_chance_range(&state, 0) == unseen); /* a tie is no cast seen since the proc */
-    v->last_proc_tick = 4;
-    int up = riskfight_chance_range(&state, 0);
     float threat[RF_THREAT_SIZE];
     RiskfightBagWeapons none = {{0}, 0};
     riskfight_threat_write(us(), &none, &v->threat, v->health_bar, threat);
     int echo = (int)lroundf(threat[RF_THREAT_OURS_OFFSET + 1] * RF_THREAT_DAMAGE_SCALE) * 3 / 4;
-    assert(echo > 0 && up == unseen + echo);
-    /* The meal gate follows: at hp == the range with the echo, a meal only after his cast. */
-    assert(up < 98);
+    assert(echo > 0);
+    int up = riskfight_chance_range(&state, 0); /* the start of a fight: up */
+    assert(riskfight_his_veng_up(v) && riskfight_chance_range_of(threat, v->spec_est, 0) + echo == up && up < 98);
     us()->current_hitpoints = up;
     assert(all_meals_offered());
-    v->last_proc_tick = 6; /* it proc'd: down again */
-    assert(riskfight_chance_range(&state, 0) == unseen && !all_meals_offered());
-    v->last_cast_tick = v->last_proc_tick = -1000; /* nothing seen, the start of a fight */
-    assert(riskfight_chance_range(&state, 0) == unseen && !all_meals_offered());
-    v->last_cast_tick = 7;
-    assert(riskfight_chance_range(&state, 0) == up && all_meals_offered());
-    printf("vengeance: range %d before a seen cast (and on a tie, after a proc), %d = %d + echo %d after it\n", unseen, up, unseen, echo);
+    riskfight_veng_seen(v, 3, 0, 0, 0); /* a hit of ours that missed (0): proves nothing */
+    assert(riskfight_his_veng_up(v) && riskfight_chance_range(&state, 0) == up);
+    riskfight_veng_seen(v, 4, 0, 0, 1); /* a damaging hit without a proc: down */
+    int down = riskfight_chance_range(&state, 0);
+    assert(!riskfight_his_veng_up(v) && down == up - echo && !all_meals_offered());
+    riskfight_veng_seen(v, 5, 0, 0, 30); /* further hits keep it down */
+    assert(!riskfight_his_veng_up(v));
+    riskfight_veng_seen(v, 9, 1, 0, 0); /* a seen cast: up */
+    assert(riskfight_his_veng_up(v) && riskfight_chance_range(&state, 0) == up && all_meals_offered());
+    riskfight_veng_seen(v, 12, 0, 1, 25); /* the proc (with the hit that triggered it): down */
+    assert(!riskfight_his_veng_up(v) && riskfight_chance_range(&state, 0) == down && !all_meals_offered());
+    riskfight_veng_seen(v, 40, 1, 0, 0);
+    assert(riskfight_his_veng_up(v));
+    riskfight_veng_seen(v, 41, 0, 1, 0); /* a proc alone (no damage of ours shown with it) is down too */
+    assert(!riskfight_his_veng_up(v));
+    riskfight_veng_seen(v, 50, 1, 1, 30); /* cast and proc on one tick while down: the new cast proc'd, down */
+    assert(!riskfight_his_veng_up(v));
+    riskfight_veng_seen(v, 60, 1, 0, 30); /* cast on the tick of a damaging hit without a proc: the cast came after the hit, up */
+    assert(riskfight_his_veng_up(v));
+    riskfight_veng_seen(v, 70, 1, 1, 30); /* cast and proc on one tick while up: the old one proc'd, he recast, up */
+    assert(riskfight_his_veng_up(v));
+    /* The start of a fight again: up. */
+    reset();
+    us()->current_hitpoints = up;
+    assert(riskfight_his_veng_up(him()) && riskfight_chance_range(&state, 0) == up && all_meals_offered());
+    printf("vengeance: range %d while up (at start, after a seen cast), %d = %d - echo %d after a damaging hit without a proc or after a proc\n", up, down, up, echo);
 }
 
 /** Whether special action k is offered. */
@@ -255,12 +273,44 @@ static void test_in_flight_is_the_max(void) {
     printf("in flight: a direct hit counts %d (our largest max), a special hit %d, rolled 0 or %d alike; arming at no bar offered either way\n", most.max, most.spec_max, most.max);
 }
 
+/** An axe (max 65) and a granite maul (instant special, cost 60, max 45): with the energy for a maul special the range is the axe hit plus the special on the
+ * same tick, so a meal stays offered between the single max and the combo. A maul the pool only says he may carry counts too: it hides in the bag until used. */
+static void test_combo_range(void) {
+    float threat[RF_THREAT_SIZE] = {0};
+    float* axe = threat;
+    axe[0] = 1; axe[2] = 65.0f / RF_THREAT_DAMAGE_SCALE; axe[4] = 5.0f / RF_THREAT_SPEED_SCALE;
+    float* maul = threat + RF_THREAT_HIS_WIDTH;
+    maul[0] = 1; maul[2] = 40.0f / RF_THREAT_DAMAGE_SCALE; maul[4] = 7.0f / RF_THREAT_SPEED_SCALE;
+    maul[8] = 0.60f; maul[9] = 45.0f / RF_THREAT_DAMAGE_SCALE; maul[11] = 1.0f / RF_THREAT_SPEED_SCALE;
+    assert(riskfight_chance_range_of(threat, 59, 0) == 65);       /* no special affordable: the axe alone */
+    assert(riskfight_chance_range_of(threat, 60, 0) == 65 + 45);  /* axe hit, then one maul special */
+    assert(riskfight_chance_range_of(threat, 100, 0) == 65 + 45); /* 100 pays for one 60 special */
+    maul[8] = 0.50f;                                              /* the ornate handle: 50 a special */
+    assert(riskfight_chance_range_of(threat, 100, 0) == 65 + 90); /* axe hit, then two maul specials */
+    maul[0] = 0.5f;                                               /* a maul the pool only says he may carry: hidden in the bag, still a combo */
+    assert(riskfight_chance_range_of(threat, 100, 0) == 65 + 90);
+    maul[0] = 1; axe[0] = 0.5f;                                   /* an opening weapon he may carry does not count */
+    assert(riskfight_chance_range_of(threat, 100, 0) == 40 + 90);
+    /* The gate on the sim's own opponent: one hit above his single max, a meal is masked without energy and offered with it (a maul he may carry stacks on). */
+    reset();
+    int single = riskfight_chance_range(&state, 0);
+    him()->spec_est = 100;
+    int combo = riskfight_chance_range(&state, 0);
+    assert(combo > single + 1 && single + 1 < 98);
+    us()->current_hitpoints = single + 1;
+    assert(all_meals_offered());
+    him()->spec_est = 0;
+    assert(!all_meals_offered());
+    printf("combo range: axe 65 alone below 60 energy, 110 with one plain maul special, 155 with two ornate ones, a maul he may carry included; an opening weapon he may carry is not. Sim opponent: single %d, with 100 energy %d; a meal at %d offered only with the energy\n", single, combo, single + 1);
+}
+
 int main(void) {
     test_meals();
     test_vengeance();
     test_toggled_special();
     test_instant_special();
     test_in_flight_is_the_max();
+    test_combo_range();
     puts("test_riskfight_threat_masks: ok");
     return 0;
 }

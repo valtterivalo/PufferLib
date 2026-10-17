@@ -35,28 +35,48 @@ __attribute__((constructor)) static void riskfight_build_inventory_rows(void) {
     }
 }
 
-/** His chance range: the most damage he could deal us before our next meal resolves, read off the threat block `threat` (riskfight_threat_write of the observer):
- * the larger of the normal max hit and, with the energy for it (his estimated `spec_est`; a Behead with five stacks), the special's max over every weapon he wields
- * or has swung, plus, while his Vengeance is up, the echo of our own best hit (3/4). The ring of recoil is not visible, so its reflection is not counted. */
+/** His chance range: the most damage he could deal us in one tick before our next meal resolves, read off the threat block `threat` (riskfight_threat_write of
+ * the observer):
+ *   one opening hit with a weapon he wields or has swung: a normal max hit, or a special he has the energy for (his estimated `spec_est`; a Behead with five
+ *   stacks),
+ *   then every instant special (the granite maul's) the energy left after the opening pays for, all landing on the same tick. The maul counts when the pool
+ *   only says he may carry it (any slot of the block): it stays hidden in the bag until the special,
+ * plus, while his Vengeance is up, the echo of our own best hit (3/4). The ring of recoil is not visible, so its reflection is not counted. The combo matters
+ * because the range gates our meals: an axe hit followed by a maul special is one tick of damage, not the larger of the two. */
 static int riskfight_chance_range_of(const float* threat, int spec_est, int his_veng) {
-    int range = 0;
     const int stacks_full = threat[RF_THREAT_STACKS_OFFSET] * OSRS_SOUL_STACKS_MAX > OSRS_SOUL_STACKS_MAX - 0.5f;
+    int instant_cost = 0, instant_max = 0; /* the instant special with the most damage per energy */
     for (int i = 0; i < RF_THREAT_HIS_SLOTS; i++) {
         const float* o = threat + i * RF_THREAT_HIS_WIDTH;
-        if (o[0] < 1) continue; /* a weapon the pool only says he may carry */
+        int cost = (int)lroundf(o[8] * 100), spec = (int)lroundf(o[9] * RF_THREAT_DAMAGE_SCALE);
+        if (o[0] <= 0 || cost <= 0 || lroundf(o[11] * RF_THREAT_SPEED_SCALE) != 1) continue;
+        if (!instant_cost || spec * instant_cost > instant_max * cost) { instant_cost = cost; instant_max = spec; }
+    }
+    int range = 0;
+    for (int i = 0; i < RF_THREAT_HIS_SLOTS; i++) {
+        const float* o = threat + i * RF_THREAT_HIS_WIDTH;
+        if (o[0] < 1) continue;
         int hit = (int)lroundf(o[2] * RF_THREAT_DAMAGE_SCALE);
         int spec = (int)lroundf(o[9] * RF_THREAT_DAMAGE_SCALE);
         int cost = (int)lroundf(o[8] * 100);
-        if (spec > hit && (cost > 0 ? spec_est >= cost : stacks_full)) hit = spec;
-        if (hit > range) range = hit;
+        /* Opening with a normal hit, then instant specials with all the energy. */
+        int best = hit + (instant_cost ? spec_est / instant_cost * instant_max : 0);
+        /* Opening with this weapon's special, then instant specials with what is left. */
+        if (cost > 0 ? spec_est >= cost : (spec > 0 && stacks_full)) {
+            int left = spec_est - (cost > 0 ? cost : 0);
+            int with_spec = spec + (instant_cost ? left / instant_cost * instant_max : 0);
+            if (with_spec > best) best = with_spec;
+        }
+        if (best > range) range = best;
     }
     if (his_veng) range += (int)lroundf(threat[RF_THREAT_OURS_OFFSET + 1] * RF_THREAT_DAMAGE_SCALE) * 3 / 4;
     return range;
 }
 
-/** Whether his Vengeance counts as up for the chance range: a cast of his was seen and it has not proc'd since. Before any cast is seen it is not up. */
+/** Whether his Vengeance counts as up for the chance range: up from the fight's start (fighters cast it before the fight: the user's recordings show a proc before any
+ * cast in 107 of 123 fights) until it is seen down (a proc, or a hit landing on him for damage without one), then up again after a seen cast (riskfight_veng_seen). */
 static inline int riskfight_his_veng_up(const RiskfightVisibleOpponent* v) {
-    return v->last_cast_tick > v->last_proc_tick;
+    return v->veng_up;
 }
 
 /** The chance range of `agent`'s opponent against `agent` as the sim holds it now (written the way the observation writes it). */

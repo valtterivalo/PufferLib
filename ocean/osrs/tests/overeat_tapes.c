@@ -5,12 +5,12 @@
  *
  * Every request file is replayed through the live server's own path (rt_parse, rt_decide with no net: the visible-opponent history, his swing slots of the threat block, his
  * estimated special energy and his Vengeance as the V lines show them). After each tick's state is built one row is written, tab separated:
- *   file fight tick hp range normal spec echo veng_tie veng_strict spec_est wielded his_meal ours_meals_eat ours_meals_brew ours_unclassified bar_lo bar_hi
+ *   file fight tick hp range normal spec echo veng_up veng_strict spec_est wielded his_meal ours_meals_eat ours_meals_brew ours_unclassified bar_lo bar_hi
  *   our_max our_spec_cost our_spec_max our_energy his_max our_veng
  * hp: our exact hitpoints this tick; range: riskfight_chance_range(&g_base.state, 0), asserted equal to the harness's own recomputation; normal: the largest normal max hit
  * of the weapons he wields or has swung (no special, no echo); spec: what the special energy estimate adds on top of normal; echo: what his Vengeance would add on top of both,
- * with the sim's test (veng_strict, riskfight_his_veng_up: a seen cast that has not proc'd) and the earlier tie test (`last_cast_tick >= last_proc_tick`: veng_tie, true
- * at fight start when no cast and no proc was seen); his_meal: he ate or drank this tick (V consuming); ours_meals_*: slots of our bag that held food/karambwan/pie (eat) or a brew whose content changed since the
+ * counted with the sim's test (veng_up, riskfight_his_veng_up: up from the fight's start until a proc or a damaging hit on him without one, then up again after a seen
+ * cast) and, for comparison, the earlier strict test (veng_strict: a seen cast that has not proc'd, never at fight start); his_meal: he ate or drank this tick (V consuming); ours_meals_*: slots of our bag that held food/karambwan/pie (eat) or a brew whose content changed since the
  * previous tick of the same fight (what we ate during this tick); ours_unclassified: slots that changed from an item the content table does not know; bar_lo/bar_hi: the
  * hitpoints his health bar allows; our_max, our_spec_cost (energy), our_spec_max, our_energy and his_max: the other side's view for his meals (our wielded weapon against
  * his visible defence). The range of row N is what a meal executed during tick N + 1 is judged against, with the hitpoints of row N (the start of tick N + 1). */
@@ -59,9 +59,9 @@ int main(int argc, char** argv) {
             riskfight_threat_write(&s->env.players[0], &none, &v->threat, v->health_bar, threat);
             memcpy(bare, threat, sizeof(bare));
             for (int i = 0; i < RF_THREAT_HIS_SLOTS; i++) bare[i * RF_THREAT_HIS_WIDTH + 9] = 0;
-            int tie = v->last_cast_tick >= v->last_proc_tick, strict = v->last_cast_tick > v->last_proc_tick;
+            int up = riskfight_his_veng_up(v), strict = v->last_cast_tick > v->last_proc_tick;
             int range = riskfight_chance_range(s, 0);
-            assert(range == riskfight_chance_range_of(threat, v->spec_est, strict));
+            assert(range == riskfight_chance_range_of(threat, v->spec_est, up));
             int normal = riskfight_chance_range_of(bare, v->spec_est, 0);
             int noecho = riskfight_chance_range_of(threat, v->spec_est, 0);
             int echo = riskfight_chance_range_of(threat, v->spec_est, 1) - noecho;
@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
                 prev_code[slot] = code;
             }
             printf("%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n", argv[a], fight_index, q.tick, s->env.players[0].current_hitpoints,
-                range, normal, noecho - normal, echo, tie, strict, v->spec_est, wielded, seen.consuming, eat, brew, unclassified, bar_lo, bar_hi, our_max, our_spec_cost,
+                range, normal, noecho - normal, echo, up, strict, v->spec_est, wielded, seen.consuming, eat, brew, unclassified, bar_lo, bar_hi, our_max, our_spec_cost,
                 our_spec_max, q.ours.spec_us, his_max, q.ours.veng_us);
             last_start = g_fight.start_tick;
             last_tick = q.tick;

@@ -9,7 +9,7 @@
 static RiskfightVisibleOpponent fresh(void) {
     RiskfightVisibleOpponent v;
     memset(&v, 0, sizeof(v));
-    v.last_cast_tick = v.last_proc_tick = -1000;
+    v.last_cast_tick = v.last_proc_tick = -1000; v.veng_up = 1;
     v.last_attack_tick = -1;
     v.pending_consume_tick = -1;
     v.health_bar = OSRS_PLAYER_HEALTH_BAR_SCALE;

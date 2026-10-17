@@ -219,15 +219,15 @@ def request_stream(tape, scan):
 
 
 # ---- harness -----------------------------------------------------------------------------------------------------------------------------------------------
-COLUMNS = ["file", "fight", "tick", "hp", "range", "normal", "spec", "echo", "veng_tie", "veng_strict", "spec_est", "wielded", "his_meal", "eat", "brew",
+COLUMNS = ["file", "fight", "tick", "hp", "range", "normal", "spec", "echo", "veng_up", "veng_strict", "spec_est", "wielded", "his_meal", "eat", "brew",
            "unclassified", "bar_lo", "bar_hi", "our_max", "our_spec_cost", "our_spec_max", "our_energy", "his_max", "our_veng"]
 
 
 def build_harness(work):
+    """Built on every run: the harness includes the whole sim and live server, so a cached binary would measure whatever headers it was built against."""
     exe = os.path.join(work, "overeat_tapes")
     src = os.path.join(ROOT, "ocean/osrs/tests/overeat_tapes.c")
-    if not os.path.exists(exe) or os.path.getmtime(exe) < os.path.getmtime(src):
-        subprocess.run(["cc", "-std=gnu11", "-O2", "-I.", "-Isrc", "-Wno-comment", "-o", exe, src, "-lm", "-lpthread"], cwd=ROOT, check=True)
+    subprocess.run(["cc", "-std=gnu11", "-O2", "-I.", "-Isrc", "-Wno-comment", "-o", exe, src, "-lm", "-lpthread"], cwd=ROOT, check=True)
     return exe
 
 
@@ -270,9 +270,10 @@ def histogram(xs):
     return "  ".join("%d:%d" % (k, c[k]) for k in range(max(xs) + 1)) if xs else ""
 
 
-def range_tie(r):
-    """The earlier range: Vengeance counted up on a tie of his last cast and proc, which is true at the start of every fight (riskfight_policy.h now counts it only after a seen cast)."""
-    return r["normal"] + r["spec"] + (r["echo"] if r["veng_tie"] else 0)
+def range_strict(r):
+    """The earlier range: Vengeance counted up only after a seen cast that has not proc'd, never at the start of a fight (riskfight_policy.h now counts it up from the
+    start until a proc or a damaging hit on him without one)."""
+    return r["normal"] + r["spec"] + (r["echo"] if r["veng_strict"] else 0)
 
 
 def meals_of(fight_rows):
@@ -324,7 +325,8 @@ def report(rows, tapes, scans, min_ticks):
     for title, group in (("his composition observed", known), ("his composition never observed (recordings of October 4-6: his weapon is unknown, the range is his fists plus the echo)", unknown)):
         emit("")
         emit("== %s: %d fights" % (title, len(group)))
-        for label, rng in (("as written (Vengeance up only after a seen cast that has not proc'd)", lambda r: r["range"]), ("Vengeance up on a tie (the earlier definition, true at fight start)", range_tie)):
+        for label, rng in (("as written (Vengeance up from the fight's start until a proc or a damaging hit without one, then after a seen cast)", lambda r: r["range"]),
+                           ("Vengeance up only after a seen cast (the earlier strict definition)", range_strict)):
             counts = [sum(1 for _, b, _ in f["meals"] if b["hp"] > rng(b)) for f in group]
             meals = sum(len(f["meals"]) for f in group)
             over = sum(counts)
@@ -343,9 +345,9 @@ def report(rows, tapes, scans, min_ticks):
         for name, rs in (("every tick", allrows), ("ticks before a meal", at_meal)):
             if rs:
                 n = len(rs)
-                emit("  range at %s (n=%d): mean %.1f = normal %.1f + special %.1f + echo %.1f (echo counted after a seen cast); special on in %.0f%% of ticks, echo on in %.0f%% (tie: %.0f%%); his hp bar to us: mean our hp %.1f" % (
-                    name, n, sum(r["range"] for r in rs) / n, sum(r["normal"] for r in rs) / n, sum(r["spec"] for r in rs) / n, sum(r["echo"] for r in rs if r["veng_strict"]) / n,
-                    100.0 * sum(r["spec"] > 0 for r in rs) / n, 100.0 * sum(r["echo"] > 0 and r["veng_strict"] for r in rs) / n, 100.0 * sum(r["echo"] > 0 and r["veng_tie"] for r in rs) / n,
+                emit("  range at %s (n=%d): mean %.1f = normal %.1f + special %.1f + echo %.1f (echo counted while up); special on in %.0f%% of ticks, echo on in %.0f%% (strict: %.0f%%); his hp bar to us: mean our hp %.1f" % (
+                    name, n, sum(r["range"] for r in rs) / n, sum(r["normal"] for r in rs) / n, sum(r["spec"] for r in rs) / n, sum(r["echo"] for r in rs if r["veng_up"]) / n,
+                    100.0 * sum(r["spec"] > 0 for r in rs) / n, 100.0 * sum(r["echo"] > 0 and r["veng_up"] for r in rs) / n, 100.0 * sum(r["echo"] > 0 and r["veng_strict"] for r in rs) / n,
                     sum(r["hp"] for r in rs) / n))
         if at_meal:
             n = len(at_meal)
@@ -355,7 +357,7 @@ def report(rows, tapes, scans, min_ticks):
             by_kind = collections.Counter(k for f in group for _, _, k in f["meals"])
             emit("  meals by kind: %s" % dict(by_kind))
             # which terms keep a meal from being an overeat: the overeat count if a term were dropped from the range
-            for name, fn in (("without the special", lambda b: b["normal"] + (b["echo"] if b["veng_strict"] else 0)), ("without the echo", lambda b: b["normal"] + b["spec"]),
+            for name, fn in (("without the special", lambda b: b["normal"] + (b["echo"] if b["veng_up"] else 0)), ("without the echo", lambda b: b["normal"] + b["spec"]),
                              ("normal max hit alone", lambda b: b["normal"])):
                 over = sum(1 for b in at_meal if b["hp"] > fn(b))
                 emit("    overeats if the range were %s: %d of %d meals (%.1f%%)" % (name, over, n, 100.0 * over / n))
@@ -381,9 +383,9 @@ def report(rows, tapes, scans, min_ticks):
         emit("  share of the user's own fights that would annoy an opponent (overeats > patience): patience 6 (provisional) %.1f%%, patience %d %.1f%%, patience %d %.1f%%" % (
             100.0 * sum(c > 6 for c in counts) / len(counts), patience, 100.0 * sum(c > patience for c in counts) / len(counts), patience - 1,
             100.0 * sum(c > patience - 1 for c in counts) / len(counts)))
-        counts_t = sorted(sum(1 for _, b, _ in f["meals"] if b["hp"] > range_tie(b)) for f in known)
-        p90t = percentile(counts_t, .9)
-        emit("  with Vengeance counted up on a tie (the earlier definition, the echo on from the start of a fight): p90 = %.2f -> %d" % (p90t, math.floor(p90t) + 1))
+        counts_s = sorted(sum(1 for _, b, _ in f["meals"] if b["hp"] > range_strict(b)) for f in known)
+        p90s = percentile(counts_s, .9)
+        emit("  with Vengeance counted up only after a seen cast (the earlier strict definition): p90 = %.2f -> %d" % (p90s, math.floor(p90s) + 1))
         first_proc = collections.Counter()
         for f in known:
             t = f["tape"]
@@ -391,7 +393,7 @@ def report(rows, tapes, scans, min_ticks):
             casts = [x for x in sc["casts"] if t.lo <= x <= t.hi] + [x for x, a in t.anims.items() if t.lo <= x <= t.hi and any(side == "O" and an in VENG_CAST_ANIMS for side, an in a)]
             texts = [x for x in sc["texts"] if t.lo <= x <= t.hi]
             first_proc["no proc seen" if not texts else "proc before any cast seen" if not casts or min(texts) < min(casts) else "cast, then proc"] += 1
-        emit("  his Vengeance at the start of a fight (why the sim counts it up until his first proc): %s" % dict(first_proc))
+        emit("  his Vengeance at the start of a fight (why the sim counts it up from the start): %s" % dict(first_proc))
     ticks, anims, both = cross_check(fights)
     emit("cross-check: %d ticks with a meal read off the bag, %d ticks with our eat animation (829) in the tape, %d with both" % (ticks, anims, both))
     emit("requests the live server would answer UNAVAILABLE (no row): %d" % len(UNAVAILABLE))

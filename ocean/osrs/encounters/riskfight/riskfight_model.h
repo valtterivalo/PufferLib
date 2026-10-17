@@ -87,11 +87,13 @@ enum { RF_SESSION_HORIZON_TICKS = 1500 };
 /* The regear delay is 250 ticks at its median and 640 at its 90th percentile, more with a reputation: waits beyond 1000 ticks read 1 in the wait-left feature. */
 enum { RF_WAIT_SCALE_TICKS = 1000 };
 /* Over-eating is rude (the user's account): once the opponent has seen more than RF_OVEREAT_PATIENCE overeats in a fight he teleports within RF_ANNOYED_LEAVE_TICKS ticks.
- * The patience sits just above the user's own play, measured with this very definition (riskfight_chance_range, his Vengeance counted up only after a seen cast that has
- * not proc'd) on his October 2026 recordings (scripts/measure_overeats.py, ocean/osrs/tests/overeat_tapes.c): p90 of overeats per fight 10. Rule: the smallest integer above
- * his p90. The earlier definition, which counted his Vengeance up from the fight's start until a proc, gave 121 fights, 1661 meals, 421 (25%) overeats, p90 9 and a
- * patience of 10. */
-enum { RF_OVEREAT_PATIENCE = 11, RF_ANNOYED_LEAVE_TICKS = 4 };
+ * The patience sits just above the user's own play, measured with this very definition (riskfight_chance_range: one opening hit plus the instant maul specials his
+ * energy pays for; his Vengeance up from the fight's start until a proc or a damaging hit without one, then after a seen cast) on his October 2026 recordings
+ * (scripts/measure_overeats.py, ocean/osrs/tests/overeat_tapes.c): 123 fights with the opponent's composition observed (the 28 of October 4-6 without it are not used:
+ * his weapon is unknown there), 1676 meals, 296 (17.7%) overeats; per fight mean 2.4, p50 1, p75 3, p90 7, p95 9, max 21 (histogram 0:57 1:16 2:13 3:9 4:2 5:8 6:3
+ * 7:4 8:3 9:2 11:1 12:1 13:1 16:1 18:1 21:1). Rule: the smallest integer above his p90, so 6.5% of his own fights (8 of 123) would annoy an opponent. With his
+ * Vengeance counted only after a seen cast the p90 is 6 (patience 7); 107 of the 123 fights show his proc before any cast, so that rule was wrong for most fights. */
+enum { RF_OVEREAT_PATIENCE = 8, RF_ANNOYED_LEAVE_TICKS = 4 };
 /* The reputation that reads 1 in the session block (riskfight_session.h): the user's account of how a few rude teleports weigh. */
 #define RF_REP_OBS_SCALE 4.0f
 /* Ticks left of a session whose end is not modelled: what riskfight_reset leaves and the live server keeps (a live session has no budget). */
@@ -117,6 +119,9 @@ typedef struct {
     int consume_food_est, consume_potion_est, consume_karam_est, consume_delay_est;
     int pending_consume_tick, pending_bar_before, pending_damage_since;
     int last_cast_tick, last_proc_tick;
+    /* His Vengeance as the viewer knows it (riskfight_veng_seen, riskfight_his_veng_up): up from the fight's start (fighters cast it before), down after a proc or a
+     * hit landing on him for damage without one (a hit proves no Vengeance was up), up again after a seen cast. */
+    int veng_up;
     float events[RF_HISTORY_TICKS][RF_EVENT_WIDTH];
     RiskfightThreat threat; /* his weapons as the viewer knows them: the swings seen, the slots of riskfight_threat.h */
     /* His special energy as a player counts it: starts at 100, loses the cost of every special swing seen, regenerates 10 every 50 ticks once below 100. */
@@ -401,6 +406,21 @@ static inline void riskfight_spec_est_regen(RiskfightVisibleOpponent* v) {
     v->spec_est = v->spec_est + OSRS_SPEC_REGEN_AMOUNT > 100 ? 100 : v->spec_est + OSRS_SPEC_REGEN_AMOUNT;
 }
 
+/** What the viewer saw of his Vengeance on fight tick `tick`: his cast graphic, his "Taste vengeance!", and the damage of the hitsplats landing on him (any source,
+ * as the client shows them). Shared by the sim (riskfight_observe_visible) and the live server (rt_observe). A proc or a damaging hit without one shows it down; a
+ * cast shows it up, except a cast on the tick of a proc while it was down: that is the cast that proc'd (live: a cast and a proc on one tick nine ticks after his
+ * last proc). A cast on the tick of a damaging hit without a proc came after that hit (it would have proc'd): up. last_cast_tick records every cast (the
+ * observation's since-cast features read it). */
+static inline void riskfight_veng_seen(RiskfightVisibleOpponent* v, int tick, int cast, int proc, int hit_damage) {
+    int was_up = v->veng_up;
+    if (proc) v->last_proc_tick = tick;
+    if (proc || hit_damage > 0) v->veng_up = 0;
+    if (cast) {
+        v->last_cast_tick = tick;
+        if (!proc || was_up) v->veng_up = 1;
+    }
+}
+
 /** A special swing of his was seen: it costs `cost` of the estimate, and the regeneration clock starts when the estimate leaves 100. */
 static inline void riskfight_spec_est_seen(RiskfightVisibleOpponent* v, int cost) {
     if (v->spec_est >= 100) v->spec_regen_phase = 0;
@@ -422,11 +442,11 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
         v->health_bar = osrs_health_bar_ratio(opponent->current_hitpoints,
             opponent->base_hitpoints, OSRS_PLAYER_HEALTH_BAR_SCALE);
     if (!reset) {
-        if (opponent->cast_veng_this_tick) v->last_cast_tick = s->env.tick;
-        if (opponent->said_taste_vengeance_this_tick) v->last_proc_tick = s->env.tick;
+        riskfight_veng_seen(v, s->env.tick, opponent->cast_veng_this_tick, opponent->said_taste_vengeance_this_tick,
+            opponent->hit_landed_this_tick ? opponent->hit_damage : 0);
     }
     if (reset) {
-        v->last_cast_tick = v->last_proc_tick = -1000;
+        v->last_cast_tick = v->last_proc_tick = -1000; v->veng_up = 1;
         v->spec_est = 100;
         v->spec_regen_phase = 0;
         v->last_attack_tick = -1;

@@ -64,7 +64,7 @@ int main(void) {
     {
         RiskfightVisibleOpponent v;
         memset(&v, 0, sizeof(v));
-        v.last_cast_tick = v.last_proc_tick = -1000; v.last_attack_tick = -1; v.pending_consume_tick = -1; v.health_bar = OSRS_PLAYER_HEALTH_BAR_SCALE;
+        v.last_cast_tick = v.last_proc_tick = -1000; v.veng_up = 1; v.last_attack_tick = -1; v.pending_consume_tick = -1; v.health_bar = OSRS_PLAYER_HEALTH_BAR_SCALE;
         RtSeen axe = {28338, 1, 0, 0, 0, 0, -1, -1, 0, 0}, quiet = {-1, 0, 0, 0, 0, 0, -1, -1, 0, 0}, behead = {28338, 1, 0, 0, 0, 0, -1, -1, 0, 1};
         int n = 11; /* the fight tick after the one seen */
         for (int i = 0; i < 5; i++, n++) rt_observe(&v, &axe, n, &q);
