@@ -317,13 +317,14 @@ static RiskfightState teleport_state(int leaver, int leaver_energy, int other_en
 static void test_session_rules_are_symmetric(void) {
     const int trials = 4000;
     int rematches[2][3] = {{0}}, rudes[2][3] = {{0}};
+    const RiskfightRepRules rules = riskfight_rep_rules(RF_REP_SEARCH, RF_REP_RAG, RF_REP_HALF_LIFE_TICKS);
     const struct { int own, energy; } cases[3] = {{0, 100}, {100, 100}, {0, 0}}; /* rude (ours spent, his not), rude (nobody has specced), kosher (both spent) */
     for (int leaver = 0; leaver < 2; leaver++)
         for (int c = 0; c < 3; c++) {
             RiskfightState s = teleport_state(leaver, cases[c].own, cases[c].energy);
             uint32_t rng = 7 + 100 * (uint32_t)c;
             for (int i = 0; i < trials; i++) {
-                RiskfightTransition t = riskfight_session_transition(&s, &rng, 0);
+                RiskfightTransition t = riskfight_session_transition(&s, &rng, 0, &rules);
                 rematches[leaver][c] += t.rematch;
                 rudes[leaver][c] += t.rude;
                 assert(t.delay >= 0);
@@ -342,7 +343,7 @@ static void test_session_rules_are_symmetric(void) {
     for (int side = 0; side < 2; side++) both.escape_supplies[1][side].hard_food = both.escape_supplies[1][side].restore_doses = both.escape_supplies[1][side].boost_doses = 1;
     uint32_t rng = 3;
     for (int i = 0; i < 300; i++) {
-        RiskfightTransition t = riskfight_session_transition(&both, &rng, 0);
+        RiskfightTransition t = riskfight_session_transition(&both, &rng, 0, &rules);
         assert(t.rude && !t.rematch);
     }
     printf("session rules: rematch rate %.3f / %.3f after a polite teleport of seat 0 / seat 1 (%.2f); a rude one never rematches\n",

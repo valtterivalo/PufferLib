@@ -316,7 +316,7 @@ static void riskfight_native_next_fight(Env* env) {
 }
 /** The end of a step of either kind: the terminals, and the session's totals and a fresh session when its budget is spent. */
 static void riskfight_native_finish_step(Env* env, int wait_step) {
-    env->training.rep = riskfight_rep_decay(env->training.rep);
+    env->training.rep = riskfight_rep_decay(&env->training.config.rep, env->training.rep);
     const int budget = env->training.config.session_ticks;
     int session_over = env->session_elapsed >= budget;
     for (int i = 0; i < env->num_agents; i++) env->agents[i].terminals[0] = session_over;
@@ -389,7 +389,7 @@ void puf_step(Env* env) {
         env->session_fights++;
         if (env->session_elapsed < budget) {
             env->training.rep += riskfight_rude_teleport(&env->state) + riskfight_annoyed_exit(&env->state); /* each rude teleport of ours, and each exit of his over our overeating, is remembered */
-            env->wait_transition = riskfight_session_transition(&env->state, &env->training.rng, env->training.rep);
+            env->wait_transition = riskfight_session_transition(&env->state, &env->training.rng, env->training.rep, &env->training.config.rep);
             env->wait_left = env->wait_transition.delay;
             if (env->wait_left == 0) riskfight_native_next_fight(env);
         }
