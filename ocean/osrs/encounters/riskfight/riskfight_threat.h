@@ -200,14 +200,18 @@ static OsrsThreatWeapon riskfight_threat_ours_weapon(const Player* p, const Equi
     return w;
 }
 
-/** The OURS row's spec_max of our weapon `item` against the other side's bar `bar_ratio`, unscaled: the most its special can deal (all hits), 0 for a weapon with none. */
-static int riskfight_threat_our_spec_max(const Player* p, uint8_t item, int bar_ratio) {
+/** The OURS row's max and spec_max of our weapon `item` against the other side's bar `bar_ratio`, unscaled: the most one normal attack and its special (all hits) can deal,
+ * spec_max 0 for a weapon with none. */
+typedef struct { int max, spec_max; } RiskfightOurMaxes;
+
+static RiskfightOurMaxes riskfight_threat_our_maxes(const Player* p, uint8_t item, int bar_ratio) {
     EquipmentBonuses worn;
     int dharok_armour, his_hp_upper = -1;
     riskfight_threat_worn(p, &worn, &dharok_armour);
     OsrsThreatActor us = riskfight_threat_actor_of(p);
     OsrsThreatWeapon w = riskfight_threat_ours_weapon(p, &worn, dharok_armour, &us, item, bar_ratio, &his_hp_upper);
-    return w.spec_hits > 0 ? osrs_threat_effect_max(&w, w.spec_max, his_hp_upper) : 0;
+    return (RiskfightOurMaxes){osrs_threat_effect_max(&w, osrs_threat_max_hit_at(&w, RF_THREAT_BASE_HITPOINTS, p->current_hitpoints), his_hp_upper),
+        w.spec_hits > 0 ? osrs_threat_effect_max(&w, w.spec_max, his_hp_upper) : 0};
 }
 
 /** Writes the RF_THREAT_SIZE floats of agent `p` against the other side `t` (its slots, its health bar). `bag` holds the weapons of p's inventory. */

@@ -259,14 +259,29 @@ static RiskfightSpecWeapon riskfight_spec_weapon(const Player* p) {
     return bag;
 }
 
-/** The most our hits already in flight to him can deal: per hit the damage it carries, or the top of its range while the roll is still uncertain (a live hit the client
- * has not resolved). */
+/** The most our hits already in flight to him can deal, from what a player knows of them, never their rolled damage (hidden until the hitsplat; masking on it would
+ * leak the roll): a direct hit at most the largest normal max of our weapons (the wielded one and the bag's, as the OURS rows rate them), a special hit the largest
+ * spec max of them (a multi-hit special counts its whole max per hit: an upper bound); a recoil or Vengeance hit of ours carries the damage it echoes, which was seen.
+ * The sim and the live server read the same fields (kind, is_special) and the same weapons. */
 static int riskfight_in_flight_max(const RiskfightState* s, int agent) {
     const Player* p = &s->env.players[agent];
-    int total = 0;
+    int bar = s->visible[agent].health_bar, total = 0, normal = -1, special = -1;
     for (int i = 0; i < p->num_pending_hits; i++) {
-        const PendingHitMetadata* m = &s->env.pending_hit_metadata[agent][i];
-        total += m->damage_mode == 2 ? m->damage_max : p->pending_hits[i].damage;
+        const PendingHit* h = &p->pending_hits[i];
+        if (h->kind != OSRS_HIT_DIRECT) { total += h->damage; continue; }
+        if (normal < 0) {
+            RiskfightOurMaxes most = riskfight_threat_our_maxes(p, p->equipped[GEAR_SLOT_WEAPON], bar);
+            for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+                const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[slot]);
+                if (m->gear_slot != GEAR_SLOT_WEAPON) continue;
+                RiskfightOurMaxes w = riskfight_threat_our_maxes(p, m->item_idx, bar);
+                if (w.max > most.max) most.max = w.max;
+                if (w.spec_max > most.spec_max) most.spec_max = w.spec_max;
+            }
+            normal = most.max;
+            special = most.spec_max;
+        }
+        total += h->is_special ? special : normal;
     }
     return total;
 }
@@ -274,19 +289,25 @@ static int riskfight_in_flight_max(const RiskfightState* s, int agent) {
 /** The two blatant mistakes the mask removes (the user's rules), read off what a player knows: the threat block's numbers and his health bar.
  * - meals: a meal (food, karambwan, pie bite, brew dose) is offered only while our hitpoints are at most his chance range (riskfight_chance_range): it is only ever
  *   eaten to stay out of his reach.
- * - spec_ko: bit `k` (k specials this tick) set when k x the spec max of the weapon it would use (riskfight_spec_weapon, the OURS row's spec_max), plus the most our
- *   hits in flight can deal, reaches the lower bound of his hitpoints from his bar (RF_THREAT_BASE_HITPOINTS while no bar is known): a special with no chance to KO
- *   is not offered. */
+ * - spec_ko: bit `k` set when special action k (k SPEC_TOGGLE clicks, riskfight_policy_commands) may be taken. With a granite maul (an instant special per click) it
+ *   is k specials: allowed when k x its spec max plus the most our hits in flight can deal (riskfight_in_flight_max) reaches the lower bound of his hitpoints from his
+ *   bar (RF_THREAT_BASE_HITPOINTS while no bar is known). With any other weapon the clicks flip the armed bar: an action that leaves it armed (armed now XOR k odd)
+ *   is allowed when one spec max plus the in-flight reach does; one that leaves it disarmed is always allowed (disarming is never blocked). The spec max is the OURS
+ *   row's of the weapon the action would use (riskfight_spec_weapon). */
 typedef struct { uint8_t meals, spec_ko; } RiskfightThreatGates;
 
 static RiskfightThreatGates riskfight_threat_gates(const RiskfightState* s, int agent, RiskfightSpecWeapon spec) {
     const Player* p = &s->env.players[agent];
     const RiskfightVisibleOpponent* v = &s->visible[agent];
     RiskfightThreatGates gates = {p->current_hitpoints <= riskfight_chance_range(s, agent), 0};
-    int spec_max = riskfight_threat_our_spec_max(p, spec.item, v->health_bar);
+    int spec_max = riskfight_threat_our_maxes(p, spec.item, v->health_bar).spec_max;
     int reach = riskfight_in_flight_max(s, agent), his_lower = riskfight_threat_his_hp_lower(v->health_bar);
-    for (int k = 1; k < RF_ACTION_DIMS[RF_SPECIAL]; k++)
-        if (k * spec_max + reach >= his_lower) gates.spec_ko |= 1u << k;
+    int instant = pvp_is_maul(spec.item);
+    for (int k = 1; k < RF_ACTION_DIMS[RF_SPECIAL]; k++) {
+        int armed_after = p->spec_armed != (k & 1);
+        int allowed = instant ? k * spec_max + reach >= his_lower : !armed_after || spec_max + reach >= his_lower;
+        if (allowed) gates.spec_ko |= 1u << k;
+    }
     return gates;
 }
 
