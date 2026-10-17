@@ -166,3 +166,14 @@ Live, s6t0 drank super restores at full prayer with nothing drained (prayer 87-9
 - **His spec estimate was right:** 100 to 40 at tick 145 is a plain granite maul special (cost 60). 27690 in the `W` line is our Voidwaker, not his.
 - **Replay found a latent failure:** the RL server inherited the lookahead's poison-horizon checks and answered UNAVAILABLE at tick 53 (poison_application_unverified), which suspends automation. The RL net reads no poison; the checks are now the lookahead's only (e199502b9).
 - **s6t11 installed** (sweep 6 best, 8.19 per hour, with the new masks at inference). On the three live traces: no restores, no brews, no meals at 93+ HP, teleport p 0.00 outside the kosher stretch of this fight.
+- **Threat masks (threat-masks, 13f038310), the user's "no blatant waste" rules:**
+  - **Meals:** offered only while our hitpoints are within his chance range.
+  - **His Vengeance echo:** counted only after a seen cast; patience is now 11, as measured with this strict test.
+  - **Arming a special:** offered only when 1 × spec max (k × for an instant maul) plus the max of our hits in flight reaches his bar's lower bound. Disarming is always offered. In-flight hits count at their max, never their rolled damage, which would leak the roll to the net.
+  - **Effect on run-20261017T185147Z.11198:**
+    - the range at ticks 148-166 went from 97-105 to 63-71;
+    - the meals at 90+ HP and the arming spec at tick 124 (69 < 82) are masked.
+- **Sweep 7** (useful-consumable masks, prayer 90) scored up to 10.47 per hour (run 18), against 8.19 in sweep 6. **s7t18 installed** with the threat masks at inference.
+  - In the live fight above, it ate only at 13-53 HP and never armed a special.
+  - Its teleport intent (p 0.7-0.93) falls in ticks 167-174, after the 65 hit, at 34-52 HP, kosher (both specs spent).
+  - Sweep 8 trains with the threat masks.
