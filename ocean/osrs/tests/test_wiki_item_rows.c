@@ -50,7 +50,8 @@ static void check_row(char* line, int order) {
     assert(it->slot == slot_of(f[3]) && it->two_handed == atoi(f[4]));
     assert(it->attack_speed == atoi(f[5]) && it->attack_range == atoi(f[6]));
     assert(get_item_attack_style((uint8_t)idx) == style_of(f[7]));
-    assert(osrs_spec_cost(idx) == 0 && it->effect_mask == 0);   /* specials stay unmodelled until osrs_special_attacks.h has them */
+    /* specials stay unmodelled until osrs_special_attacks.h has them; the Saradomin sword's is modelled there */
+    assert(osrs_spec_cost(idx) == (idx == ITEM_SARADOMIN_SWORD ? OSRS_SARADOMIN_LIGHTNING_COST : 0) && it->effect_mask == 0);
     const int16_t got[STAT_FIELDS] = {it->attack_stab, it->attack_slash, it->attack_crush, it->attack_magic, it->attack_ranged,
         it->defence_stab, it->defence_slash, it->defence_crush, it->defence_magic, it->defence_ranged,
         it->melee_strength, it->ranged_strength, it->magic_damage, it->prayer};

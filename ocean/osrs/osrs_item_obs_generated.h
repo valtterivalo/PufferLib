@@ -2,14 +2,14 @@
 #ifndef OSRS_ITEM_OBS_GENERATED_H
 #define OSRS_ITEM_OBS_GENERATED_H
 
-#define OSRS_ITEM_CONTENT_COUNT 256
-#define OSRS_ITEM_OBS_TABLE_ROWS 256
+#define OSRS_ITEM_CONTENT_COUNT 261
+#define OSRS_ITEM_OBS_TABLE_ROWS 261
 #define OSRS_ITEM_OBS_TABLE_COLS 14
 #define OSRS_ITEM_OBS_TABLE_BASE_HITPOINTS 99
 #define OSRS_ITEM_OBS_TABLE_BASE_PRAYER 99
 #define OSRS_ITEM_OBS_TABLE_BASE_RANGED 99
 
-#define OSRS_ITEM_OBS_CODE_SCALE 256
+#define OSRS_ITEM_OBS_CODE_SCALE 512
 
 #define OSRS_ITEM_CONTENT_ROWS(X) \
     X(0, NULL, 255, 0, -1, 0, 0, 0, 0, 0, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f) \
@@ -268,6 +268,11 @@
     X(253, &ITEM_DATABASE[187], 187, 28869, 4, 1, 0, 0, 0, 2, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.400000006f, 0.533333361f, 0.0f) \
     X(254, &ITEM_DATABASE[188], 188, 22804, 4, 1, 0, 0, 0, 2, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.300000012f, 0.266666681f, 0.0f) \
     X(255, &ITEM_DATABASE[189], 189, 25416, 7, 1, 0, 0, 0, 0, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f) \
+    X(256, &ITEM_DATABASE[190], 190, 11838, 4, 1, 0, 0, 0, 1, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.400000006f, 0.0666666701f, 1.0f) \
+    X(257, &ITEM_DATABASE[191], 191, 4401, 1, 1, 0, 0, 0, 0, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f) \
+    X(258, &ITEM_DATABASE[192], 192, 8839, 6, 1, 0, 0, 0, 0, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f) \
+    X(259, &ITEM_DATABASE[193], 193, 8840, 7, 1, 0, 0, 0, 0, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f) \
+    X(260, &ITEM_DATABASE[194], 194, 11126, 8, 1, 0, 0, 0, 0, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f) \
 
 #define OSRS_CONSUMABLE_CONTENT_ROWS(X) \
     X(1, 4, 145) \
@@ -382,6 +387,14 @@
     X(24185, 11665) \
     X(27626, 28474) \
     X(22810, 22804) \
+    X(24177, 8839) \
+    X(24179, 8840) \
+    X(11118, 11126) \
+    X(11120, 11126) \
+    X(11122, 11126) \
+    X(11124, 11126) \
+    X(11972, 11126) \
+    X(11974, 11126) \
 
 
 #endif

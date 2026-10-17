@@ -187,6 +187,7 @@ static MeleeBonusType get_melee_bonus_type(Player* p) {
             weapon != ITEM_ABYSSAL_DAGGER_BH &&
             weapon != ITEM_ABYSSAL_DAGGER_BH_P_PLUS_PLUS &&
             weapon != ITEM_DRAGON_MACE_BH &&
+            weapon != ITEM_SARADOMIN_SWORD &&
             weapon != ITEM_VESTAS_BLIGHTED) {
         return MELEE_SPEC_BONUS_TYPES[p->melee_spec_weapon];
     }
@@ -961,11 +962,11 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
         int eff_defence = calculate_effective_defence(defender, style);
         int defence_bonus = get_defence_bonus(defender, style, attacker);
         /* Feint uses the selected attack bonus against stab defence; Abyssal
-           Puncture uses slash, and Shatter uses crush (OSRS Wiki weapon pages). */
+           Puncture and Saradomin's Lightning use slash, and Shatter uses crush (OSRS Wiki weapon pages). */
         if (spec_item_idx == ITEM_VESTAS || spec_item_idx == ITEM_VESTAS_BLIGHTED)
             defence_bonus = get_defence_bonus_for_melee_type(defender, MELEE_BONUS_STAB);
         else if (spec_item_idx == ITEM_ABYSSAL_DAGGER_BH ||
-                spec_item_idx == ITEM_ABYSSAL_DAGGER_BH_P_PLUS_PLUS)
+                spec_item_idx == ITEM_ABYSSAL_DAGGER_BH_P_PLUS_PLUS || spec_item_idx == ITEM_SARADOMIN_SWORD)
             defence_bonus = get_defence_bonus_for_melee_type(defender, MELEE_BONUS_SLASH);
         else if (spec_item_idx == ITEM_DRAGON_MACE_BH)
             defence_bonus = get_defence_bonus_for_melee_type(defender, MELEE_BONUS_CRUSH);
@@ -1002,6 +1003,11 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             }
         }
 
+        /* Saradomin's Lightning: the Magic hit always splashes on Protect from Magic (osrs_special_attacks.h). */
+        if (spec_item_idx == ITEM_SARADOMIN_SWORD && defender->prayer == PRAYER_PROTECT_MAGIC) {
+            sr.total_damage -= sr.damage[1];
+            sr.damage[1] = 0;
+        }
         int total_damage = sr.total_damage;
         int hit_delay;
         if (style == ATTACK_STYLE_MELEE)
@@ -1039,7 +1045,8 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             if (spec_item_idx == ITEM_DRAGON_CLAWS && i >= 2)
                 this_delay = hit_delay + 1;
             queue_hit(env, attacker_idx, defender_idx,
-                      attacker, defender, sr.damage[i], hit_style, this_delay, 1,
+                      attacker, defender, sr.damage[i],
+                      spec_item_idx == ITEM_SARADOMIN_SWORD && i == 1 ? ATTACK_STYLE_MAGIC : hit_style, this_delay, 1,
                       sr.damage[i] > 0, freeze_ticks, heal_percent, drain_type, drain_percent, flat_heal);
         }
 

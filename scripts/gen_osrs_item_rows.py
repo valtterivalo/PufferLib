@@ -13,7 +13,7 @@ Adding an item the sim does not know is three steps:
      and run ocean/osrs/tests/test_wiki_item_rows.c.
 Two budgets bound the table, both enforced below or by the observation generator: the item index is a
 uint8 (NUM_ITEMS + OSRS_STAT_ITEM_SLOTS < 255) and the content code space is OSRS_ITEM_OBS_CODE_SCALE
-(256). A row with a special attack the sim does not model keeps no special: spec costs and
+(512, GEN_OBS_CODE_SCALE of the observation generator). A row with a special attack the sim does not model keeps no special: spec costs and
 osrs_resolve_spec stay a hand job in osrs_special_attacks.h.
 
 Usage: scripts/gen_osrs_item_rows.py [--check]   (--check fails when the header is stale)

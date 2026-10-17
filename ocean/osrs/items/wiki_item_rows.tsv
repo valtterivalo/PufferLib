@@ -12,8 +12,8 @@
 #      /tmp/gen_osrs_item_obs ocean/osrs/osrs_item_obs_generated.h ocean/osrs/osrs_item_obs_table.inc
 #      then build ocean/osrs/tests/test_wiki_item_rows.c (cc -std=c11 -O2 -I. ... -lm) and run it.
 # Budget: item index < 255 with OSRS_STAT_ITEM_SLOTS run-time rows after the table (scripts check >= 40 free), and
-# OSRS_ITEM_CONTENT_COUNT <= OSRS_ITEM_OBS_CODE_SCALE (256; the generator refuses more).
-# Specials are NOT here: a weapon with a special the sim does not model has spec cost 0 (osrs_special_attacks.h).
+# OSRS_ITEM_CONTENT_COUNT <= OSRS_ITEM_OBS_CODE_SCALE (512, GEN_OBS_CODE_SCALE in gen_osrs_item_obs_table.c; the generator refuses more).
+# Specials are NOT here: a weapon with a special the sim does not model has spec cost 0; modelled ones are hand code in osrs_special_attacks.h.
 raw_id	enum	name	slot	two_handed	attack_speed	attack_range	style	attack_stab	attack_slash	attack_crush	attack_magic	attack_ranged	defence_stab	defence_slash	defence_crush	defence_magic	defence_ranged	melee_strength	ranged_strength	magic_damage	prayer	aliases	wiki_url	notes
 29000	ITEM_ECLIPSE_ATLATL	Eclipse atlatl	weapon	1	4	5	ranged	0	0	0	0	87	0	0	0	0	0	40	0	0	0		https://oldschool.runescape.wiki/w/Eclipse_atlatl	
 29796	ITEM_NOXIOUS_HALBERD	Noxious halberd	weapon	1	5	2	melee	80	132	0	0	0	0	0	0	0	0	142	0	0	0		https://oldschool.runescape.wiki/w/Noxious_halberd	
@@ -42,3 +42,8 @@ raw_id	enum	name	slot	two_handed	attack_speed	attack_range	style	attack_stab	att
 28869	ITEM_HUNTERS_SUNLIGHT_CROSSBOW	Hunters' sunlight crossbow	weapon	0	4	8	ranged	0	0	0	0	79	0	0	0	0	0	0	0	0	0		https://oldschool.runescape.wiki/w/Hunters'_sunlight_crossbow	
 22804	ITEM_DRAGON_KNIFE	Dragon knife	weapon	0	3	4	ranged	0	0	0	0	28	0	0	0	0	0	0	30	0	0	22810	https://oldschool.runescape.wiki/w/Dragon_knife#(unp)	
 25416	ITEM_BLOODBARK_LEGS	Bloodbark legs	legs	0	0	0	none	0	0	0	16	0	33	31	38	17	0	0	0	1	0		https://oldschool.runescape.wiki/w/Bloodbark_legs	
+11838	ITEM_SARADOMIN_SWORD	Saradomin sword	weapon	1	4	1	melee	0	82	60	0	0	0	0	0	0	0	82	0	0	2		https://oldschool.runescape.wiki/w/Saradomin_sword	special Saradomin's Lightning in osrs_special_attacks.h
+4401	ITEM_TEAM_44_CAPE	Team-44 cape	cape	0	0	0	none	0	0	0	0	0	0	1	1	0	2	0	0	0	0		https://oldschool.runescape.wiki/w/Team-44_cape	
+8839	ITEM_VOID_KNIGHT_TOP	Void knight top	body	0	0	0	none	0	0	0	0	0	45	45	45	45	45	0	0	0	0	24177	https://oldschool.runescape.wiki/w/Void_knight_top#Normal	
+8840	ITEM_VOID_KNIGHT_ROBE	Void knight robe	legs	0	0	0	none	0	0	0	0	0	30	30	30	30	30	0	0	0	0	24179	https://oldschool.runescape.wiki/w/Void_knight_robe#Normal	
+11126	ITEM_COMBAT_BRACELET	Combat bracelet	hands	0	0	0	none	7	7	7	3	7	5	5	5	3	5	6	0	0	0	11118,11120,11122,11124,11972,11974	https://oldschool.runescape.wiki/w/Combat_bracelet	

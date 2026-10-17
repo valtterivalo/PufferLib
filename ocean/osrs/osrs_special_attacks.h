@@ -15,6 +15,13 @@
 static inline int osrs_voidwaker_min_hit(int max_hit) { return max_hit / 2; }
 static inline int osrs_voidwaker_max_hit(int max_hit) { return max_hit * 3 / 2; }
 
+/* Saradomin sword, Saradomin's Lightning (wiki Saradomin_sword, Special attack): 100% energy, the melee hit deals 10% more damage (max hit * 11/10) and
+ * adds 1-16 Magic damage. The accuracy roll uses the attack bonus of the current stance against the target's Slash defence; when the melee hit misses the
+ * Magic hit fails too. The Magic part always splashes on a player praying Protect from Magic (Mod Ash, 19 April 2020): perform_attack zeroes it there.
+ * damage[0] is the melee hit, damage[1] the Magic hit; the Magic hit rolls no accuracy of its own. */
+#define OSRS_SARADOMIN_LIGHTNING_COST 100
+#define OSRS_SARADOMIN_LIGHTNING_MAGIC_MAX 16
+
 /** Blowpipe special: accuracy and damage roll only; the caller applies the heal. */
 static inline int osrs_blowpipe_spec_resolve(
     int base_att_roll, int base_max_hit,
@@ -72,6 +79,7 @@ static inline int osrs_spec_cost(int weapon_item_idx) {
         case ITEM_ARMADYL_CROSSBOW:    return 50;
         case ITEM_VOLATILE_STAFF:       return 55;
         case ITEM_EYE_OF_AYAK:          return 50;
+        case ITEM_SARADOMIN_SWORD:      return OSRS_SARADOMIN_LIGHTNING_COST;
         default:                        return 0;
     }
 }
@@ -285,6 +293,18 @@ static inline SpecResult osrs_resolve_spec(
         if (encounter_roll_hit_chance(rng_state, spec_att, def_roll * 3 / 5))
             r.damage[0] = encounter_rand_int(rng_state, spec_max + 1);
         r.total_damage = r.damage[0];
+        break;
+    }
+
+    case ITEM_SARADOMIN_SWORD: {
+        r.spec_cost = OSRS_SARADOMIN_LIGHTNING_COST;
+        r.num_hits = 2;
+        if (encounter_roll_hit_chance(rng_state, att_roll, def_roll)) {
+            r.landed = 1;
+            r.damage[0] = encounter_rand_int(rng_state, max_hit * 11 / 10 + 1);
+            r.damage[1] = 1 + encounter_rand_int(rng_state, OSRS_SARADOMIN_LIGHTNING_MAGIC_MAX);
+        }
+        r.total_damage = r.damage[0] + r.damage[1];
         break;
     }
 
@@ -520,6 +540,12 @@ static inline void osrs_spec_result_force_max(
         forced.damage[0] = max_hit * 3 / 2;
         break;
 
+    case ITEM_SARADOMIN_SWORD:
+        forced.num_hits = 2;
+        forced.damage[0] = max_hit * 11 / 10;
+        forced.damage[1] = OSRS_SARADOMIN_LIGHTNING_MAGIC_MAX;
+        break;
+
 
     case ITEM_ELDER_MAUL:
         forced.num_hits = 1;
@@ -610,6 +636,7 @@ static inline OsrsSpecAccuracy osrs_spec_accuracy(int weapon_item_idx) {
         case ITEM_DRAGON_DAGGER: a.att_num = 23; a.att_den = 20; a.attack_type = MELEE_BONUS_STAB; break;
         case ITEM_ABYSSAL_DAGGER_BH: case ITEM_ABYSSAL_DAGGER_BH_P_PLUS_PLUS: a.att_num = 5; a.att_den = 4; a.defence_type = MELEE_BONUS_SLASH; break;
         case ITEM_DRAGON_MACE_BH: a.att_num = 5; a.att_den = 4; a.def_num = 3; a.def_den = 5; a.defence_type = MELEE_BONUS_CRUSH; break;
+        case ITEM_SARADOMIN_SWORD: a.defence_type = MELEE_BONUS_SLASH; break;
         case ITEM_ELDER_MAUL: a.att_num = 5; a.att_den = 4; a.attack_type = MELEE_BONUS_SLASH; break; /* the sim reads MELEE_SPEC_BONUS_TYPES[NONE] for it */
         case ITEM_TOXIC_BLOWPIPE: case ITEM_ZARYTE_CROSSBOW: case ITEM_ARMADYL_CROSSBOW: case ITEM_EYE_OF_AYAK: a.att_num = 2; break;
         case ITEM_MAGIC_SHORTBOW_I: a.att_num = 10; a.att_den = 7; break;

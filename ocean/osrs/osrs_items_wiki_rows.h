@@ -2,7 +2,7 @@
 #ifndef OSRS_ITEMS_WIKI_ROWS_H
 #define OSRS_ITEMS_WIKI_ROWS_H
 
-#define OSRS_ITEM_WIKI_ROW_COUNT 27
+#define OSRS_ITEM_WIKI_ROW_COUNT 32
 
 /* X(enum, raw_id, name, slot, two_handed, speed, range, attack_style, attack stab/slash/crush/magic/ranged, defence stab/slash/crush/magic/ranged,
  *   melee_strength, ranged_strength, magic_damage, prayer); attack_style: 0 none, 1 melee, 2 ranged, 3 magic (get_item_attack_style). */
@@ -34,6 +34,11 @@
     X(ITEM_HUNTERS_SUNLIGHT_CROSSBOW, 28869, "Hunters' sunlight crossbow", SLOT_WEAPON, 0, 4, 8, 2, 0, 0, 0, 0, 79, 0, 0, 0, 0, 0, 0, 0, 0, 0) \
     X(ITEM_DRAGON_KNIFE, 22804, "Dragon knife", SLOT_WEAPON, 0, 3, 4, 2, 0, 0, 0, 0, 28, 0, 0, 0, 0, 0, 0, 30, 0, 0) \
     X(ITEM_BLOODBARK_LEGS, 25416, "Bloodbark legs", SLOT_LEGS, 0, 0, 0, 0, 0, 0, 0, 16, 0, 33, 31, 38, 17, 0, 0, 0, 1, 0) \
+    X(ITEM_SARADOMIN_SWORD, 11838, "Saradomin sword", SLOT_WEAPON, 1, 4, 1, 1, 0, 82, 60, 0, 0, 0, 0, 0, 0, 0, 82, 0, 0, 2) \
+    X(ITEM_TEAM_44_CAPE, 4401, "Team-44 cape", SLOT_CAPE, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 2, 0, 0, 0, 0) \
+    X(ITEM_VOID_KNIGHT_TOP, 8839, "Void knight top", SLOT_BODY, 0, 0, 0, 0, 0, 0, 0, 0, 0, 45, 45, 45, 45, 45, 0, 0, 0, 0) \
+    X(ITEM_VOID_KNIGHT_ROBE, 8840, "Void knight robe", SLOT_LEGS, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30, 30, 30, 30, 30, 0, 0, 0, 0) \
+    X(ITEM_COMBAT_BRACELET, 11126, "Combat bracelet", SLOT_HANDS, 0, 0, 0, 0, 7, 7, 7, 3, 7, 5, 5, 5, 3, 5, 6, 0, 0, 0) \
 
 /* X(raw_id, enum): ids that share the stats of a wiki row (charged and ornament variants). */
 #define OSRS_ITEM_WIKI_ALIAS_ROWS(X) \
@@ -42,5 +47,13 @@
     X(24185, ITEM_VOID_MELEE_HELM) \
     X(27626, ITEM_ICE_ANCIENT_SCEPTRE_L) \
     X(22810, ITEM_DRAGON_KNIFE) \
+    X(24177, ITEM_VOID_KNIGHT_TOP) \
+    X(24179, ITEM_VOID_KNIGHT_ROBE) \
+    X(11118, ITEM_COMBAT_BRACELET) \
+    X(11120, ITEM_COMBAT_BRACELET) \
+    X(11122, ITEM_COMBAT_BRACELET) \
+    X(11124, ITEM_COMBAT_BRACELET) \
+    X(11972, ITEM_COMBAT_BRACELET) \
+    X(11974, ITEM_COMBAT_BRACELET) \
 
 #endif

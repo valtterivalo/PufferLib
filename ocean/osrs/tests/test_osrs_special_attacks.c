@@ -273,6 +273,32 @@ static void test_spec_costs_and_sgs(void) {
     CHECK("SGS heal/prayer follow max(d/2,10) / max(d/4,5)", 1);
 }
 
+/* Saradomin's Lightning (wiki Saradomin_sword): 100% energy, melee max * 11/10, 1-16 Magic only when the melee roll landed. */
+static void test_saradomin_sword_special(void) {
+    printf("test_saradomin_sword_special\n");
+    CHECK("Saradomin sword spec costs 100%", osrs_spec_cost(ITEM_SARADOMIN_SWORD) == 100);
+    OsrsSpecAccuracy acc = osrs_spec_accuracy(ITEM_SARADOMIN_SWORD);
+    CHECK("Saradomin sword rolls the stance bonus, unscaled, against slash defence",
+        acc.att_num == acc.att_den && acc.def_num == acc.def_den && !acc.certain && acc.attack_type == -1 && acc.defence_type == MELEE_BONUS_SLASH);
+    uint32_t rng = 1838;
+    int landed = 0, missed = 0, laws = 1, magic_min = 99, magic_max = 0, melee_max = 0;
+    for (int i = 0; i < 4000; i++) {
+        SpecResult r = osrs_resolve_spec(ITEM_SARADOMIN_SWORD, 20000, 40, 20000, 99, &rng);
+        laws &= r.num_hits == 2 && r.spec_cost == 100 && r.total_damage == r.damage[0] + r.damage[1];
+        if (r.landed) {
+            landed++;
+            if (r.damage[1] < magic_min) magic_min = r.damage[1];
+            if (r.damage[1] > magic_max) magic_max = r.damage[1];
+            if (r.damage[0] > melee_max) melee_max = r.damage[0];
+        } else {
+            missed++;
+            laws &= r.damage[0] == 0 && r.damage[1] == 0;
+        }
+    }
+    CHECK("Saradomin sword: two hits, a miss deals nothing", laws && landed > 0 && missed > 0);
+    CHECK("Saradomin sword: Magic hit spans 1-16, melee caps at max * 11/10", magic_min == 1 && magic_max == 16 && melee_max == 44);
+}
+
 static void test_two_handed_loadout_shield_suppression(void) {
     printf("test_two_handed_loadout_shield_suppression\n");
 
@@ -407,6 +433,7 @@ static void test_spec_force_max_laws(void) {
         { ITEM_ARMADYL_CROSSBOW, 40, 1, 0, 0, 0, 0, 0, 0 },
         { ITEM_VOLATILE_STAFF, 58, 1, 0, 0, 0, 0, 0, 0 },
         { ITEM_EYE_OF_AYAK, 52, 1, 0, 52, 0, 5, 0, 0 },
+        { ITEM_SARADOMIN_SWORD, 60, 2, 0, 0, 0, 0, 0, 0 },
     };
 
     int all_cases_match = 1;
@@ -680,6 +707,7 @@ int main(void) {
     test_spec_force_max_laws();
     test_claws_and_def_drains();
     test_item_effect_laws();
+    test_saradomin_sword_special();
 
     return osrs_test_summary();
 }

@@ -16,6 +16,9 @@
 #define GEN_BASE_PRAYER 99
 #define GEN_BASE_RANGED 99
 #define GEN_INERT_RAW_OSRS_ID 27281
+/* Observation code = content code / this scale. 512 since the code space filled 256 (Saradomin sword row, October 2026); raising it rescales every
+ * item's observed code, so nets trained on the old scale need retraining. */
+#define GEN_OBS_CODE_SCALE 512
 
 typedef struct {
     uint16_t raw_osrs_id;
@@ -323,7 +326,7 @@ static void write_header(const char* path) {
         GEN_BASE_HITPOINTS,
         GEN_BASE_PRAYER,
         GEN_BASE_RANGED,
-        OSRS_ITEM_OBS_CODE_SCALE);
+        GEN_OBS_CODE_SCALE);
     write_content_rows(out);
     write_consumable_rows(out);
     write_raw_alias_rows(out);
@@ -347,10 +350,10 @@ int main(int argc, char** argv) {
         fprintf(stderr, "usage: %s <header.h> <table.inc>\n", argv[0]);
         return 1;
     }
-    if (GEN_CONTENT_COUNT > OSRS_ITEM_OBS_CODE_SCALE) {
+    if (GEN_CONTENT_COUNT > GEN_OBS_CODE_SCALE) {
         fprintf(stderr,
             "OSRS item metadata: %d codes exceeds observation scale %d\n",
-            GEN_CONTENT_COUNT, OSRS_ITEM_OBS_CODE_SCALE);
+            GEN_CONTENT_COUNT, GEN_OBS_CODE_SCALE);
         return 1;
     }
     if (GEN_EXISTING_ITEMS > NUM_ITEMS) {
