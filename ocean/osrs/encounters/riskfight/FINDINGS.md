@@ -62,3 +62,29 @@ Variants of the 107 `V` line (teleport at 107):
   |---|---|---|---|---|---|
   | s2t270 | 7.18 | 6.84 | 6.13 | 6.03 | 0.4-0.7 |
   | s2t64 | 4.44 | 4.64 | 3.92 | 3.95 | 1.7-2.1 |
+
+## 2026-10-17, how real fights start and what the price is live (branch start-states)
+
+`scripts/measure_fight_starts.py` over all 161 recorded fights (the 159 tapes plus the two live net-played ones, 20261016T141036 and 20261017T121142; 97 recordings, 12 of the fights under 15 ticks, 44 rematches) writes `fight_starts.tsv` (every field per fight) and `riskfight_starts_data.h` (what the sim reads). A start is the end of the first tick on which either side swings (the Gear Swapper's attack table). Everything below is read off that tick's `T` row.
+
+This corrects the entry above: in the live fight the row's HP is 96 because his 24 landed on tick 106; we stood at 120 before it. The start-state work makes training look like the recordings; it is not the explanation of that teleport.
+
+- **Who swung first:** we 80, he 68, both on one tick 13. Gap to the other side's first swing (ticks): 0:13, 1:21, 2:53, 3:27, 4:18, 5:7, 6+: 15, never in the window: 7. The first swing is on the first tick of the window in 92 of 161 fights (p75 1 tick, p90 6).
+- **Whose hit lands first** (a swing's hit, damage or zero): his 62 (+5 where ours never landed), ours 76 (+2), same tick 16. Damaging hits: his first 78 (+7), ours first 64 (+3), same tick 8, neither 1.
+- **Our Vengeance against his opener:** an echo on him within a tick of his first damaging hit on us in 127 of 157 fights where he hit us (0.81), 71 of 85 where his hit was the first damage of the fight (0.84). Our first echo on him (143 fights, 5-48, median 21) left his bar full in 35, lower in 107 (none shown in 1).
+- **Our hitpoints after the first tick:** 121 in 63, 120 in 59, 99-119 in 24, below 99 in 15 (min 23). Before the tick (hitpoints plus what landed on it): 121 in 68, 120 in 61, below 120 in 32.
+- **His health bar** (of 30): none shown in 108, full in 41, partial in 12 (15-29): his hitpoints are known to a range in 12 fights and to 99-121 in 149.
+- **Special energy:** ours 100 in 160 (50 in 1: we opened with a spec). His estimated 100 in 147, 50 in 14 (he opened with a spec; 11 of the 14 in rematches).
+- **Vengeance up after the tick:** ours in 60 of 161 (his hit of that tick spends it), his (tape estimate) in 132.
+- **Distance:** 1 in 141, 2 in 9, 0 in 2, 3-9 in 9.
+- **Supplies,** as what the user had used up against the most his recording held: anglerfish 0:130, 1:20, 2:9, 3+:2; karambwan 0:134, 1:25, 2:2; brew doses 0:147, 1:11, 2:3; restore doses 0:149, 1:9, 2:3; super combat doses 0:144, 1:12, 2+:5; Vengeance sacks left p10 20, median 25, p90 29. Held: 9-15 anglerfish (his kit changed over the weeks), 6-9 karambwan, 8 doses each of brew and restore in 143 and 146.
+- **Boosted stats:** attack and strength 118 in 153, defence 118 in 158 (max 120), the rest 99 (unboosted); prayer points 52-90, median 88.
+- **His weapon on the first swing** (composition observed from October 10, 74 fights): Voidwaker 15, 29607 10, 28039 9, 4587 9, 27857 4, 12006 4, 13652 4, 33335 3, 27908 3, 8 others; not exposed before that (87). Opening animations: slash 390 38, claws spec 7514 10, bow 426 9, whip 1658 7, Voidwaker spec 11275 4, soulreaper 10172 3, 401 3, others 6. Ours: 390 in 92 fights, the Voidwaker spec in 1.
+- **Hits in flight at the start** (landing the next tick): direct 38 on us / 46 on him, Vengeance echo 23 / 25, recoil 26 / 30. 37 / 47 landed on the first tick.
+- **Rematches differ** from first meetings (Fisher): we swung first 0.32 vs 0.56 (p 0.008), a swing on the first window tick 0.34 vs 0.66 (p 0.0004), his opening swing a special 0.25 vs 0.03 (p < 0.0001), our Vengeance up 0.59 vs 0.29 (p 0.0009), supplies below the maximum 0.45 vs 0.09. Hitpoints do not differ (p 1.0). The sim draws rematches from their 44 rows and first meetings from their 117.
+
+**Price.** The client logs' `risk: us X gp ... him Y gp` lines carry no name; the line standing for a fight is the last one at or before its first swing, no earlier than 30 s before the window (else the first inside it), joined by client run and time to the fights of the recordings. 129 of 161 fights have one (the rest are before the plugin logged stakes, 29 on October 4-5, or have none). The live server prices a fight us / him clamped to [0.1, 2.5]. Table = the clamped price of the 89 first meetings with a price (a rematch keeps its price): median 1.08, mean 1.18, geometric mean 0.79; 11 at the 0.1 clamp, 15 at 2.5; by bin 0.1-0.2: 14, 0.2-0.4: 7, 0.4-0.7: 7, 0.7-1.0: 10, 1.0-1.4: 23, 1.4-2.0: 6, 2.0-2.5: 22, 2.5: 15. The raw ratio is outside the [0.4, 2.5] the sweep drew from in 36 of 89. The sweep score draws from the table (`[bot_eval] price_table`); training keeps the wide log-uniform.
+
+**Sim.** `fight_starts` (ini `[env]` and `[bot_eval]`) draws a whole row, plays the opening swings in the sim, then puts the measured state in; `ocean/osrs/tests/test_riskfight_starts.c` checks the mapping per draw and the marginals over 12000 starts of each pool (4.5 sigma). Off, a fight is the regear and the trace hashes are unchanged.
+
+**What it does to a net** (s2t64 512x2, session_probe, 100 sessions, argmax, oppfit 0.5, seed 7, net per hour): regear and wide price 4.52; real starts, wide price 2.48; regear, price table 4.87; real starts and price table 2.29. Kills per session fall from 2.5 to 1.5 and the first-tick Vengeance is gone in 65% of the fights it starts. One seed of 100 sessions: the size of the drop is indicative, not the second digit.

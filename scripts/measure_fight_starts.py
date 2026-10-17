@@ -381,7 +381,7 @@ def report(rows, priced, unpriced, excluded, swing_free, equal_lines):
     mean = sum(logk) / len(logk)
     p("  log price: mean %.3f (geometric mean %.3f), sd %.3f; log-uniform [0.4, 2.5] has mean %.3f and sd %.3f" % (mean, math.exp(mean), math.sqrt(sum((x - mean) ** 2 for x in logk) / len(logk)),
       (math.log(0.4) + math.log(2.5)) / 2, (math.log(2.5) - math.log(0.4)) / math.sqrt(12)))
-    p("  decile bins: " + "  ".join("%.2f-%.2f:%d" % (lo, hi, sum(lo <= k < hi or (hi == 2.5 and k == 2.5) for k in ks)) for lo, hi in
+    p("  price bins: " + "  ".join("%.2f-%.2f:%d" % (lo, hi, sum(lo <= k < hi or (hi == 2.5 and k == 2.5) for k in ks)) for lo, hi in
                                ((0.1, 0.2), (0.2, 0.4), (0.4, 0.7), (0.7, 1.0), (1.0, 1.4), (1.4, 2.0), (2.0, 2.5), (2.5, 2.5))))
     p("  sorted: " + " ".join("%.2f" % k for k in ks))
     return "\n".join(out)

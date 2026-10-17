@@ -296,6 +296,29 @@ static void test_price(void) {
     printf("price wide draw: %.3f .. %.3f\n", lo, hi);
 }
 
+/** The same seed draws the same starts: two envs, the observation of every fresh session compared bit for bit, over sessions that play on. */
+static void test_deterministic(void) {
+    static float obs_a[RF_OBS_SIZE], obs_b[RF_OBS_SIZE];
+    Env* a = make_env(1, 1, 0, 1, 81);
+    Env* b = make_env(1, 1, 0, 1, 81);
+    a->agents[0].observations = obs_a;
+    b->agents[0].observations = obs_b;
+    for (int session = 0; session < 300; session++) {
+        puf_reset(a);
+        puf_reset(b);
+        assert(!memcmp(obs_a, obs_b, sizeof(obs_a)));
+        assert(a->state.env.players[0].current_hitpoints == b->state.env.players[0].current_hitpoints && a->state.death_price == b->state.death_price);
+        for (int step = 0; step < 5; step++) {
+            puf_step(a);
+            puf_step(b);
+            assert(!memcmp(obs_a, obs_b, sizeof(obs_a)));
+        }
+    }
+    destroy(a);
+    destroy(b);
+    puts("deterministic: the same seed draws the same starts");
+}
+
 /** Off by default: the regear. */
 static void test_off(void) {
     Env* e = make_env(0, 0, 0, 0, 71);
@@ -317,6 +340,7 @@ int main(void) {
     test_roles();
     test_price();
     test_off();
+    test_deterministic();
     test_sessions_run();
     puts("riskfight starts passed");
     return 0;
