@@ -249,6 +249,21 @@ static RiskfightStartDraw riskfight_training_start_fight(RiskfightTraining* trai
     return (RiskfightStartDraw){row, us};
 }
 
+/** Both bags of the fight just reset, each permuted uniformly (Fisher-Yates on the training stream): a kit's layout is fixed (food first, then restores, brews,
+ * combat), a player's is his own (the user keeps restores in 4 and 8, brews in 13 and 15), so a slot must not tell the net what it holds. The mask and the
+ * scripts read contents, never positions. */
+static void riskfight_training_shuffle_bags(RiskfightTraining* training, RiskfightState* state) {
+    for (int seat = 0; seat < 2; seat++) {
+        OsrsInventoryCell* cells = state->env.players[seat].inventory_cells;
+        for (int slot = OSRS_INVENTORY_SIZE - 1; slot > 0; slot--) {
+            int other = encounter_rand_int(&training->rng, slot + 1);
+            OsrsInventoryCell held = cells[slot];
+            cells[slot] = cells[other];
+            cells[other] = held;
+        }
+    }
+}
+
 /** The first fight of a session: our kit (drawn once per session), full supplies on both sides, a new opponent. */
 static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* training,
     RiskfightState* state, RiskfightContext* context, int frozen_policy) {
@@ -256,7 +271,9 @@ static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* traini
     training->rep = riskfight_training_draw(training, training->config.rep_start_probability) ? RF_REP_START_MAX * (1.0f - encounter_rand_float(&training->rng)) : 0;
     riskfight_training_draw_opponent(training, context, frozen_policy);
     riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
+    riskfight_training_shuffle_bags(training, state);
     RiskfightTrainingStart start = riskfight_training_new_opponent(training, state, context, 1);
+    if (start == RF_START_PREFIX_TERMINAL) riskfight_training_shuffle_bags(training, state); /* the prefix ended in a fresh reset */
     training->start_tick = state->env.tick; /* the ticks of a midfight prefix: the swings of a recorded start are the first tick of the fight */
     if (start != RF_START_MIDFIGHT) (void)riskfight_training_start_fight(training, state, context, 0);
     training->start = start;
@@ -274,6 +291,7 @@ static void riskfight_training_next_fight(RiskfightTraining* training, Riskfight
     if (!t->rematch) riskfight_training_draw_opponent(training, context, frozen_policy);
     context->keep_opp_kit = t->rematch; /* a rematch keeps his kit and ring; a new opponent draws a new pool kit */
     riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
+    riskfight_training_shuffle_bags(training, state);
     context->keep_opp_kit = 0;
     if (t->rematch) {
         state->opponent_profile = profile;
