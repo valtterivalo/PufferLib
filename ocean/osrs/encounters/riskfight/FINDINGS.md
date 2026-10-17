@@ -189,9 +189,14 @@ Live, s6t0 drank super restores at full prayer with nothing drained (prayer 87-9
 
 ## 2026-10-18, s7t18 live (run-20261017T211323Z.1437, 5 fights): pies, STOP, a near death
 
-- **Pies and STOP are learned preferences, not a sim/live mismatch.** In the sim (s7t18, 4,573 fights, argmax) the net bit a pie 0.18 times per pie-kit fight and took 11% pies among the food choices of a pie bag (pies are 29% of its hard food). It used STOP while attacking on 0.30% of attacking steps. Live rates on this session predict about 0.5 pie bites and 0.6 STOPs: seeing none is consistent. STOP can pay in the engine (the timer runs on, and re-attacking swings on a chosen tick), but the net has learned almost no use for holding a swing.
+- **Pies and STOP are rare in the sim too.** Rerun with s7t18's training config (OppFit at 0.5 with the sweep's fit files, run ini keys; 4,504 fights, argmax; the first run had OppFit off by accident):
+  - pie bites: 0.17 per pie-kit fight (0.19 against the script, 0.065 against OppFit);
+  - pie share of food choices: 10.3% (3.9% against OppFit);
+  - STOP while attacking: 0.24% of attacking steps (0.04% against OppFit).
+
+  OppFit drove 16% of fights. Live (no pies and no STOP in 205 attacking ticks) fits the OppFit rates. STOP can pay in the engine (the timer runs on, and re-attacking swings on a chosen tick); the net has learned almost no use for it.
 - **Near death in fight 411 (98 to 8 HP):**
-  - He hit 71 with the axe at tick 435, 54 at 440, then a double maul special at 441 (0 + 23).
+  - From the recording's hitsplats on us: one axe hit of 54 at tick 435, another 54 at 440, then a double maul special at 441 (0 + 23). The 98 to 45 at 435 is the 54 hit. A karambwan eaten at 98 HP the tick before healed only 1, so it was nearly wasted tempo. An earlier draft said "71", which was the net HP change, not a hitsplat.
   - Our triple eat at 438 (angler, restore, karambwan) lost the karambwan to the next tick. The clicks landed at +281, +462 and +679 ms against a ~480 ms server cutoff, so the karambwan came alone at 439 and re-armed all three timers through 442.
   - Across the recordings since 10-15, batches of 3 clicks miss the tick 60% of the time by the client's tick and ~100% by the 480 ms cutoff. The sweep trains with the motor model (`--env.motor=1`, riskfight_motor.h, fitted on 11,202 clicks, first/second/third click at 261/437/639 ms), so the net trains with this. The live order (karambwan last) is what lost the karambwan.
 - **The Saradomin sword had no item row:**
