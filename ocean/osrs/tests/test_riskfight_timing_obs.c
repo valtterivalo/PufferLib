@@ -120,7 +120,7 @@ static void test_next_tick(void) {
     }
     assert(maul_spec > 0);
     int range = riskfight_chance_range_of(threat, 100, 0);
-    assert(range > 2 * maul_spec);
+    assert(range >= 2 * maul_spec); /* the larger of his opening hit and the two maul specials: with only the maul, the specials */
     const int read_range = range < RF_THREAT_DAMAGE_SCALE ? range : RF_THREAT_DAMAGE_SCALE; /* the block caps at 1 */
     swing(5);
     for (int left = 5; left >= 2; left--) {
