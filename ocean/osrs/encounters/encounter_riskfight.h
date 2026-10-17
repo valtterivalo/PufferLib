@@ -2,6 +2,7 @@
 #define ENCOUNTER_RISKFIGHT_H
 #include "riskfight/riskfight_snapshot.h"
 #include "riskfight/riskfight_session.h"
+#include "riskfight/riskfight_start.h"
 #include "riskfight/riskfight_align.h"
 
 static void riskfight_obs(EncounterState* state, EncounterContext* context, float* out) {

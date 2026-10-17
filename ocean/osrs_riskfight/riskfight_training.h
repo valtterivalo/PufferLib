@@ -8,7 +8,9 @@ typedef struct {
     int session_ticks; /* game ticks of one session (episode): fights plus the time between them */
     float curveball_probability;
     int randomize;
-    float death_price; /* 0: drawn per fight, log-uniform in [0.4, 2.5]; else fixed */
+    float death_price; /* 0: drawn per fight, log-uniform in [0.4, 2.5] (or from the measured table, price_table); else fixed */
+    int price_table; /* death_price 0 only: 1 draws the price of a new opponent from the live table (RF_PRICE_TABLE: the first meetings of the user's recordings) instead of the wide log-uniform */
+    int fight_starts; /* 1: a fight starts as one of the user's recorded fights did (riskfight_start.h) instead of after the regear; 0 the regear (121 hitpoints, nothing swung) */
     float rep_start_probability; /* the share of sessions that start with a reputation (RF_REP_START_PROBABILITY unless rep_start_probability is set) */
     float pool_probability; /* self-play: the share of net-played opponents that wear a pool kit instead of one of our kits (needs opponent_pool) */
 } RiskfightTrainingConfig;
@@ -43,6 +45,12 @@ static RiskfightTrainingConfig riskfight_training_config(Dict* kwargs) {
     DictItem* price = dict_find(kwargs, "death_price");
     config.death_price = price ? (float)price->value : 1.0f;
     assert(config.death_price >= 0 && config.death_price <= RF_PRICE_MAX_X10 / 10.0f);
+    DictItem* table = dict_find(kwargs, "price_table");
+    config.price_table = table ? (int)table->value : 0;
+    assert((config.price_table == 0 || config.price_table == 1) && (config.price_table == 0 || config.death_price == 0));
+    DictItem* starts = dict_find(kwargs, "fight_starts");
+    config.fight_starts = starts ? (int)starts->value : 0;
+    assert(config.fight_starts == 0 || config.fight_starts == 1);
     DictItem* randomize = dict_find(kwargs, "domain_randomization");
     config.randomize = randomize ? (int)randomize->value : 0;
     assert(config.randomize == 0 || config.randomize == 1);
@@ -79,14 +87,6 @@ static float riskfight_training_omission(const RiskfightTraining* training) {
 
 static int riskfight_training_draw(RiskfightTraining* training, float probability) {
     return probability > 0 && encounter_rand_float(&training->rng) < probability;
-}
-
-static void riskfight_training_clear_returns(RiskfightState* state) {
-    memset(state->rewards, 0, sizeof(state->rewards));
-    memset(state->episode_returns, 0, sizeof(state->episode_returns));
-    memset(state->damage_rewards, 0, sizeof(state->damage_rewards));
-    memset(state->direct_ko_chance_mass, 0, sizeof(state->direct_ko_chance_mass));
-    memset(state->chance_rewards, 0, sizeof(state->chance_rewards));
 }
 
 /** One of our kits (live_loadout 3): the recorded live kit, the Voidwaker kit, or the Voidwaker kit with summer pies. */
@@ -131,7 +131,7 @@ static RiskfightTrainingStart riskfight_training_prefix(RiskfightState* state,
     }
     context->opp_driven = driven;
     context->opp_hook = hook;
-    riskfight_training_clear_returns(state);
+    riskfight_clear_returns(state);
     return RF_START_MIDFIGHT;
 }
 
@@ -212,6 +212,7 @@ static void riskfight_training_draw_opponent(RiskfightTraining* training, Riskfi
 static RiskfightTrainingStart riskfight_training_new_opponent(RiskfightTraining* training, RiskfightState* state,
     RiskfightContext* context, int allow_midfight) {
     state->death_price = training->config.death_price > 0 ? training->config.death_price :
+        training->config.price_table ? RF_PRICE_TABLE[encounter_rand_int(&training->rng, RF_PRICE_TABLE_COUNT)] :
         0.4f * powf(RF_PRICE_MAX_X10 / 4.0f, encounter_rand_float(&training->rng));
     RiskfightTrainingStart start = RF_START_FRESH;
     if (allow_midfight && riskfight_training_draw(training, training->config.midfight_probability)) {
@@ -227,6 +228,20 @@ static RiskfightTrainingStart riskfight_training_new_opponent(RiskfightTraining*
     return start;
 }
 
+/** The start drawn for a fight: the recorded row, and the seat in the user's part. */
+typedef struct { const RiskfightStartRecord* row; int us; } RiskfightStartDraw;
+
+/** The start of the fight just reset (fight_starts): one recorded start, drawn from the rematch rows or the first-meeting rows, applied on the kit and opponent drawn for this fight.
+ * In a self-play env whose seat 1 is a net the user's part falls to either seat with equal probability (the seats are treated alike); elsewhere it is seat 0. Row NULL: the regear stands. */
+static RiskfightStartDraw riskfight_training_start_fight(RiskfightTraining* training, RiskfightState* state, RiskfightContext* context, int rematch) {
+    if (!training->config.fight_starts) return (RiskfightStartDraw){NULL, 0};
+    const int net = context->self_play && !context->opp_driven;
+    const int us = net && riskfight_training_draw(training, 0.5f);
+    const RiskfightStartRecord* row = riskfight_start_draw(&training->rng, rematch);
+    riskfight_start_apply(state, context, row, us, &training->rng);
+    return (RiskfightStartDraw){row, us};
+}
+
 /** The first fight of a session: our kit (drawn once per session), full supplies on both sides, a new opponent. */
 static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* training,
     RiskfightState* state, RiskfightContext* context, int frozen_policy) {
@@ -235,7 +250,8 @@ static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* traini
     riskfight_training_draw_opponent(training, context, frozen_policy);
     riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
     RiskfightTrainingStart start = riskfight_training_new_opponent(training, state, context, 1);
-    training->start_tick = state->env.tick;
+    training->start_tick = state->env.tick; /* the ticks of a midfight prefix: the swings of a recorded start are the first tick of the fight */
+    if (start != RF_START_MIDFIGHT) (void)riskfight_training_start_fight(training, state, context, 0);
     training->start = start;
     training->omissions = 0;
     return start;
@@ -257,6 +273,7 @@ static void riskfight_training_next_fight(RiskfightTraining* training, Riskfight
         state->death_price = price;
         state->opp_lag = opp_lag;
     } else riskfight_training_new_opponent(training, state, context, 0);
+    (void)riskfight_training_start_fight(training, state, context, t->rematch);
     training->start_tick = 0;
     training->start = RF_START_FRESH;
 }
