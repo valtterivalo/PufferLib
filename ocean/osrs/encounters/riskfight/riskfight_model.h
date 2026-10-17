@@ -96,6 +96,8 @@ enum { RF_OVEREAT_PATIENCE = 10, RF_ANNOYED_LEAVE_TICKS = 4 };
 #define RF_REP_OBS_SCALE 4.0f
 /* Ticks left of a session whose end is not modelled: what riskfight_reset leaves and the live server keeps (a live session has no budget). */
 enum { RF_SESSION_OPEN = INT_MAX };
+/* The prayer level of the user's account (his trace O lines read 90 at full); both seats have it, since in self-play either seat plays his part. */
+enum { RF_PRAYER_LEVEL = 90 };
 #define RF_ACTION_DIMS_INIT {30,30,30,29,29,29,2,2,3,28,5,4,30,30,30,30,30,30,30,30,7}
 static const int RF_ACTION_DIMS[RF_HEADS] = RF_ACTION_DIMS_INIT;
 static const int RF_GEAR_SLOT_BY_HEAD[RF_HEADS] = {
@@ -510,7 +512,7 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
         Player* p = &s->env.players[i];
         init_player(p);
         s->env.pvp_runtime.maul[i] = osrs_granite_maul_init();
-        encounter_init_maxed_player_combat_stats(p, 99);
+        encounter_init_maxed_player_combat_stats(p, RF_PRAYER_LEVEL);
         p->has_blood_fury = 0;
         p->is_lunar_spellbook = 1;
         p->veng_active = 1;

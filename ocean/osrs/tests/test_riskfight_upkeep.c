@@ -130,25 +130,25 @@ static int test_restore_potions(void) {
     p->current_prayer = 10; p->prayer = PRAYER_NONE; p->offensive_prayer = OFFENSIVE_PRAYER_NONE;
     p->current_attack = 80; p->current_strength = 70; p->current_defence = 90; p->current_magic = 70; p->current_ranged = 60;
     int hp = p->current_hitpoints;
-    CHECK(p->base_prayer == 99 && p->base_attack == 99);
+    CHECK(p->base_prayer == RF_PRAYER_LEVEL && p->base_attack == 99);
     int click_prayer[] = {0, -1};
     tick(click_prayer);
-    CHECK(p->current_prayer == 10 + 7 + 99 / 4 && doses(0) == 3);
+    CHECK(p->current_prayer == 10 + 7 + RF_PRAYER_LEVEL / 4 && doses(0) == 3);
     CHECK(p->current_attack == 80 && p->current_strength == 70 && p->current_magic == 70); /* a prayer potion restores prayer only */
     CHECK(p->potion_timer == 2 && p->food_timer == 2); /* set to 3 by the drink, one tick elapsed */
     /* the lock: a second drink on the next two ticks is refused (no dose spent), the third tick after the first takes it */
     int click_restore[] = {1, -1};
-    tick(click_restore); CHECK(doses(1) == 4 && p->current_prayer == 10 + 7 + 99 / 4);
-    tick(click_restore); CHECK(doses(1) == 4 && p->current_prayer == 10 + 7 + 99 / 4);
+    tick(click_restore); CHECK(doses(1) == 4 && p->current_prayer == 10 + 7 + RF_PRAYER_LEVEL / 4);
+    tick(click_restore); CHECK(doses(1) == 4 && p->current_prayer == 10 + 7 + RF_PRAYER_LEVEL / 4);
     tick(click_restore);
     CHECK(doses(1) == 3);
-    CHECK(p->current_prayer == 10 + 7 + 99 / 4 + 8 + 99 / 4);
+    CHECK(p->current_prayer == 10 + 7 + RF_PRAYER_LEVEL / 4 + 8 + RF_PRAYER_LEVEL / 4);
     CHECK(p->current_attack == 99 && p->current_strength == 99 && p->current_defence == 99 && p->current_magic == 99 && p->current_ranged == 92);
     CHECK(p->current_hitpoints <= hp); /* no healing from a restore */
     /* the prayer points never pass the base */
-    p->current_prayer = 95; p->potion_timer = 0;
+    p->current_prayer = RF_PRAYER_LEVEL - 4; p->potion_timer = 0;
     tick(click_restore);
-    CHECK(p->current_prayer == 99 && doses(1) == 2);
+    CHECK(p->current_prayer == RF_PRAYER_LEVEL && doses(1) == 2);
     /* stats above base are left alone */
     p->potion_timer = 0; p->current_attack = 118; p->current_strength = 70;
     tick(click_restore);

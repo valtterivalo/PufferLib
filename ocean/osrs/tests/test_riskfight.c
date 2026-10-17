@@ -20,7 +20,7 @@ static void test_reset_and_equipment(void) {
     for (int i = 0; i < 2; i++) {
         Player* p = &state.env.players[i];
         assert(p->equipped[GEAR_SLOT_AMMO] == ITEM_NONE);
-        assert(p->current_hitpoints == 121 && p->current_prayer == 99);
+        assert(p->current_hitpoints == 121 && p->current_prayer == RF_PRAYER_LEVEL);
         assert(p->current_attack == 118 && p->current_strength == 118 && p->current_defence == 118);
         assert(state.inventory_use[i].divine_combat_ticks == OSRS_DIVINE_DURATION);
         assert(p->veng_active && p->veng_cooldown == 0 && p->special_energy == 100);

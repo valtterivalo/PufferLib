@@ -380,7 +380,7 @@ static void test_every_fight_is_a_regear(void) {
             for (int side = 0; side < 2; side++) {
                 const Player* p = &s->env.players[side];
                 /* Seat 1 wears whatever kit steps up (a pool kit may carry less food or start at 22 hitpoints); seat 0 is our own kit. */
-                assert(p->special_energy == 100 && p->current_attack > 99 && p->current_prayer == 99);
+                assert(p->special_energy == 100 && p->current_attack > 99 && p->current_prayer == RF_PRAYER_LEVEL);
                 assert(side == 1 ? p->current_hitpoints <= 121 : p->current_hitpoints == 121 && count_food(p) == full_food[0] && s->inventory_use[0].vengeance_sacks > 4);
             }
             destroy(env);
