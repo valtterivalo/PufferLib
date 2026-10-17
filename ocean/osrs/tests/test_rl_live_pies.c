@@ -70,14 +70,20 @@ int main(void) {
     assert(osrs_inventory_cell_metadata(&us->inventory_cells[pie_slots[1]])->dose_count == 1);
     assert(osrs_inventory_cell_metadata(&us->inventory_cells[pie_slots[2]])->consumable_kind == OSRS_CONSUMABLE_PIE_DISH);
 
-    /* The food head offers the pie and half a pie (the dish is no food), and its action is a click on that slot. */
+    /* The food head offers the pie and half a pie (the dish is no food) at their entries of the canonical bag, and choosing one is a click on its physical slot. */
     unsigned char mask[RF_MASK_SIZE];
     riskfight_write_action_mask(s, 0, mask);
     const unsigned char* food = mask + RF_HEAD_OFFSET[RF_FOOD];
-    assert(food[pie_slots[0] + 1] && food[pie_slots[1] + 1] && !food[pie_slots[2] + 1]);
+    const RiskfightBagOrder order = riskfight_bag_order(us);
+    int pie_entries[3];
+    for (int i = 0; i < 3; i++)
+        for (int entry = 0; entry < OSRS_INVENTORY_SIZE; entry++)
+            if (order.slot[entry] == pie_slots[i]) pie_entries[i] = entry;
+    assert(food[pie_entries[0] + 1] && food[pie_entries[1] + 1] && !food[pie_entries[2] + 1]);
     for (int i = 0; i < 2; i++) {
         int actions[RF_HEADS] = {0};
-        actions[RF_FOOD] = pie_slots[i] + 1;
+        actions[RF_FOOD] = pie_entries[i] + 1;
+        riskfight_bag_to_physical(us, actions);
         RtRecord out[GS_WIRE_MAX_RECORDS];
         int n = rt_records(actions, s, out);
         assert(n == 1 && out[0].kind == GS_WIRE_CLICK_SLOT && out[0].arg == pie_slots[i]);

@@ -239,7 +239,8 @@ static int rt_worn_index(int gear_slot) {
     return -1;
 }
 
-/* Head actions as the plugin's click records, in the order the sim queues them. Movement, orb, prayer and style heads are masked off by riskfight_deployable. */
+/* Head actions as the plugin's click records, in the order the sim queues them. Bag actions name physical slots (riskfight_bag_to_physical of the net's).
+ * Movement, orb, prayer and style heads are masked off by riskfight_deployable. */
 static int rt_records(const int* actions, const RiskfightState* s, RtRecord* out) {
     int n = 0;
     static const int gear_heads[] = {RF_WEAPON, RF_SHIELD, RF_RING};
@@ -315,6 +316,7 @@ static double rt_decide(Request* q, const RtSeen* seen, int new_fight, int fight
     riskfight_write_action_mask(s, 0, mask);
     if (f->net) rf_net_act(f->net, obs, mask, &f->rng, f->hard, RF_ACTION_DIMS, RF_HEADS, actions);
     else memset(actions, 0, sizeof(actions));
+    riskfight_bag_to_physical(us, actions); /* the net picks entries of the canonical bag; the client clicks the slot that holds it */
     *count = rt_records(actions, s, records);
     return (la_seconds() - started) * 1e6;
 }

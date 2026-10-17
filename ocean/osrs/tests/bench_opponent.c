@@ -45,6 +45,8 @@ int main(int argc, char** argv) {
         if (fitted) opp_fit_actions(&fit, &f->state, &f->hist, f->tick, f->state.script_seed[1], actions + RF_HEADS);
         else riskfight_script(f->obs[1], riskfight_pick_profile((RiskfightOpponent)0, f->state.script_seed[1]), f->state.script_seed[1], f->state.consume_ticks[1], actions + RF_HEADS);
         int vw = f->state.spec_voidwaker[1], maul = f->state.spec_maul[1];
+        riskfight_bag_to_physical(&f->state.env.players[0], actions); /* the scripts read the net's observation */
+        if (!fitted) riskfight_bag_to_physical(&f->state.env.players[1], actions + RF_HEADS);
         riskfight_step((EncounterState*)&f->state, (EncounterContext*)&f->context, actions);
         StepEvents e = {.swung = f->state.visible[0].last_attack_tick == f->state.env.tick - 1, .vw = f->state.spec_voidwaker[1] - vw, .maul = f->state.spec_maul[1] - maul};
         if (fitted) hist_step(&f->hist, &f->state, f->tick++, &e);

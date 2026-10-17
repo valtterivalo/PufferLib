@@ -222,6 +222,7 @@ static int riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
     return 0;
 }
 
+/** Head actions as commands. Bag actions name physical slots (action k clicks slot k - 1): a net's actions go through riskfight_bag_to_physical first. */
 static void riskfight_policy_commands(const RiskfightState* s, int agent,
     const int* actions, HumanInput* hi) {
     human_input_clear_pending(hi);
@@ -545,6 +546,8 @@ static void riskfight_plugin_prayers(int* actions) {
     actions[RF_OVERHEAD] = ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE;
 }
 
+/** `actions`: the heads of seat 0, then of seat 1 when he is a second agent, on physical slots like riskfight_policy_commands (a net's go through
+ * riskfight_bag_to_physical first: osrs_riskfight.h puf_step). */
 static void riskfight_step(EncounterState* state, EncounterContext* context, const int* actions) {
     RiskfightState* s = (RiskfightState*)state;
     RiskfightContext* ctx = (RiskfightContext*)context;

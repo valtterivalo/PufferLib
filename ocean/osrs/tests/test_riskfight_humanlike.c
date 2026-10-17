@@ -14,7 +14,7 @@ static void reset(void) {
 
 static void decide(const RiskfightProfile* profile, uint32_t seed, int* actions) {
     float obs[RF_OBS_SIZE];
-    riskfight_write_observation(&state, 0, obs);
+    riskfight_write_script_observation(&state, 0, obs);
     riskfight_script(obs, profile, seed, 0, actions);
     for (int head = 0; head < RF_HEADS; head++)
         assert(actions[head] >= 0 && actions[head] < RF_ACTION_DIMS[head]);

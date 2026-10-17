@@ -31,7 +31,7 @@ int main(void) {
             int actions[2 * RF_HEADS];
             for (int side = 0; side < 2; side++) {
                 float obs[RF_OBS_SIZE];
-                riskfight_write_observation(s, side, obs);
+                riskfight_write_script_observation(s, side, obs);
                 riskfight_script(obs, side ? his : ours, s->script_seed[side], s->consume_ticks[side], actions + side * RF_HEADS);
             }
             riskfight_step((EncounterState*)s, (EncounterContext*)&sim.context, actions);

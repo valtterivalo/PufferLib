@@ -81,7 +81,7 @@ static void stages(int sweeps, int envs, HarnessPolicy policy) {
                 t0 = harness_now_ns();
                 for (int r = 0; r < REPS; r++) for (int a = 0; a < 2; a++) riskfight_write_observation(&e->state, a, f);
                 t1 = harness_now_ns(); obs += t1 - t0; t0 = t1;
-                for (int r = 0; r < REPS; r++) for (int a = 0; a < 2; a++) riskfight_write_observation_core(&e->state, a, f, NULL);
+                for (int r = 0; r < REPS; r++) for (int a = 0; a < 2; a++) riskfight_write_observation_core(&e->state, a, f, &RF_BAG_PHYSICAL, NULL);
                 t1 = harness_now_ns(); obs_core += t1 - t0; t0 = t1;
                 for (int r = 0; r < REPS; r++) for (int a = 0; a < 2; a++) { RiskfightBagWeapons bw = {{0}, 0}; riskfight_threat_write(&e->state.env.players[a], &bw, &e->state.visible[a].threat, e->state.visible[a].health_bar, f + RF_THREAT_START); }
                 t1 = harness_now_ns(); threat += t1 - t0; t0 = t1;

@@ -250,8 +250,8 @@ static RiskfightStartDraw riskfight_training_start_fight(RiskfightTraining* trai
 }
 
 /** Both bags of the fight just reset, each permuted uniformly (Fisher-Yates on the training stream): a kit's layout is fixed (food first, then restores, brews,
- * combat), a player's is his own (the user keeps restores in 4 and 8, brews in 13 and 15), so a slot must not tell the net what it holds. The mask and the
- * scripts read contents, never positions. */
+ * combat), a player's is his own (the user keeps restores in 4 and 8, brews in 13 and 15). The net sees the bag in canonical order (riskfight_bag.h), so the
+ * permutation changes nothing it sees: it keeps the scripts honest (they read contents, never positions) and the invariance exercised. */
 static void riskfight_training_shuffle_bags(RiskfightTraining* training, RiskfightState* state) {
     for (int seat = 0; seat < 2; seat++) {
         OsrsInventoryCell* cells = state->env.players[seat].inventory_cells;

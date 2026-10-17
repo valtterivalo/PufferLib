@@ -32,7 +32,7 @@ int main(int argc, char** argv) {
             while (!state.env.episode_over) {
                 int actions[2 * RF_HEADS] = {0};
                 float obs[RF_OBS_SIZE];
-                riskfight_write_observation(&state, 0, obs);
+                riskfight_write_script_observation(&state, 0, obs);
                 riskfight_script(obs, &RISKFIGHT_HUMAN_PROFILES[(e + 3) % RISKFIGHT_HUMAN_TRAIN_PROFILES], state.script_seed[0], state.consume_ticks[0], actions);
                 context.self_play = 0;
                 riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);

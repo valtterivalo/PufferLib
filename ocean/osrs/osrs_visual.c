@@ -1710,7 +1710,7 @@ static void visual_frame(void* arg) {
             }
         } else if (strcmp(edef->name, "riskfight") == 0) {
             float observation[RF_OBS_SIZE];
-            riskfight_write_observation((RiskfightState*)env->encounter_state, 0, observation);
+            riskfight_write_observation((RiskfightState*)env->encounter_state, 0, observation); /* edef->step takes the net's action space */
             uint32_t seed = ((RiskfightState*)env->encounter_state)->script_seed[0];
             riskfight_script(observation, riskfight_pick_profile(RISKFIGHT_HUMAN, seed), seed,
                 ((RiskfightState*)env->encounter_state)->consume_ticks[0], enc_actions);

@@ -16,7 +16,7 @@ static const RiskfightProfile HUNGRY = {{1000, 1000, 1000, 1000, 1000}, 0, 0, {0
 
 static void decide(const RiskfightProfile* profile, int* actions) {
     float obs[RF_OBS_SIZE];
-    riskfight_write_observation(&state, 0, obs);
+    riskfight_write_script_observation(&state, 0, obs);
     riskfight_script(obs, profile, 1, 0, actions);
 }
 
@@ -97,8 +97,11 @@ static void test_joint_weapon_shield_mask(void) {
     assert(!osrs_can_equip_from_cell(p, p->inventory_cells, shield_action - 1));
     unsigned char mask[RF_MASK_SIZE];
     riskfight_write_action_mask(&state, 0, mask);
-    assert(mask[RF_ACTION_DIMS[RF_WEAPON] + shield_action] == 1);
-    assert(mask[actions[RF_WEAPON]] == 1);
+    int entries[RF_HEADS]; /* the mask is the net's: its bag actions index the canonical bag */
+    memcpy(entries, actions, sizeof(entries));
+    riskfight_bag_to_canonical(p, entries);
+    assert(mask[RF_ACTION_DIMS[RF_WEAPON] + entries[RF_SHIELD]] == 1);
+    assert(mask[entries[RF_WEAPON]] == 1);
 
     OsrsInventoryCell before[OSRS_INVENTORY_SIZE];
     memcpy(before, p->inventory_cells, sizeof(before));

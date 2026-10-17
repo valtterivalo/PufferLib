@@ -359,8 +359,10 @@ void puf_step(Env* env) {
         return;
     }
     int actions[2 * RF_HEADS] = {0};
-    for (int i = 0; i < env->num_agents; i++)
+    for (int i = 0; i < env->num_agents; i++) {
         for (int j = 0; j < RF_HEADS; j++) actions[i * RF_HEADS + j] = (int)env->agents[i].actions[j];
+        riskfight_bag_to_physical(&env->state.env.players[i], actions + i * RF_HEADS); /* a net picks entries of the canonical bag (riskfight_bag.h) */
+    }
     if (riskfight_deployable)
         for (int i = 0; i < env->num_agents; i++) riskfight_plugin_prayers(actions + i * RF_HEADS); /* the plugin's Piety and Smite for every net seat */
     int stop_issued = actions[RF_PRIMARY] == RF_STOP;

@@ -95,7 +95,7 @@ int main(void) {
     for (int tick = 0; tick < 64; tick++) {
         for (int i = 0; i < 2; i++) {
             float obs[RF_OBS_SIZE];
-            riskfight_write_observation(&replay->env.state, i, obs);
+            riskfight_write_script_observation(&replay->env.state, i, obs);
             riskfight_script(obs, &STEADY, replay->env.state.script_seed[i], replay->env.state.consume_ticks[i],
                 commands + i * RF_HEADS);
         }

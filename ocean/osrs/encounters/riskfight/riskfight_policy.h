@@ -1,6 +1,7 @@
 #ifndef OSRS_RISKFIGHT_POLICY_H
 #define OSRS_RISKFIGHT_POLICY_H
 #include "riskfight_model.h"
+#include "riskfight_bag.h"
 #include "riskfight_norms.h"
 
 enum {
@@ -91,8 +92,8 @@ static void riskfight_write_session_observation(const RiskfightState* s, int age
     out[7] = riskfight_teleport_kosher_now(&s->env.players[agent], obs + RF_THREAT_START, v->spec_est);
 }
 
-/** The observation up to the price, and the weapons of the agent's bag when `bag_weapons` is given (the threat block needs them). */
-static void riskfight_write_observation_core(const RiskfightState* s, int agent, float* obs, RiskfightBagWeapons* bag_weapons) {
+/** The observation up to the price, and the weapons of the agent's bag when `bag_weapons` is given (the threat block needs them). The bag rows follow `order`. */
+static void riskfight_write_observation_core(const RiskfightState* s, int agent, float* obs, const RiskfightBagOrder* order, RiskfightBagWeapons* bag_weapons) {
     const Player* p = &s->env.players[agent];
     const OsrsInventoryUseState* use = &s->inventory_use[agent];
     const RiskfightVisibleOpponent* v = &s->visible[agent];
@@ -116,9 +117,9 @@ static void riskfight_write_observation_core(const RiskfightState* s, int agent,
     };
     memcpy(obs, self, sizeof(self));
     assert(p->base_hitpoints == OSRS_ITEM_OBS_TABLE_BASE_HITPOINTS);
-    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
-        uint16_t code = p->inventory_cells[slot].content_code;
-        float* row = obs + RF_INVENTORY_START + slot * RF_INVENTORY_WIDTH;
+    for (int entry = 0; entry < OSRS_INVENTORY_SIZE; entry++) {
+        uint16_t code = p->inventory_cells[order->slot[entry]].content_code;
+        float* row = obs + RF_INVENTORY_START + entry * RF_INVENTORY_WIDTH;
         memcpy(row, RF_INVENTORY_ROWS[code], sizeof(RF_INVENTORY_ROWS[code]));
         const OsrsItemContentMetadata* m = osrs_item_content_metadata(code);
         row[5] = m->consumable_kind == OSRS_CONSUMABLE_VENGEANCE_SACK ?
@@ -163,16 +164,18 @@ static void riskfight_write_observation_core(const RiskfightState* s, int agent,
     obs[RF_PRICE] = s->death_price * 10.0f / RF_PRICE_MAX_X10;
 }
 
-/** What the scripts read: the observation without its appended blocks (they read nothing from them), at the cost of the base. */
+/** What the scripts read: the observation without its appended blocks (they read nothing from them), at the cost of the base. The bag in physical slot order: scripts
+ * click physical slots. */
 static void riskfight_write_script_observation(const RiskfightState* s, int agent, float* obs) {
-    riskfight_write_observation_core(s, agent, obs, NULL);
+    riskfight_write_observation_core(s, agent, obs, &RF_BAG_PHYSICAL, NULL);
     riskfight_threat_write_stacks(&s->env.players[agent], &s->visible[agent].threat, obs + RF_THREAT_START); /* the Soulreaper stacks are the one thing a script reads there */
 }
 
-/** The full observation: the base, then the appended blocks in order (threat features, session). */
+/** The full observation, the net's: the base with the bag in canonical order (riskfight_bag.h), then the appended blocks in order (threat features, session). */
 static void riskfight_write_observation(const RiskfightState* s, int agent, float* obs) {
     RiskfightBagWeapons bag_weapons = {{0}, 0};
-    riskfight_write_observation_core(s, agent, obs, &bag_weapons);
+    const RiskfightBagOrder order = riskfight_bag_order(&s->env.players[agent]);
+    riskfight_write_observation_core(s, agent, obs, &order, &bag_weapons);
     riskfight_threat_write(&s->env.players[agent], &bag_weapons, &s->visible[agent].threat, s->visible[agent].health_bar, obs + RF_THREAT_START);
     riskfight_write_session_observation(s, agent, obs);
 }
@@ -194,8 +197,10 @@ __attribute__((constructor)) static void riskfight_build_mask_template(void) {
     assert(offset == RF_MASK_SIZE);
 }
 
+/** The net's mask: its bag actions index the canonical order of riskfight_bag.h. */
 static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsigned char* mask) {
     const Player* p = &s->env.players[agent];
+    const RiskfightBagOrder order = riskfight_bag_order(p);
     memcpy(mask, RF_MASK_TEMPLATE, RF_MASK_SIZE);
     unsigned char* heads[RF_HEADS];
     unsigned char* gear_masks[NUM_GEAR_SLOTS];
@@ -207,36 +212,36 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
         gear_masks[gear_slot] = heads[head];
         heads[head][RF_UNEQUIP] = p->equipped[gear_slot] != ITEM_NONE && has_empty;
     }
-    int has_teleport = 0, one_handed_switch = 0, shield_slot = -1, two_handed_wieldable = 0;
+    int has_teleport = 0, one_handed_switch = 0, has_shield = 0, two_handed_wieldable = 0;
     /* One spec of the wielded spec weapon, else of the cheapest spec weapon in the bag: the plain granite maul costs 60, the ornate 50. */
     int wielded_spec_cost = osrs_spec_cost(p->equipped[GEAR_SLOT_WEAPON]), bag_spec_cost = 0;
-    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
-        const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[slot]);
+    for (int entry = 0; entry < OSRS_INVENTORY_SIZE; entry++) {
+        const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[order.slot[entry]]);
         if (m->gear_slot >= 0) {
             int allowed = osrs_can_equip_metadata(p, m, has_empty);
-            gear_masks[m->gear_slot][slot + 1] = allowed;
+            gear_masks[m->gear_slot][entry + 1] = allowed;
             if (m->gear_slot == GEAR_SLOT_WEAPON) {
                 int cost = osrs_spec_cost(m->item_idx);
                 if (cost > 0 && (!bag_spec_cost || cost < bag_spec_cost)) bag_spec_cost = cost;
                 if (!item_is_two_handed(m->item_idx)) one_handed_switch |= allowed;
                 else two_handed_wieldable |= allowed;
             }
-            if (m->gear_slot == GEAR_SLOT_SHIELD) shield_slot = slot;
+            if (m->gear_slot == GEAR_SLOT_SHIELD) has_shield = 1;
         }
         if (m->click_action == OSRS_CLICK_EAT) {
             int head = m->consumable_kind == OSRS_CONSUMABLE_HALIBUT || m->consumable_kind == OSRS_CONSUMABLE_KARAMBWAN ? RF_COMBO : RF_FOOD;
             /* An anglerfish at full hitpoints inside the PvP overheal lock heals nothing (the lock only forbids the overheal), like a shark at full: not offered. */
             int wasted = m->consumable_kind == OSRS_CONSUMABLE_ANGLERFISH && p->pvp_overheal_block > 0 && p->current_hitpoints >= p->base_hitpoints;
-            heads[head][slot + 1] = !wasted && osrs_can_eat_consumable_kind(p, (OsrsConsumableKind)m->consumable_kind);
+            heads[head][entry + 1] = !wasted && osrs_can_eat_consumable_kind(p, (OsrsConsumableKind)m->consumable_kind);
         }
-        heads[RF_DRINK][slot + 1] = m->click_action == OSRS_CLICK_DRINK && p->potion_timer == 0 &&
+        heads[RF_DRINK][entry + 1] = m->click_action == OSRS_CLICK_DRINK && p->potion_timer == 0 &&
             (m->consumable_kind != OSRS_CONSUMABLE_DIVINE_COMBAT || p->current_hitpoints > OSRS_DIVINE_DAMAGE);
         has_teleport |= m->click_action == OSRS_CLICK_TELEPORT;
     }
-    if (shield_slot >= 0 && one_handed_switch && item_is_two_handed(p->equipped[GEAR_SLOT_WEAPON])) {
-        for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
-            if (osrs_inventory_cell_metadata(&p->inventory_cells[slot])->gear_slot == GEAR_SLOT_SHIELD)
-                heads[RF_SHIELD][slot + 1] = 1;
+    if (has_shield && one_handed_switch && item_is_two_handed(p->equipped[GEAR_SLOT_WEAPON])) {
+        for (int entry = 0; entry < OSRS_INVENTORY_SIZE; entry++)
+            if (osrs_inventory_cell_metadata(&p->inventory_cells[order.slot[entry]])->gear_slot == GEAR_SLOT_SHIELD)
+                heads[RF_SHIELD][entry + 1] = 1;
     }
     heads[RF_VENGEANCE][1] = !p->veng_active && p->veng_cooldown <= 1 &&
         p->current_magic >= OSRS_VENGEANCE_MAGIC_LEVEL && s->inventory_use[agent].vengeance_sacks > 0;

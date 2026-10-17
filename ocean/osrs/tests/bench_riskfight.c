@@ -45,6 +45,7 @@ int main(int argc, char** argv) {
             riskfight_script(f->obs[side], riskfight_pick_profile((RiskfightOpponent)pool, f->state.script_seed[side]),
                 f->state.script_seed[side], f->state.consume_ticks[side], actions + side * RF_HEADS);
         double next = seconds(); script += next - t; t = next;
+        for (int side = 0; side < 2; side++) riskfight_bag_to_physical(&f->state.env.players[side], actions + side * RF_HEADS); /* the scripts read the net's observation */
         riskfight_step((EncounterState*)&f->state, (EncounterContext*)&f->context, actions);
         next = seconds(); step += next - t; t = next;
         checksum = checksum * 31 + f->state.env.tick + f->state.env.players[0].current_hitpoints;

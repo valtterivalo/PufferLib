@@ -91,6 +91,16 @@ static void riskfight_render_post_tick(EncounterState* state, EncounterContext* 
     snprintf(overlay->status_text, sizeof(overlay->status_text), "%s",
         overlay->status_text_active ? "Not enough space in your inventory." : "");
 }
+/** The encounter's actions are in the space of its obs and mask, the net's: bag actions index the canonical bag (riskfight_bag.h). */
+static void riskfight_encounter_step(EncounterState* state, EncounterContext* context, const int* actions) {
+    const RiskfightState* s = (const RiskfightState*)state;
+    const RiskfightContext* ctx = (const RiskfightContext*)context;
+    int physical[2 * RF_HEADS] = {0};
+    const int seats = ctx->self_play && !ctx->opp_driven ? 2 : 1;
+    memcpy(physical, actions, (size_t)seats * RF_HEADS * sizeof(int));
+    for (int seat = 0; seat < seats; seat++) riskfight_bag_to_physical(&s->env.players[seat], physical + seat * RF_HEADS);
+    riskfight_step(state, context, physical);
+}
 static const EncounterDef ENCOUNTER_RISKFIGHT = {
     .name = "riskfight", .display_name = "Riskfight",
     .obs_size = RF_OBS_SIZE, .num_action_heads = RF_HEADS,
@@ -99,7 +109,7 @@ static const EncounterDef ENCOUNTER_RISKFIGHT = {
     .init_context = riskfight_init_context, .destroy_context = riskfight_destroy_context,
     .init_state = riskfight_init_state, .finalize_context = riskfight_finalize_context,
     .create = riskfight_create, .destroy = riskfight_destroy, .reset = riskfight_reset,
-    .step = riskfight_step, .step_human_commands = riskfight_step_human,
+    .step = riskfight_encounter_step, .step_human_commands = riskfight_step_human,
     .human_equipment_mode = HUMAN_EQUIPMENT_UNEQUIP_COMMANDS,
     .write_obs = riskfight_obs, .write_mask = riskfight_mask,
     .get_reward = riskfight_reward, .is_terminal = riskfight_terminal,

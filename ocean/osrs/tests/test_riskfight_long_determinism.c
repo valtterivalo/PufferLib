@@ -49,7 +49,7 @@ static void scripted_step(RiskfightState* s, RiskfightContext* ctx, int profile)
     int actions[2 * RF_HEADS] = {0};
     float obs[RF_OBS_SIZE];
     for (int side = 0; side < 2; side++) {
-        riskfight_write_observation(s, side, obs);
+        riskfight_write_script_observation(s, side, obs);
         riskfight_script(obs, &RISKFIGHT_HUMAN_PROFILES[(profile + side) %
             (RISKFIGHT_HUMAN_TRAIN_PROFILES + RISKFIGHT_HUMAN_HELDOUT_PROFILES)],
             s->script_seed[side], s->consume_ticks[side], actions + side * RF_HEADS);

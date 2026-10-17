@@ -226,7 +226,10 @@ static void test_voidwaker_chance_is_guaranteed_below_minimum(void) {
     reset(0);
     env->context.chance_reward_coeff = 0.25f;
     env->state.env.players[1].current_hitpoints = 1;
-    actions[0][RF_WEAPON] = 24;
+    int voidwaker[RF_HEADS] = {0};
+    voidwaker[RF_WEAPON] = 24; /* the kit's voidwaker slot, as the net's entry of the canonical bag */
+    riskfight_bag_to_canonical(&env->state.env.players[0], voidwaker);
+    actions[0][RF_WEAPON] = (float)voidwaker[RF_WEAPON];
     actions[0][RF_SPECIAL] = 1;
     actions[0][RF_PRIMARY] = RF_ATTACK;
     puf_step(env);
