@@ -113,6 +113,16 @@ static void test_consumable_amounts_and_laws(void) {
     encounter_brew_drain_stats(&half_def);
     CHECK("brew def boost is base-derived even when defence is drained",
         half_def.current_defence == 50 + 21);
+    Player overhealed = make_maxed_player();
+    overhealed.current_hitpoints = 121;
+    encounter_apply_brew_heal(&overhealed, osrs_brew_heal_amount(99));
+    CHECK("a brew never lowers hitpoints above its cap (anglerfish 121 stays 121)",
+        overhealed.current_hitpoints == 121);
+    Player high_def = make_maxed_player();
+    high_def.current_defence = 125;
+    encounter_brew_drain_stats(&high_def);
+    CHECK("a brew never lowers defence boosted above its cap (125 stays 125)",
+        high_def.current_defence == 125);
     for (int i = 0; i < 20; i++) encounter_restore_stats(&p);
     CHECK("restores recover every brewed-down stat to base",
         p.current_attack == 99 && p.current_strength == 99 &&

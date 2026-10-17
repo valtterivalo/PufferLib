@@ -426,6 +426,21 @@ static void test_nh_masked_drink_is_not_executed(void) {
         player->potion_timer, 0);
 }
 
+static void test_nh_brew_keeps_overheal(void) {
+    printf("--- NH PvP brew never lowers an anglerfish overheal ---\n");
+    ENCOUNTER_NH_PVP.reset(
+        (EncounterState*)nh_state,
+        (EncounterContext*)&nh_context,
+        3);
+    Player* player = &nh_state->env.players[0];
+    player->base_hitpoints = 99;
+    player->current_hitpoints = 121;
+    player->brew_doses = 1;
+    pvp_apply_drink_one_dose_effect(player, OSRS_CONSUMABLE_BREW);
+    ASSERT_INT_EQ("brew at 121 keeps 121 hitpoints", player->current_hitpoints, 121);
+    ASSERT_INT_EQ("brew at 121 heals nothing", player->last_brew_heal, 0);
+}
+
 static void test_nh_reset_keeps_two_handed_switch_usable(void) {
     printf("--- NH PvP reset keeps two-handed switches usable ---\n");
     ENCOUNTER_NH_PVP.reset(
@@ -537,6 +552,7 @@ int main(void) {
     test_nh_out_of_arena_destination_fallback();
     test_nh_shared_contract_and_inventory_actions();
     test_nh_masked_drink_is_not_executed();
+    test_nh_brew_keeps_overheal();
     test_nh_reset_keeps_two_handed_switch_usable();
     test_nh_ko_supply_bonus_is_normalized_to_initial_pool();
     test_nh_scripted_policy_action_sequences();
