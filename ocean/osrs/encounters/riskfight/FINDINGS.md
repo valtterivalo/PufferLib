@@ -219,3 +219,22 @@ Live, s6t0 drank super restores at full prayer with nothing drained (prayer 87-9
   - At 0.75 the recorded triples go past 460 ms 49% of the time (16% for the chooser's triple), and at 0.60 5.4% (0%). Not yet measured live.
   - The live server now clicks the copy of a consumable that shortens the path. Triple eats use the copies near the potion; single eats use the copy farthest from the potions (24bc3f4a6, the user's idea). On the trace, the summed path of multi-click batches went from 1,397 to 792 px.
   - The sim's motor model (riskfight_motor.h) still has the old, slower clock. Refit it from recordings made with the new plugin, then retrain.
+
+## 2026-10-18, s7t18 live (run-20261017T230317Z.71610): overeating against an axe, a rude kosher teleport (branch gate-kosher)
+
+- **Overeating.** The opponent had a Soulreaper axe and a maul the pool said he might carry, and never specced (100 all fight). The chance range was 146-159 (axe hit plus two maul specials), so every meal passed the gate; the net ate at 96-99 and brewed 99 to 115.
+  - The user's account: the axe hit and the double maul land on different ticks, so he eats in between; he camps at 85-92 against an axe whose owner may double-maul.
+  - The recordings agree: in all 11 recorded hit-then-maul combos (scripts/measure_combos.py) the opening's hitsplat and the maul's land on different ticks. With his PID the opening lands on the swing's tick and the maul on the next; without it, both a tick later. One combo opened with a dragon claws special whose second pair landed with a single maul special; that sum is under the max form too.
+  - The range is now the larger of the opening hit and the k maul specials his energy pays for, plus the Vengeance echo (`riskfight_tick_damage_bound`). In the live fight it reads 88.
+  - Share of the user's meals at or below the range (122 fights with composition seen, 1,667 meals; IsolationSam of October 6 stops the harness on his dragon darts, which have no attack style). The maul term counts only when it is:
+    - wielded or swung: 64.9%;
+    - pool prior >= 0.5: 71.6%;
+    - prior >= 0.25: 73.4%;
+    - in any slot (the old sum): 81.9%;
+    - in any slot, max form (chosen): 73.7%.
+  - No variant reaches 95%. The max form is the one that matches the user's band.
+  - Share of the net's 7 meal ticks in the live fight that each variant would mask: 86%, 86%, 86%, 0%, and 57% for the chosen max form (387, 398, 408 and 409 masked; 373, 379 and 391 offered).
+  - Of the user's meals above the new range: 20% come while he eats on that tick or the one before, 49% while his ready_min >= 2, and 37% under neither.
+  - RF_OVEREAT_PATIENCE is now 9 (p90 of the user's overeats per fight: 8).
+- **The teleport at 410** was kosher 1 because no spec weapon of his was known or likely (`his_cheapest 0`), though he had 100 energy. A player assumes the other side carries a special at the commonest cost, 50 (`RF_KOSHER_ASSUMED_SPEC`). After our specials, a teleport is now kosher only once his estimate is below 50.
+- **Prayers in training:** the plugin turns on Smite and Piety 1-3 ticks (uniform) after the fight starts. A deployed net's seat in `puf_step` now gets them from a per-fight draw of 1-3 steps, not on the first tick.

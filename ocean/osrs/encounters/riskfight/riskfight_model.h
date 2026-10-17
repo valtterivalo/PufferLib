@@ -100,13 +100,14 @@ enum { RF_SESSION_HORIZON_TICKS = 1500 };
 /* The regear delay is 250 ticks at its median and 640 at its 90th percentile, more with a reputation: waits beyond 1000 ticks read 1 in the wait-left feature. */
 enum { RF_WAIT_SCALE_TICKS = 1000 };
 /* Over-eating is rude (the user's account): once the opponent has seen more than RF_OVEREAT_PATIENCE overeats in a fight he teleports within RF_ANNOYED_LEAVE_TICKS ticks.
- * The patience sits just above the user's own play, measured with this very definition (riskfight_chance_range: one opening hit plus the instant maul specials his
- * energy pays for; his Vengeance up from the fight's start until a proc or a damaging hit without one, then after a seen cast) on his October 2026 recordings
- * (scripts/measure_overeats.py, ocean/osrs/tests/overeat_tapes.c): 123 fights with the opponent's composition observed (the 28 of October 4-6 without it are not used:
- * his weapon is unknown there), 1676 meals, 296 (17.7%) overeats; per fight mean 2.4, p50 1, p75 3, p90 7, p95 9, max 21 (histogram 0:57 1:16 2:13 3:9 4:2 5:8 6:3
- * 7:4 8:3 9:2 11:1 12:1 13:1 16:1 18:1 21:1). Rule: the smallest integer above his p90, so 6.5% of his own fights (8 of 123) would annoy an opponent. With his
- * Vengeance counted only after a seen cast the p90 is 6 (patience 7); 107 of the 123 fights show his proc before any cast, so that rule was wrong for most fights. */
-enum { RF_OVEREAT_PATIENCE = 8, RF_ANNOYED_LEAVE_TICKS = 4 };
+ * The patience sits just above the user's own play, measured with this very definition (riskfight_chance_range: the larger of one opening hit and the instant maul
+ * specials his energy pays for, which land a tick apart; his Vengeance up from the fight's start until a proc or a damaging hit without one, then after a seen cast) on
+ * his October 2026 recordings (scripts/measure_overeats.py, ocean/osrs/tests/overeat_tapes.c): 122 fights with the opponent's composition observed (the 28 of October
+ * 4-6 without it are not used: his weapon is unknown there; one more, IsolationSam of October 6, stops the harness on his dragon darts, which have no attack style),
+ * 1667 meals, 439 (26.3%) overeats; per fight mean 3.6, p50 2, p75 5, p90 8, p95 10.9, max 21 (histogram 0:25 1:21 2:16 3:12 4:11 5:10 6:4 7:4 8:7 9:4 10:1 11:2
+ * 12:1 13:1 16:1 18:1 21:1). Rule: the smallest integer above his p90, so 6.6% of his own fights (8 of 122) would annoy an opponent. With the range as the sum of
+ * the opening and the maul specials (before 2026-10-18) 17.7% of his meals were overeats and the patience was 8. */
+enum { RF_OVEREAT_PATIENCE = 9, RF_ANNOYED_LEAVE_TICKS = 4 };
 /* The reputation that reads 1 in the session block (riskfight_session.h): the user's account of how a few rude teleports weigh. */
 #define RF_REP_OBS_SCALE 4.0f
 /* Ticks left of a session whose end is not modelled: what riskfight_reset leaves and the live server keeps (a live session has no budget). */

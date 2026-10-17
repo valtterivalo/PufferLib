@@ -23,13 +23,16 @@
  *   the WORLD (riskfight_teleport_kosher): classifies a teleport that happened, from the true supplies of both sides at that tick (riskfight_step.h snapshots them).
  *   the PLAYER (riskfight_teleport_kosher_now): the policy's observation of whether a teleport now would be kosher, from what a player knows: his own bag, his own
  *     special energy, and an estimate of the other side's. His is the special energy counted from the specials seen (RiskfightVisibleOpponent.spec_est) against the
- *     cheapest special among the weapons the threat block says he wields, has swung, or likely carries (the pool prior, at least RF_KOSHER_LIKELY). Where the pool
- *     misses a weapon he actually carries the two disagree, and the world is the one that counts. */
+ *     cheapest special among the weapons the threat block says he wields, has swung, or likely carries (the pool prior, at least RF_KOSHER_LIKELY). When none is
+ *     known or likely, a player still assumes he carries one (nearly every fighter does) at the commonest cost, RF_KOSHER_ASSUMED_SPEC (50): a teleport after our
+ *     specials is then kosher only once his estimate is below 50. Where the reading misses or invents a weapon the two disagree, and the world is the one that counts. */
 #include "../../osrs_pvp_escape.h"
 #include "riskfight_threat.h"
 
 /* A weapon the pool says he may carry counts as "likely" at or above this probability: more likely than not. Weapons he wields or has swung are certain (p 1). */
 static const float RF_KOSHER_LIKELY = 0.5f;
+/* The special a player assumes the other side carries when none of his is known or likely: the commonest cost. */
+enum { RF_KOSHER_ASSUMED_SPEC = 50 };
 
 /** Kosher given our own supplies and whether the other side could still special (see the rule above). */
 static inline int riskfight_teleport_kosher_given(const OsrsEscapeSupplies* own, int other_could_special) {
@@ -55,10 +58,12 @@ static inline int riskfight_threat_cheapest_spec(const float* threat) {
     return cheapest;
 }
 
-/** The player's reading: would a teleport of `me` now be kosher, with his special energy estimated at `spec_est` and his weapons in the threat block `threat`. */
+/** The player's reading: would a teleport of `me` now be kosher, with his special energy estimated at `spec_est` and his weapons in the threat block `threat`. With no
+ * special of his known or likely, he is assumed to carry one costing RF_KOSHER_ASSUMED_SPEC. */
 static inline int riskfight_teleport_kosher_now(const Player* me, const float* threat, int spec_est) {
     const OsrsEscapeSupplies own = osrs_escape_supplies(me);
-    const int cheapest = riskfight_threat_cheapest_spec(threat);
-    return riskfight_teleport_kosher_given(&own, cheapest > 0 && spec_est >= cheapest);
+    const int known = riskfight_threat_cheapest_spec(threat);
+    const int cheapest = known ? known : RF_KOSHER_ASSUMED_SPEC;
+    return riskfight_teleport_kosher_given(&own, spec_est >= cheapest);
 }
 #endif

@@ -57,6 +57,8 @@ struct Env {
     int wait_left;                       /* ticks of the wait between two fights still to pass: each is a step of no choice, reward 0 */
     int wait_obs_valid;                  /* the buffers hold the full observation and wait mask of this very state: the last full observe was made while waiting and nothing but the session clock has moved since */
     RiskfightTransition wait_transition; /* what the wait leads to */
+    int fight_steps;                     /* steps of the current fight played so far */
+    int prayer_step[2];                  /* deployed: the step of the fight from which the plugin keeps Piety and Smite up for each net seat (riskfight_native_fight_begins) */
     float session_stake;                 /* kills minus price times deaths so far, in kill units */
     RiskfightState state;
     RiskfightMaskKey mask_key[2]; /* what each agent's mask buffer holds (riskfight_write_action_mask_keyed) */
@@ -210,11 +212,19 @@ static void riskfight_native_opponent_hooks(Env* env, int new_opponent) {
     env->context.opp_hook = oppfit_actions;
     env->context.opp_after = oppfit_after;
 }
+/** The plugin turns on Smite and Piety 1 to 3 ticks (uniform) after the fight starts, not on its first tick: drawn per net seat for a deployed net (only a deployed net
+ * has the plugin, riskfight_plugin_prayers). */
+static void riskfight_native_fight_begins(Env* env) {
+    env->fight_steps = 0;
+    if (riskfight_deployable)
+        for (int i = 0; i < env->num_agents; i++) env->prayer_step[i] = 1 + encounter_rand_int(&env->training.rng, 3);
+}
 /** A new session: full supplies, the first opponent, the whole budget. */
 static void riskfight_native_reset(Env* env) {
     riskfight_align_reset(&env->align);
     riskfight_training_reset(&env->training, &env->state, &env->context, env->tag);
     riskfight_native_opponent_hooks(env, 1);
+    riskfight_native_fight_begins(env);
     env->session_elapsed = env->session_fights = 0;
     env->session_stake = 0;
     env->wait_left = 0;
@@ -313,6 +323,7 @@ static void riskfight_native_next_fight(Env* env) {
     riskfight_align_reset(&env->align);
     riskfight_training_next_fight(&env->training, &env->state, &env->context, t, env->tag);
     riskfight_native_opponent_hooks(env, !t->rematch);
+    riskfight_native_fight_begins(env);
 }
 /** The end of a step of either kind: the terminals, and the session's totals and a fresh session when its budget is spent. */
 static void riskfight_native_finish_step(Env* env, int wait_step) {
@@ -363,8 +374,10 @@ void puf_step(Env* env) {
         for (int j = 0; j < RF_HEADS; j++) actions[i * RF_HEADS + j] = (int)env->agents[i].actions[j];
         riskfight_bag_to_physical(&env->state.env.players[i], actions + i * RF_HEADS); /* a net picks entries of the canonical bag (riskfight_bag.h) */
     }
-    if (riskfight_deployable)
-        for (int i = 0; i < env->num_agents; i++) riskfight_plugin_prayers(actions + i * RF_HEADS); /* the plugin's Piety and Smite for every net seat */
+    if (riskfight_deployable) /* the plugin's Piety and Smite for every net seat, from its delay on */
+        for (int i = 0; i < env->num_agents; i++)
+            if (env->fight_steps >= env->prayer_step[i]) riskfight_plugin_prayers(actions + i * RF_HEADS);
+    env->fight_steps++;
     int stop_issued = actions[RF_PRIMARY] == RF_STOP;
     env->context.opp_omit = riskfight_training_omit(&env->training);
     env->training.omissions += env->context.opp_omit;

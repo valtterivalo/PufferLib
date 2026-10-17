@@ -36,14 +36,17 @@ __attribute__((constructor)) static void riskfight_build_inventory_rows(void) {
 }
 
 /** His chance range: the most damage he could deal us in one tick before our next meal resolves, read off the threat block `threat` (riskfight_threat_write of
- * the observer):
+ * the observer), the larger of
  *   one opening hit with a weapon he wields or has swung: a normal max hit, or a special he has the energy for (his estimated `spec_est`; a Behead with five
- *   stacks),
- *   then every instant special (the granite maul's) the energy left after the opening pays for, all landing on the same tick. The maul counts when the pool
- *   only says he may carry it (any slot of the block): it stays hidden in the bag until the special,
- * plus, while his Vengeance is up, the echo of our own best hit (3/4). The ring of recoil is not visible, so its reflection is not counted. The combo matters
- * because the range gates our meals: an axe hit followed by a maul special is one tick of damage, not the larger of the two. `opening` 0 drops the opening hit (his
- * clock does not free a swing yet, riskfight_his_ready): only the instant specials, which ignore the clock, and the echo remain. */
+ *   stacks), and
+ *   every instant special (the granite maul's) his energy pays for, all landing on the same tick. The maul counts when the pool only says he may carry it (any
+ *   slot of the block): it stays hidden in the bag until the special,
+ * plus, while his Vengeance is up, the echo of our own best hit (3/4). The ring of recoil is not visible, so its reflection is not counted. The larger, not the sum:
+ * the maul special follows his swing a tick later, so the opening's hitsplat and the maul's land on different ticks and we eat in between (the user's account; all
+ * 11 recorded hit-then-maul combos, scripts/measure_combos.py: with his PID the opening lands on the swing's tick and the maul on the next, without it both a tick
+ * later; the one shared tick is a dragon claws opening whose second pair lands with the maul, under the larger term too). Against a Soulreaper axe and a
+ * maul at full energy this is two maul specials, about 90: where the user camps (85-92). `opening` 0 drops the opening hit (his clock does not free a swing yet,
+ * riskfight_his_ready): only the instant specials, which ignore the clock, and the echo remain. */
 static int riskfight_tick_damage_bound(const float* threat, int spec_est, int his_veng, int opening) {
     const int stacks_full = threat[RF_THREAT_STACKS_OFFSET] * OSRS_SOUL_STACKS_MAX > OSRS_SOUL_STACKS_MAX - 0.5f;
     int instant_cost = 0, instant_max = 0; /* the instant special with the most damage per energy */
@@ -53,21 +56,15 @@ static int riskfight_tick_damage_bound(const float* threat, int spec_est, int hi
         if (o[0] <= 0 || cost <= 0 || lroundf(o[11] * RF_THREAT_SPEED_SCALE) != 1) continue;
         if (!instant_cost || spec * instant_cost > instant_max * cost) { instant_cost = cost; instant_max = spec; }
     }
-    int range = opening || !instant_cost ? 0 : spec_est / instant_cost * instant_max;
+    int range = instant_cost ? spec_est / instant_cost * instant_max : 0;
     for (int i = 0; opening && i < RF_THREAT_HIS_SLOTS; i++) {
         const float* o = threat + i * RF_THREAT_HIS_WIDTH;
         if (o[0] < 1) continue;
         int hit = (int)lroundf(o[2] * RF_THREAT_DAMAGE_SCALE);
         int spec = (int)lroundf(o[9] * RF_THREAT_DAMAGE_SCALE);
         int cost = (int)lroundf(o[8] * 100);
-        /* Opening with a normal hit, then instant specials with all the energy. */
-        int best = hit + (instant_cost ? spec_est / instant_cost * instant_max : 0);
-        /* Opening with this weapon's special, then instant specials with what is left. */
-        if (cost > 0 ? spec_est >= cost : (spec > 0 && stacks_full)) {
-            int left = spec_est - (cost > 0 ? cost : 0);
-            int with_spec = spec + (instant_cost ? left / instant_cost * instant_max : 0);
-            if (with_spec > best) best = with_spec;
-        }
+        int best = hit;
+        if ((cost > 0 ? spec_est >= cost : (spec > 0 && stacks_full)) && spec > best) best = spec;
         if (best > range) range = best;
     }
     if (his_veng) range += (int)lroundf(threat[RF_THREAT_OURS_OFFSET + 1] * RF_THREAT_DAMAGE_SCALE) * 3 / 4;

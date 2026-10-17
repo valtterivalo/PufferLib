@@ -159,11 +159,16 @@ static void test_classification(void) {
 static void test_player_reading(void) {
     Player us = stocked(0, 100);
     float threat[RF_THREAT_SIZE] = {0};
-    /* No spec weapon known or likely for him: only our own energy decides, and with a special in our own bag we have not spent it: rude. */
+    /* No spec weapon known or likely for him: with a special in our own bag we have not spent ours: rude. */
     assert(riskfight_threat_cheapest_spec(threat) == 0);
     assert(!riskfight_teleport_kosher_now(&us, threat, 100));
+    /* Ours spent: he is still assumed to carry a special at the commonest cost, so kosher only once his estimate is below RF_KOSHER_ASSUMED_SPEC. */
     us.special_energy = 0;
-    assert(riskfight_teleport_kosher_now(&us, threat, 100));
+    assert(!riskfight_teleport_kosher_now(&us, threat, 100) && !riskfight_teleport_kosher_now(&us, threat, RF_KOSHER_ASSUMED_SPEC));
+    assert(riskfight_teleport_kosher_now(&us, threat, RF_KOSHER_ASSUMED_SPEC - 1) && riskfight_teleport_kosher_now(&us, threat, 0));
+    /* A known special that costs no energy (a Behead alone) leaves the assumption in place. */
+    threat[0] = 1; threat[8] = 0;
+    assert(riskfight_threat_cheapest_spec(threat) == 0 && !riskfight_teleport_kosher_now(&us, threat, 100));
     /* A wielded spec weapon (p 1, cost 50): he could spec at 50 and above. */
     threat[0] = 1; threat[8] = 0.5f;
     assert(riskfight_threat_cheapest_spec(threat) == 50);
@@ -308,7 +313,7 @@ static void test_scripted_opponent(void) {
 
 static void hook_idle(void* user, const void* state, int* out) { (void)user; (void)state; memset(out, 0, RF_HEADS * sizeof(int)); }
 
-/* Prayers on from the first tick of a deployed fight: Piety for us, Smite overhead, draining as in the game; his script keeps its own. */
+/* Prayers on 1 to 3 ticks into a deployed fight (uniform, per fight): Piety for us, Smite overhead, draining as in the game; his script keeps its own. */
 static void test_plugin_prayers(void) {
     /* Undeployed, a net's action 0 is "off": nothing is on, as before. */
     riskfight_deployable = 0;
@@ -317,14 +322,31 @@ static void test_plugin_prayers(void) {
     assert(env->state.env.players[0].offensive_prayer == OFFENSIVE_PRAYER_NONE && env->state.env.players[0].prayer == PRAYER_NONE);
     destroy();
 
+    /* The delay: never on the fight's first tick, on by its fourth, each of 1, 2 and 3 drawn. */
     riskfight_deployable = 1;
+    int seen[4] = {0};
+    for (int seed = 0; seed < 60; seed++) {
+        env = make_env(0, 100 + seed);
+        env->context.opp_hook = hook_idle;
+        assert(env->prayer_step[0] >= 1 && env->prayer_step[0] <= 3);
+        seen[env->prayer_step[0]]++;
+        for (int t = 0; t < 4; t++) {
+            puf_step(env);
+            const Player* p = &env->state.env.players[0];
+            assert((p->offensive_prayer == OFFENSIVE_PRAYER_PIETY && p->prayer == PRAYER_SMITE) == (t >= env->prayer_step[0]));
+        }
+        destroy();
+    }
+    assert(seen[1] && seen[2] && seen[3]);
+
     env = make_env(0, 31);
     env->context.opp_hook = hook_idle; /* he stands there, so the fight outlasts the drain */
     Player* us = &env->state.env.players[0];
     assert(us->offensive_prayer == OFFENSIVE_PRAYER_NONE && us->prayer == PRAYER_NONE); /* the regear starts them off: the plugin turns them on with the fight */
     const int start = us->current_prayer;
     assert(start == us->base_prayer);
-    puf_step(env);
+    const int delay = env->prayer_step[0];
+    for (int t = 0; t <= delay; t++) puf_step(env);
     assert(us->offensive_prayer == OFFENSIVE_PRAYER_PIETY && us->prayer == PRAYER_SMITE);
     assert(observations[0][15] == (float)OFFENSIVE_PRAYER_PIETY / 4.0f);
     assert(env->state.env.players[1].prayer != PRAYER_SMITE); /* the net's seat only */

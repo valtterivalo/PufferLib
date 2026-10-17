@@ -273,8 +273,8 @@ static void test_in_flight_is_the_max(void) {
     printf("in flight: a direct hit counts %d (our largest max), a special hit %d, rolled 0 or %d alike; arming at no bar offered either way\n", most.max, most.spec_max, most.max);
 }
 
-/** An axe (max 65) and a granite maul (instant special, cost 60, max 45): with the energy for a maul special the range is the axe hit plus the special on the
- * same tick, so a meal stays offered between the single max and the combo. A maul the pool only says he may carry counts too: it hides in the bag until used. */
+/** An axe (max 65) and a granite maul (instant special, cost 60, max 45): the maul specials land a tick after the axe hit, so the range is the larger of the two, not
+ * their sum: a meal fits in between. A maul the pool only says he may carry counts too: it hides in the bag until used. */
 static void test_combo_range(void) {
     float threat[RF_THREAT_SIZE] = {0};
     float* axe = threat;
@@ -283,15 +283,18 @@ static void test_combo_range(void) {
     maul[0] = 1; maul[2] = 40.0f / RF_THREAT_DAMAGE_SCALE; maul[4] = 7.0f / RF_THREAT_SPEED_SCALE;
     maul[8] = 0.60f; maul[9] = 45.0f / RF_THREAT_DAMAGE_SCALE; maul[11] = 1.0f / RF_THREAT_SPEED_SCALE;
     assert(riskfight_chance_range_of(threat, 59, 0) == 65);       /* no special affordable: the axe alone */
-    assert(riskfight_chance_range_of(threat, 60, 0) == 65 + 45);  /* axe hit, then one maul special */
-    assert(riskfight_chance_range_of(threat, 100, 0) == 65 + 45); /* 100 pays for one 60 special */
+    assert(riskfight_chance_range_of(threat, 60, 0) == 65);       /* one maul special (45) is below the axe hit */
+    assert(riskfight_chance_range_of(threat, 100, 0) == 65);      /* 100 pays for one 60 special */
     maul[8] = 0.50f;                                              /* the ornate handle: 50 a special */
-    assert(riskfight_chance_range_of(threat, 100, 0) == 65 + 90); /* axe hit, then two maul specials */
-    maul[0] = 0.5f;                                               /* a maul the pool only says he may carry: hidden in the bag, still a combo */
-    assert(riskfight_chance_range_of(threat, 100, 0) == 65 + 90);
-    maul[0] = 1; axe[0] = 0.5f;                                   /* an opening weapon he may carry does not count */
-    assert(riskfight_chance_range_of(threat, 100, 0) == 40 + 90);
-    /* The gate on the sim's own opponent: one hit above his single max, a meal is masked without energy and offered with it (a maul he may carry stacks on). */
+    assert(riskfight_chance_range_of(threat, 99, 0) == 65);
+    assert(riskfight_chance_range_of(threat, 100, 0) == 90);      /* two maul specials on one tick, above the axe hit */
+    maul[0] = 0.5f;                                               /* a maul the pool only says he may carry: hidden in the bag, still counted */
+    assert(riskfight_chance_range_of(threat, 100, 0) == 90);
+    maul[0] = 1; axe[0] = 0.5f; axe[2] = 95.0f / RF_THREAT_DAMAGE_SCALE; /* an opening weapon he may carry does not count */
+    assert(riskfight_chance_range_of(threat, 100, 0) == 90);
+    axe[0] = 1;                                                   /* one he wields does, when it hits harder than the specials */
+    assert(riskfight_chance_range_of(threat, 100, 0) == 95);
+    /* The gate on the sim's own opponent: one hit above his single max, a meal is masked without energy and offered with it (his specials, or a maul he may carry). */
     reset();
     int single = riskfight_chance_range(&state, 0);
     him()->spec_est = 100;
@@ -301,7 +304,7 @@ static void test_combo_range(void) {
     assert(all_meals_offered());
     him()->spec_est = 0;
     assert(!all_meals_offered());
-    printf("combo range: axe 65 alone below 60 energy, 110 with one plain maul special, 155 with two ornate ones, a maul he may carry included; an opening weapon he may carry is not. Sim opponent: single %d, with 100 energy %d; a meal at %d offered only with the energy\n", single, combo, single + 1);
+    printf("combo range: axe 65 alone up to one maul special, 90 with two ornate ones (the larger, not the sum), a maul he may carry included; an opening weapon he may carry is not. Sim opponent: single %d, with 100 energy %d; a meal at %d offered only with the energy\n", single, combo, single + 1);
 }
 
 int main(void) {
