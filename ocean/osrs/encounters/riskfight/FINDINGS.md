@@ -14,7 +14,11 @@ Session 20261016T141036.
 ## 2026-10-17, s2t64 (sweep 2 trial 64, 512x2): eats then teleports on the second tick of a fight
 
 Session 20261017T121142, fight from tick 106.
-- **Live:** we start at 96 HP (not overhealed) and he opens with a Voidwaker swing. At 106 the net eats an anglerfish (p 0.97) and attacks. At 107 it teleports (p 0.63), and at 108 the tab is clicked.
+- **Live (from the recording):**
+  - We stood at 120 HP (overhealed) with Vengeance up.
+  - At 106 he opened with a 24 hit, taking us to 96. Our Vengeance echoed 18 and his recoil 3, so 21 landed on him at 107 while his bar stayed full (30/30): he was overhealed too.
+  - The net ate an anglerfish at 106 (p 0.97) and attacked. At 107 it chose teleport (p 0.63), and the tab was clicked at 108.
+  - We had not specced, so by the rude rule this teleport was polite.
 - **Probes** (p of teleport at ticks 106 / 107 / 108):
 
 | trace edit | 106 | 107 | 108 |
@@ -26,5 +30,35 @@ Session 20261017T121142, fight from tick 106.
 | price 0.5 | 0.04 | 0.49 | 0.45 |
 | price 2.5 | 0.16 | 0.86 | 0.81 |
 
-- **Reading:** the teleport is driven by our HP being below 121 early in a fight, not by his swing. Training starts every fight at 121 (both players regear and overheal at the bank), so 96 to 99 HP two ticks into a fight means, in training, that a big hit already landed. The price scales it the expected way.
-- **Fix:** draw fight start states from the measured distribution of real fight starts (our HP, his bar, who swings first, spec, supplies), not one regeared state.
+
+Between 106 and 107 only these lines change: `B` (his HP bounds), `O` (his last swing age, distance, clock), `P`, and `V` (106: his swing; 107: the 21 on him at a full bar). Replacing one 107 line with its 106 value (teleport p at 107):
+
+| 107 line replaced | teleport at 107 |
+|---|---|
+| B | 0.63 |
+| O | 0.63 |
+| V | 0.08 |
+| fight started 60 / 300 ticks earlier (age) | 0.61 / 0.54 |
+
+Variants of the 107 `V` line (teleport at 107):
+
+| 107 `V` line | teleport at 107 |
+|---|---|
+| no hit on him, bar 30/30 | 0.08 |
+| a 0 on him, bar 30/30 | 0.70 |
+| 21 on him, bar 27/30 | 0.37 |
+| 21 on him, bar 25/30 | 0.23 |
+
+- **Reading:** the trigger is a hitsplat on him that does not move his bar, i.e. he is overhealed, right after he hit us and spent our Vengeance. It is not our HP being low at the start: the first hypothesis was wrong, since we started at 120. The sim produces the same event (recoil and Vengeance echoes set `hit_landed_this_tick`, osrs_pvp_combat.h:456), so this is not a live/sim observation mismatch.
+- **Working hypothesis, not yet tested in the sim:** after a bad opening (his first hit landed, our Vengeance spent on an overhealed target), an early teleport is a cheap reset. It costs only the rematch wait (median 106 ticks, 61% rematch), refills everything including Vengeance, and is not rude by our rule, which only covers spec.
+- **Discriminating test:**
+  - Measure the sim policy's teleports in the first 10 ticks of fights, conditioned on this opening.
+  - Ask the user whether an early reset costs anything in the real game (his account so far: "teleporting out instantly is pointless").
+- **Other nets on the same trace:** s2t270 (sweep 2 trial 270, 512x2, same env) attacks through 106-113 with teleport p 0.00, both on the live trace and on the "0 on him, full bar" variant. So the early reset is not forced by the env; it is one of the solutions training can land in. s2t270 replaced s2t64 live on 2026-10-17.
+
+  Simulated sessions, 300 per price, argmax (net per hour at price 0.4 / 0.7 / 1.2 / 2.33, then rude teleports per session):
+
+  | net | 0.4 | 0.7 | 1.2 | 2.33 | rude per session |
+  |---|---|---|---|---|---|
+  | s2t270 | 7.18 | 6.84 | 6.13 | 6.03 | 0.4-0.7 |
+  | s2t64 | 4.44 | 4.64 | 3.92 | 3.95 | 1.7-2.1 |
