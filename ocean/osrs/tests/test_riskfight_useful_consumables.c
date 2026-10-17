@@ -33,7 +33,9 @@ static void reset(void) {
     memset(&held, 0, sizeof(held));
 }
 
-/** Whether the mask offers the item of physical `slot` on its head; the cached mask (re-written only on a new key) must equal the fresh one. */
+/** Whether the item of physical `slot` is offered on its head; the cached mask (re-written only on a new key) must equal the fresh one. A meal (food, karambwan, brew) is
+ * also closed above his chance range (riskfight_threat_gates, test_riskfight_threat_masks.c), which these hitpoints mostly are: for a meal the mask must offer it exactly
+ * when it is useful and that gate is open, and the answer is the useful bit. */
 static int offered(int slot) {
     static unsigned char fresh[RF_MASK_SIZE];
     riskfight_write_action_mask(&state, 0, fresh);
@@ -43,8 +45,14 @@ static int offered(int slot) {
     int head = m->click_action == OSRS_CLICK_DRINK ? RF_DRINK :
         m->consumable_kind == OSRS_CONSUMABLE_KARAMBWAN || m->consumable_kind == OSRS_CONSUMABLE_HALIBUT ? RF_COMBO : RF_FOOD;
     const RiskfightBagOrder order = riskfight_bag_order(us());
-    for (int entry = 0; entry < OSRS_INVENTORY_SIZE; entry++)
-        if (order.slot[entry] == slot) return fresh[RF_HEAD_OFFSET[head] + entry + 1];
+    for (int entry = 0; entry < OSRS_INVENTORY_SIZE; entry++) {
+        if (order.slot[entry] != slot) continue;
+        int bit = fresh[RF_HEAD_OFFSET[head] + entry + 1];
+        if (m->click_action != OSRS_CLICK_EAT && m->consumable_kind != OSRS_CONSUMABLE_BREW) return bit;
+        int useful = riskfight_consumable_useful(us(), (OsrsConsumableKind)m->consumable_kind);
+        assert(bit == (useful && riskfight_threat_gates(&state, 0, riskfight_spec_weapon(us())).meals));
+        return useful;
+    }
     abort();
 }
 

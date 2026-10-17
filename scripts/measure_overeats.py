@@ -270,9 +270,9 @@ def histogram(xs):
     return "  ".join("%d:%d" % (k, c[k]) for k in range(max(xs) + 1)) if xs else ""
 
 
-def range_strict(r):
-    """The range with Vengeance counted up only when his cast came after his last proc (riskfight_policy.h counts a tie, which is true at the start of every fight)."""
-    return r["normal"] + r["spec"] + (r["echo"] if r["veng_strict"] else 0)
+def range_tie(r):
+    """The earlier range: Vengeance counted up on a tie of his last cast and proc, which is true at the start of every fight (riskfight_policy.h now counts it only after a seen cast)."""
+    return r["normal"] + r["spec"] + (r["echo"] if r["veng_tie"] else 0)
 
 
 def meals_of(fight_rows):
@@ -324,7 +324,7 @@ def report(rows, tapes, scans, min_ticks):
     for title, group in (("his composition observed", known), ("his composition never observed (recordings of October 4-6: his weapon is unknown, the range is his fists plus the echo)", unknown)):
         emit("")
         emit("== %s: %d fights" % (title, len(group)))
-        for label, rng in (("as written (veng 'up' on a tie, true at fight start)", lambda r: r["range"]), ("Vengeance up only when cast after proc", range_strict)):
+        for label, rng in (("as written (Vengeance up only after a seen cast that has not proc'd)", lambda r: r["range"]), ("Vengeance up on a tie (the earlier definition, true at fight start)", range_tie)):
             counts = [sum(1 for _, b, _ in f["meals"] if b["hp"] > rng(b)) for f in group]
             meals = sum(len(f["meals"]) for f in group)
             over = sum(counts)
@@ -343,9 +343,9 @@ def report(rows, tapes, scans, min_ticks):
         for name, rs in (("every tick", allrows), ("ticks before a meal", at_meal)):
             if rs:
                 n = len(rs)
-                emit("  range at %s (n=%d): mean %.1f = normal %.1f + special %.1f + echo %.1f (echo counted on a tie); special on in %.0f%% of ticks, echo on in %.0f%% (strict: %.0f%%); his hp bar to us: mean our hp %.1f" % (
-                    name, n, sum(r["range"] for r in rs) / n, sum(r["normal"] for r in rs) / n, sum(r["spec"] for r in rs) / n, sum(r["echo"] for r in rs) / n,
-                    100.0 * sum(r["spec"] > 0 for r in rs) / n, 100.0 * sum(r["echo"] > 0 for r in rs) / n, 100.0 * sum(r["echo"] > 0 and r["veng_strict"] for r in rs) / n,
+                emit("  range at %s (n=%d): mean %.1f = normal %.1f + special %.1f + echo %.1f (echo counted after a seen cast); special on in %.0f%% of ticks, echo on in %.0f%% (tie: %.0f%%); his hp bar to us: mean our hp %.1f" % (
+                    name, n, sum(r["range"] for r in rs) / n, sum(r["normal"] for r in rs) / n, sum(r["spec"] for r in rs) / n, sum(r["echo"] for r in rs if r["veng_strict"]) / n,
+                    100.0 * sum(r["spec"] > 0 for r in rs) / n, 100.0 * sum(r["echo"] > 0 and r["veng_strict"] for r in rs) / n, 100.0 * sum(r["echo"] > 0 and r["veng_tie"] for r in rs) / n,
                     sum(r["hp"] for r in rs) / n))
         if at_meal:
             n = len(at_meal)
@@ -355,7 +355,7 @@ def report(rows, tapes, scans, min_ticks):
             by_kind = collections.Counter(k for f in group for _, _, k in f["meals"])
             emit("  meals by kind: %s" % dict(by_kind))
             # which terms keep a meal from being an overeat: the overeat count if a term were dropped from the range
-            for name, fn in (("without the special", lambda b: b["normal"] + (b["echo"] if b["veng_tie"] else 0)), ("without the echo", lambda b: b["normal"] + b["spec"]),
+            for name, fn in (("without the special", lambda b: b["normal"] + (b["echo"] if b["veng_strict"] else 0)), ("without the echo", lambda b: b["normal"] + b["spec"]),
                              ("normal max hit alone", lambda b: b["normal"])):
                 over = sum(1 for b in at_meal if b["hp"] > fn(b))
                 emit("    overeats if the range were %s: %d of %d meals (%.1f%%)" % (name, over, n, 100.0 * over / n))
@@ -381,9 +381,9 @@ def report(rows, tapes, scans, min_ticks):
         emit("  share of the user's own fights that would annoy an opponent (overeats > patience): patience 6 (provisional) %.1f%%, patience %d %.1f%%, patience %d %.1f%%" % (
             100.0 * sum(c > 6 for c in counts) / len(counts), patience, 100.0 * sum(c > patience for c in counts) / len(counts), patience - 1,
             100.0 * sum(c > patience - 1 for c in counts) / len(counts)))
-        counts_s = sorted(sum(1 for _, b, _ in f["meals"] if b["hp"] > range_strict(b)) for f in known)
-        p90s = percentile(counts_s, .9)
-        emit("  with Vengeance counted only after a cast (the echo off at the start of a fight): p90 = %.2f -> %d" % (p90s, math.floor(p90s) + 1))
+        counts_t = sorted(sum(1 for _, b, _ in f["meals"] if b["hp"] > range_tie(b)) for f in known)
+        p90t = percentile(counts_t, .9)
+        emit("  with Vengeance counted up on a tie (the earlier definition, the echo on from the start of a fight): p90 = %.2f -> %d" % (p90t, math.floor(p90t) + 1))
         first_proc = collections.Counter()
         for f in known:
             t = f["tape"]

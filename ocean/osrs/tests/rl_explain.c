@@ -113,7 +113,9 @@ int main(int argc, char** argv) {
         if (new_fight) printf("== FIGHT %d\n", fight_start);
         printf("%d %s hp %d lock %d B %d-%d bar %d atk %d W %s S %s", q.tick, obs_only ? "OBS" : "DEC", us->current_hitpoints, us->pvp_overheal_block, q.belief.hp_low, q.belief.hp_high,
             g_fight.vis.health_bar, osrs_interaction_active(&us->interaction), rx_item(us->equipped[GEAR_SLOT_WEAPON]), rx_item(us->equipped[GEAR_SLOT_SHIELD]));
-        printf(" spec us %d him~%d", us->special_energy, g_fight.vis.spec_est);
+        OsrsHealthBarRange his_hp = osrs_health_bar_range(g_fight.vis.health_bar, OSRS_PLAYER_HEALTH_BAR_SCALE, RF_THREAT_BASE_HITPOINTS, RF_THREAT_OVERHEAL_CAP);
+        printf(" spec us %d him~%d | range %d his hp %d-%d", us->special_energy, g_fight.vis.spec_est, riskfight_chance_range(s, 0),
+            his_hp.kind == OSRS_HEALTH_BAR_KNOWN ? his_hp.lower : -1, his_hp.kind == OSRS_HEALTH_BAR_KNOWN ? his_hp.upper : -1);
         {
             /* The session block as the net received it, and the kosher input's predicates (riskfight_norms.h). */
             static float o[RF_OBS_SIZE];
@@ -136,7 +138,8 @@ int main(int argc, char** argv) {
         rx_probs(g_fight.net, mask, RF_VENGEANCE, pr);
         if (mask[RF_HEAD_OFFSET[RF_VENGEANCE] + 1]) printf(" | veng %.2f", pr[1]);
         rx_probs(g_fight.net, mask, RF_SPECIAL, pr);
-        if (mask[RF_HEAD_OFFSET[RF_SPECIAL] + 1]) printf(" | spec1 %.2f spec2 %.2f", pr[1], pr[2]);
+        printf(" | spec mask %d%d", mask[RF_HEAD_OFFSET[RF_SPECIAL] + 1], mask[RF_HEAD_OFFSET[RF_SPECIAL] + 2]);
+        if (mask[RF_HEAD_OFFSET[RF_SPECIAL] + 1]) printf(" spec1 %.2f spec2 %.2f", pr[1], pr[2]);
         printf(" ->");
         if (!count) printf(" nothing");
         for (int i = 0; i < count; i++) {

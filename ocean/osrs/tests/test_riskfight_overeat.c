@@ -100,16 +100,21 @@ static void test_overeat_definition(void) {
     destroy();
 }
 
-/* The chance range follows what he holds: his Vengeance adds the echo of our hit, and a weapon he has not shown does not count. */
+/* The chance range follows what he holds: his Vengeance adds the echo of our hit only after a cast of his was seen that has not proc'd (none seen at the start of a
+ * fight, so it is down there), and a weapon he has not shown does not count. */
 static void test_chance_range_terms(void) {
     env = make_env(8, 1);
     RiskfightState* s = &env->state;
     RiskfightVisibleOpponent* v = &s->visible[0];
-    v->last_cast_tick = v->last_proc_tick = 5;
+    v->last_cast_tick = v->last_proc_tick = -1000; /* nothing seen: down */
+    int unseen = riskfight_chance_range(s, 0);
+    v->last_cast_tick = v->last_proc_tick = 5; /* a tie: down */
+    int tie = riskfight_chance_range(s, 0);
+    v->last_proc_tick = 4; /* cast after the last proc: up */
     int with_veng = riskfight_chance_range(s, 0);
     v->last_proc_tick = 6; /* it proc'd after the cast: down */
     int without = riskfight_chance_range(s, 0);
-    assert(with_veng > without);
+    assert(with_veng > without && unseen == without && tie == without);
     destroy();
 }
 

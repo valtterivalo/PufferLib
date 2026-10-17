@@ -8,9 +8,9 @@
  *   file fight tick hp range normal spec echo veng_tie veng_strict spec_est wielded his_meal ours_meals_eat ours_meals_brew ours_unclassified bar_lo bar_hi
  *   our_max our_spec_cost our_spec_max our_energy his_max our_veng
  * hp: our exact hitpoints this tick; range: riskfight_chance_range(&g_base.state, 0), asserted equal to the harness's own recomputation; normal: the largest normal max hit
- * of the weapons he wields or has swung (no special, no echo); spec: what the special energy estimate adds on top of normal; echo: what his Vengeance adds on top of both,
- * with the sim's test (`last_cast_tick >= last_proc_tick`: veng_tie, true at fight start when no cast and no proc was seen) and the strict test (veng_strict: cast after
- * proc); his_meal: he ate or drank this tick (V consuming); ours_meals_*: slots of our bag that held food/karambwan/pie (eat) or a brew whose content changed since the
+ * of the weapons he wields or has swung (no special, no echo); spec: what the special energy estimate adds on top of normal; echo: what his Vengeance would add on top of both,
+ * with the sim's test (veng_strict, riskfight_his_veng_up: a seen cast that has not proc'd) and the earlier tie test (`last_cast_tick >= last_proc_tick`: veng_tie, true
+ * at fight start when no cast and no proc was seen); his_meal: he ate or drank this tick (V consuming); ours_meals_*: slots of our bag that held food/karambwan/pie (eat) or a brew whose content changed since the
  * previous tick of the same fight (what we ate during this tick); ours_unclassified: slots that changed from an item the content table does not know; bar_lo/bar_hi: the
  * hitpoints his health bar allows; our_max, our_spec_cost (energy), our_spec_max, our_energy and his_max: the other side's view for his meals (our wielded weapon against
  * his visible defence). The range of row N is what a meal executed during tick N + 1 is judged against, with the hitpoints of row N (the start of tick N + 1). */
@@ -61,10 +61,10 @@ int main(int argc, char** argv) {
             for (int i = 0; i < RF_THREAT_HIS_SLOTS; i++) bare[i * RF_THREAT_HIS_WIDTH + 9] = 0;
             int tie = v->last_cast_tick >= v->last_proc_tick, strict = v->last_cast_tick > v->last_proc_tick;
             int range = riskfight_chance_range(s, 0);
-            assert(range == riskfight_chance_range_of(threat, v->spec_est, tie));
+            assert(range == riskfight_chance_range_of(threat, v->spec_est, strict));
             int normal = riskfight_chance_range_of(bare, v->spec_est, 0);
             int noecho = riskfight_chance_range_of(threat, v->spec_est, 0);
-            int echo = range - noecho;
+            int echo = riskfight_chance_range_of(threat, v->spec_est, 1) - noecho;
             int wielded = 0;
             int his_max = 0;
             for (int i = 0; i < RF_THREAT_HIS_SLOTS; i++) {
