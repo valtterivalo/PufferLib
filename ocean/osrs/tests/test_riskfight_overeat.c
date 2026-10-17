@@ -143,10 +143,11 @@ static void test_annoyance_triggers_a_teleport_and_blocks_the_rematch(void) {
     t.escaped[1] = 1;
     t.annoyed = 1;
     uint32_t rng = 3;
-    for (int i = 0; i < 500; i++) assert(!riskfight_session_transition(&t, &rng, 0).rematch);
+    const RiskfightRepRules rules = riskfight_rep_rules(RF_REP_SEARCH, RF_REP_RAG, RF_REP_HALF_LIFE_TICKS);
+    for (int i = 0; i < 500; i++) assert(!riskfight_session_transition(&t, &rng, 0, &rules).rematch);
     t.annoyed = 0;
     int rematches = 0;
-    for (int i = 0; i < 500; i++) rematches += riskfight_session_transition(&t, &rng, 0).rematch;
+    for (int i = 0; i < 500; i++) rematches += riskfight_session_transition(&t, &rng, 0, &rules).rematch;
     assert(rematches > 200);
     /* An annoyed opponent who is killed before he leaves costs nothing. */
     t.annoyed = 1;

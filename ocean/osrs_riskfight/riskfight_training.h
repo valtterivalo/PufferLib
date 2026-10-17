@@ -12,6 +12,7 @@ typedef struct {
     int price_table; /* death_price 0 only: 1 draws the price of a new opponent from the live table (RF_PRICE_TABLE: the first meetings of the user's recordings) instead of the wide log-uniform */
     int fight_starts; /* 1: a fight starts as one of the user's recorded fights did (riskfight_start.h) instead of after the regear; 0 the regear (121 hitpoints, nothing swung) */
     float rep_start_probability; /* the share of sessions that start with a reputation (RF_REP_START_PROBABILITY unless rep_start_probability is set) */
+    RiskfightRepRules rep; /* what a reputation costs (riskfight_session.h): env keys rep_search, rep_rag, rep_half_life, defaulting to RF_REP_SEARCH, RF_REP_RAG, RF_REP_HALF_LIFE_TICKS */
     float pool_probability; /* self-play: the share of net-played opponents that wear a pool kit instead of one of our kits (needs opponent_pool) */
 } RiskfightTrainingConfig;
 
@@ -57,6 +58,12 @@ static RiskfightTrainingConfig riskfight_training_config(Dict* kwargs) {
     DictItem* rep_start = dict_find(kwargs, "rep_start_probability");
     config.rep_start_probability = rep_start ? (float)rep_start->value : RF_REP_START_PROBABILITY;
     assert(config.rep_start_probability >= 0 && config.rep_start_probability <= 1);
+    DictItem* rep_search = dict_find(kwargs, "rep_search");
+    DictItem* rep_rag = dict_find(kwargs, "rep_rag");
+    DictItem* rep_half_life = dict_find(kwargs, "rep_half_life");
+    config.rep = riskfight_rep_rules(rep_search ? (float)rep_search->value : RF_REP_SEARCH, rep_rag ? (float)rep_rag->value : RF_REP_RAG,
+        rep_half_life ? (float)rep_half_life->value : (float)RF_REP_HALF_LIFE_TICKS);
+    assert(config.rep.search >= 0 && config.rep.rag >= 0 && (!rep_half_life || rep_half_life->value > 0));
     DictItem* pool_share = dict_find(kwargs, "selfplay_pool_probability");
     config.pool_probability = pool_share ? (float)pool_share->value : 0;
     assert(config.pool_probability >= 0 && config.pool_probability <= 1);
@@ -189,7 +196,7 @@ static void riskfight_training_draw_opponent(RiskfightTraining* training, Riskfi
     training->opponent = RF_TRAIN_LEARNED;
     training->scripted = NULL;
     /* A ragger is always the script, in any seat 1: he wears a ranged pool kit, so the pool has to be on. */
-    context->opp_ragger = context->opponent_pool && riskfight_training_draw(training, riskfight_rag_probability(training->rep));
+    context->opp_ragger = context->opponent_pool && riskfight_training_draw(training, riskfight_rag_probability(&training->config.rep, training->rep));
     if (context->opp_ragger) {
         training->opponent = RF_TRAIN_SCRIPTED;
         training->scripted = riskfight_training_profile(training);

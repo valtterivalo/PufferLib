@@ -58,6 +58,7 @@ static int wait_out(void) {
 
 static int delay_min(const RiskfightDelay* d) { return d->ticks[0]; }
 static int delay_max(const RiskfightDelay* d) { return d->ticks[RF_DELAY_DECILES - 1]; }
+static RiskfightRepRules default_rules(void) { return riskfight_rep_rules(RF_REP_SEARCH, RF_REP_RAG, RF_REP_HALF_LIFE_TICKS); }
 static int count_food(const Player* p) {
     int n = 0;
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
@@ -123,7 +124,8 @@ static int expected_teleport_delay(uint32_t rng, int* rematch) {
     memset(&tmp, 0, sizeof(tmp));
     tmp.outcome[0] = RISKFIGHT_ESCAPE;
     tmp.escaped[0] = 1;
-    RiskfightTransition t = riskfight_session_transition(&tmp, &rng, 0);
+    const RiskfightRepRules rules = default_rules();
+    RiskfightTransition t = riskfight_session_transition(&tmp, &rng, 0, &rules);
     *rematch = t.rematch;
     return t.delay;
 }
@@ -218,9 +220,10 @@ static void test_rude_teleport_loses_the_opponent(void) {
     assert(!riskfight_rude_teleport(&s));
     s.escape_supplies[0][0].hard_food = 1; /* stocked again, specials unspent: rude */
     uint32_t rng = 1;
+    const RiskfightRepRules rules = default_rules();
     for (int i = 0; i < 200; i++) {
         s.escaped[0] = 1; s.escaped[1] = 0;
-        assert(!riskfight_session_transition(&s, &rng, 0).rematch);
+        assert(!riskfight_session_transition(&s, &rng, 0, &rules).rematch);
     }
 }
 
@@ -230,6 +233,7 @@ static int near_share(double count, double n, double p) { return fabs(count - n 
 static void test_one_regear_delay_and_reputation(void) {
     const RiskfightOutcome ends[] = {RISKFIGHT_KILL, RISKFIGHT_DEATH, RISKFIGHT_MUTUAL_DEATH, RISKFIGHT_TIMEOUT, RISKFIGHT_RAGGED};
     const float reps[] = {0, 1, 3};
+    const RiskfightRepRules rules = default_rules();
     for (size_t e = 0; e < sizeof(ends) / sizeof(*ends); e++)
         for (size_t r = 0; r < 3; r++) {
             RiskfightState s;
@@ -237,7 +241,7 @@ static void test_one_regear_delay_and_reputation(void) {
             s.outcome[0] = ends[e];
             for (int trial = 0; trial < 50; trial++) {
                 uint32_t a = 5 + 1000 * (uint32_t)trial + (uint32_t)e, b = a;
-                RiskfightTransition plain = riskfight_session_transition(&s, &a, 0), scaled = riskfight_session_transition(&s, &b, reps[r]);
+                RiskfightTransition plain = riskfight_session_transition(&s, &a, 0, &rules), scaled = riskfight_session_transition(&s, &b, reps[r], &rules);
                 assert(!plain.rematch && !scaled.rematch && !plain.rude);
                 assert(plain.delay >= delay_min(&RF_DELAY_RESTOCK) && plain.delay <= delay_max(&RF_DELAY_RESTOCK));
                 assert(scaled.delay == (int)(plain.delay * (1.0f + RF_REP_SEARCH * reps[r]) + 0.5f));
@@ -251,17 +255,54 @@ static void test_one_regear_delay_and_reputation(void) {
     uint32_t rng = 11;
     int rematches = 0, trials = 2000;
     for (int i = 0; i < trials; i++) {
-        RiskfightTransition t = riskfight_session_transition(&s, &rng, 3);
+        RiskfightTransition t = riskfight_session_transition(&s, &rng, 3, &rules);
         rematches += t.rematch;
         if (t.rematch) assert(t.delay >= delay_min(&RF_DELAY_REMATCH) && t.delay <= delay_max(&RF_DELAY_REMATCH));
         else assert(t.delay >= (int)(delay_min(&RF_DELAY_RESTOCK) * (1.0f + RF_REP_SEARCH * 3) + 0.5f) && t.delay <= (int)(delay_max(&RF_DELAY_RESTOCK) * (1.0f + RF_REP_SEARCH * 3) + 0.5f));
     }
     assert(near_share(rematches, trials, RF_REMATCH_PROBABILITY));
     s.ragger = 1;
-    for (int i = 0; i < 200; i++) assert(!riskfight_session_transition(&s, &rng, 0).rematch);
+    for (int i = 0; i < 200; i++) assert(!riskfight_session_transition(&s, &rng, 0, &rules).rematch);
     /* The ragging probability: nothing without a reputation, RF_REP_RAG per point, capped. */
-    assert(riskfight_rag_probability(0) == 0 && riskfight_rag_probability(1) == RF_REP_RAG && riskfight_rag_probability(100) == RF_REP_RAG_CAP);
+    assert(riskfight_rag_probability(&rules, 0) == 0 && riskfight_rag_probability(&rules, 1) == RF_REP_RAG && riskfight_rag_probability(&rules, 100) == RF_REP_RAG_CAP);
     assert(riskfight_outcome_reward(RISKFIGHT_RAGGED, 2.5f) == 0 && riskfight_outcome_reward(RISKFIGHT_TIMEOUT, 2.5f) == 0);
+}
+
+/* The env keys rep_search, rep_rag and rep_half_life set the session's reputation rules; without them the rules are the defaults. */
+static void test_rep_keys_reach_session_rules(void) {
+    env = make_env(6000, 1, 84);
+    const RiskfightRepRules defaults = default_rules();
+    assert(memcmp(&env->training.config.rep, &defaults, sizeof(defaults)) == 0);
+    destroy();
+    DictItem items[] = {{.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 1},
+        {.key = "session_ticks", .value = 6000}, {.key = "curveball_probability", .value = 0}, {.key = "death_price", .value = 1},
+        {.key = "rep_search", .value = 2.0}, {.key = "rep_rag", .value = 0.3}, {.key = "rep_half_life", .value = 6000}};
+    Dict kwargs = {.items = items, .size = sizeof(items) / sizeof(*items)};
+    env = (Env*)calloc(1, sizeof(*env));
+    env->rng = 85;
+    puf_init(env, &kwargs);
+    for (int i = 0; i < 2; i++) env->agents[i] = (Agent){
+        .observations = observations[i], .actions = actions[i], .rewards = &rewards[i],
+        .terminals = &terminals[i], .action_mask = masks[i], .policy = i};
+    puf_reset(env);
+    const RiskfightRepRules* rules = &env->training.config.rep;
+    assert(rules->search == 2.0f && rules->rag == 0.3f);
+    assert(riskfight_rag_probability(rules, 1) == 0.3f && riskfight_rag_probability(rules, 3) == RF_REP_RAG_CAP);
+    float rep = 2;
+    for (int tick = 0; tick < 6000; tick++) rep = riskfight_rep_decay(rules, rep);
+    assert(fabsf(rep - 1) < 2e-3f);
+    /* The env decays its reputation by these rules every step, and prices the search for a new opponent with them. */
+    env->training.rep = 1;
+    memset(actions, 0, sizeof(actions));
+    puf_step(env);
+    assert(env->training.rep == rules->decay);
+    RiskfightState s;
+    memset(&s, 0, sizeof(s));
+    s.outcome[0] = RISKFIGHT_KILL;
+    uint32_t a = 9, b = 9;
+    RiskfightTransition plain = riskfight_session_transition(&s, &a, 0, rules), scaled = riskfight_session_transition(&s, &b, 1, rules);
+    assert(scaled.delay == (int)(plain.delay * 3.0f + 0.5f));
+    destroy();
 }
 
 /* Reputation: a session starts with none in most cases and up to RF_REP_START_MAX otherwise; our rude teleports add 1 each, polite ones nothing; it halves over
@@ -292,7 +333,8 @@ static void test_rude_teleports_build_reputation(void) {
         destroy();
     }
     float rep = 2;
-    for (int tick = 0; tick < RF_REP_HALF_LIFE_TICKS; tick++) rep = riskfight_rep_decay(rep);
+    const RiskfightRepRules rules = default_rules();
+    for (int tick = 0; tick < RF_REP_HALF_LIFE_TICKS; tick++) rep = riskfight_rep_decay(&rules, rep);
     assert(fabsf(rep - 1) < 2e-3f);
     /* The observation saturates at RF_REP_OBS_SCALE. */
     env = make_env(6000, 1, 83);
@@ -502,6 +544,7 @@ int main(void) {
     test_death_is_a_regear_like_any_end();
     test_teleport_costs_a_regear();
     test_one_regear_delay_and_reputation();
+    test_rep_keys_reach_session_rules();
     test_rude_teleports_build_reputation();
     test_ragger_rags_and_leaves();
     test_rude_teleport_loses_the_opponent();
