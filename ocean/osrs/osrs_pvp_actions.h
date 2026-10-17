@@ -148,10 +148,10 @@ static void pvp_apply_drink_one_dose_effect(
             int max_hp = p->base_hitpoints + br.hp_healed;
             int actual_heal = max_int(0, min_int(br.hp_healed, max_hp - hp_before));
             int waste = br.hp_healed - actual_heal;
-            int def_before = p->current_defence;
             int max_def = p->is_lms ? p->base_defence : p->base_defence + br.def_boost;
-            p->current_defence = clamp(def_before + br.def_boost, 0, max_def);
-            p->current_hitpoints = clamp(hp_before + br.hp_healed, 0, max_hp);
+            if (p->current_defence < max_def)
+                p->current_defence = min_int(p->current_defence + br.def_boost, max_def);
+            p->current_hitpoints = hp_before + actual_heal;
             p->last_brew_heal = actual_heal;
             p->last_brew_waste = waste;
             p->current_attack = clamp(p->current_attack - br.att_drain, 0, 255);

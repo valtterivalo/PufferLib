@@ -1633,11 +1633,14 @@ typedef enum {
     ENCOUNTER_CONSUMABLE_STAT_EFFECT_SANFEW,
 } EncounterConsumableStatEffect;
 
+/* A brew heal is a boost: it raises hitpoints by brew_heal up to hitpoints_cap and never lowers hitpoints already above the cap (an anglerfish overheal). */
 static inline void encounter_apply_brew_heal_capped(
     Player* p, int brew_heal, int hitpoints_cap
 ) {
-    p->current_hitpoints += brew_heal;
-    if (p->current_hitpoints > hitpoints_cap) p->current_hitpoints = hitpoints_cap;
+    if (p->current_hitpoints < hitpoints_cap) {
+        p->current_hitpoints += brew_heal;
+        if (p->current_hitpoints > hitpoints_cap) p->current_hitpoints = hitpoints_cap;
+    }
     p->ate_food_this_tick = 1;
 }
 
@@ -1679,9 +1682,11 @@ static inline void encounter_brew_drain_stats(Player* p) {
     p->current_magic -= brew.magic_drain;
     if (p->current_magic < 0) p->current_magic = 0;
 
-    p->current_defence += brew.def_boost;
     int def_cap = p->base_defence + brew.def_boost;
-    if (p->current_defence > def_cap) p->current_defence = def_cap;
+    if (p->current_defence < def_cap) {
+        p->current_defence += brew.def_boost;
+        if (p->current_defence > def_cap) p->current_defence = def_cap;
+    }
 }
 
 static inline void encounter_apply_stat_restore(Player* p, int (*amount)(int)) {
