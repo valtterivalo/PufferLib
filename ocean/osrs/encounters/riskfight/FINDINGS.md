@@ -207,5 +207,11 @@ Live, s6t0 drank super restores at full prayer with nothing drained (prayer 87-9
 - **The sim's opponents never did the combo:**
   - Axe kits are scripted, one weapon per tick.
   - Live, the combo is an axe swing at t, then maul special(s) at t+1. 18 of 29 recorded maul specials came one tick after his swing, and none on the swing tick.
-  - Measured on the user's 123 fights, 11 combos in 1,730 eligible swings. Rate per swing: 7.2% when our HP is more than 40 below his combo max, 2.1% from -40 to 0, never above it.
-  - The script now does it at those rates (d73aa408a, scripts/measure_combos.py).
+  - Measured on the user's 123 fights, 11 combos in 1,730 eligible swings (energy and a maul shown or plausible):
+    - over all fights, the rate per swing is 0.3-1.2% by margin, never at or above 0;
+    - in the fights where he showed a maul, it is 7.2% when our HP is more than 40 below his combo max and 2.1% from -40 to 0.
+  - The script plays only kits that carry a maul, so it uses the conditional rates (d73aa408a, scripts/measure_combos.py). They are biased upward: conditioning on fights where the maul was used selects for opponents who combo.
+- **Faster tick batches (light #346), the user's call:** engine batches of 2 or more clicks, and every eat and drink, play the same recorded human paths at 0.40 of the hand's pace limits, with a 32 ms hold.
+  - In the plugin's timing model, a 3-click inventory batch from the game screen lands its last click at p50 354 / p99 393 ms (before 778 / 888), under the ~480 ms cutoff. Not yet measured live.
+  - The live server now clicks the copy of a consumable that shortens the path. Triple eats use the copies near the potion; single eats use the copy farthest from the potions (24bc3f4a6, the user's idea). On the trace, the summed path of multi-click batches went from 1,397 to 792 px.
+  - The sim's motor model (riskfight_motor.h) still has the old, slower clock. Refit it from recordings made with the new plugin, then retrain.
