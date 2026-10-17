@@ -4,7 +4,8 @@
 
 /* A session is a fixed budget of game ticks spent on fights and on the time between them. What follows a fight is a consequence in the world, not a reward term.
  * Every fight starts after a regear at the bank (the user's account: everyone regears): both sides full supplies, special energy 100, prayer and stats restored,
- * 121 hitpoints (an anglerfish overheal), nothing carried over. The time between two fights is one regear delay:
+ * 121 hitpoints (an anglerfish overheal), nothing carried over; with fight_starts the start is instead one of the user's recorded ones (riskfight_start.h: who had
+ * swung, hitpoints, his bar, specials, Vengeance, supplies used, distance). The time between two fights is one regear delay:
  *   rematch   after a teleport that was not rude, with probability RF_REMATCH_PROBABILITY: the same opponent (his kit, profile, price) after M, the measured rematch
  *             delay. A rude teleport (a side's own, after its own special, while the other still had special energy for his) is never followed by a rematch, and
  *             neither is a fight against a ragger.
