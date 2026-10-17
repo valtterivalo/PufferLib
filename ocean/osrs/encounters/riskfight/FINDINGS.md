@@ -96,3 +96,25 @@ Origin: the user's account of real PvP norms. Teleporting right after a normal o
 - **Opponents**: the script, OppFit and a second agent are classified by the same function from their true supplies. A rude exit of his changes nothing for us beyond the end of the fight and the lost rematch (the longer wait for a new opponent); reputation is ours alone. Logged as `opponent_rude_teleports`.
 - **Observation**: session block `[7]` = kosher now (player's reading: own bag and energy, his estimated energy against the threat block's weapons with p >= 0.5). Block is now 8 floats, `RF_OBS_SIZE` 456: old nets do not load (rf_net: "architecture needs 8185856" for s2t270).
 - **Prayers**: with `deployable = 1` the prayer heads are masked, so a net's action 0 reached the sim every tick as Piety OFF / overhead no-change: our seat fought with no Piety and no Smite, while the live plugin turns both on at the fight start (live O lines carry piety 1 and the smite bit). Training was out of distribution for those lines, and prayer was never spent, so prayer restores were useless. Now `riskfight_plugin_prayers` (called for the net seats in `puf_step`) sets Piety and Smite every tick: up from tick 1, draining 24 + 12 per tick against 60 + 2 x prayer bonus (about one point per 2 ticks, so 99 prayer lasts a few hundred ticks), off at 0, back after a restore. Scripts keep their own prayers; the plugin's re-enabling after a restore is an assumption. Nets trained before this need retraining.
+
+## 2026-10-17, s3t0 (sweep 3 trial 0, 512x2, real starts, norms, prayers): fights, then teleports rudely at 68 HP
+
+Session 20261017T134203, fight 75-124 against a Voidwaker user.
+- **Live:**
+  - It specced at 75 (good, his HP 72-115 to 24-87) and again at 97, when he had just eaten back up to 86-115 (wasteful, per the user).
+  - At 118 his Voidwaker hit took us to 28. We ate to 68 (anglerfish plus karambwan, so food is locked until 122).
+  - At 120 it teleported (p 0.61). We had no spec left and he had 50 (one more Voidwaker spec), so it was rude by the norm. Price 0.84.
+- **Probes, teleport p at 119-123:**
+
+  | edit | 119-123 |
+  |---|---|
+  | live | 0.12 0.61 0.53 0.32 0.89 |
+  | our HP 99 | ≤0.01 |
+  | our HP 121 | 0.00 |
+  | his bar 10/30 | ≤0.02 |
+  | our attack/strength restored to 118 (were 105) | 0.06 0.37 0.31 0.12 0.69 |
+  | price 0.4 | 0.08 0.44 0.41 0.16 0.78 |
+  | price 2.5 | 0.23 0.88 0.68 0.82 0.98 |
+
+- **Reading:** a coherent defensive choice: low HP while food-locked, a healthy opponent who still has a Voidwaker spec, our boost faded. The policy prices staying (his spec could KO from 68) above the rude cost (no rematch, +1 reputation: 1.5x search, 15% raggers). The user says players would eat up and fight on.
+- **Open:** either the rude cost is too small, or the sim's death risk in this state is too high (opponent spec timing), or both. Measure P(death within 10 ticks | this state) in the sim against recordings before changing either.
