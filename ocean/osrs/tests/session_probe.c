@@ -10,15 +10,16 @@
 #include "rf_net.h"
 
 int main(int argc, char** argv) {
-    if (argc < 5) { fprintf(stderr, "usage: session_probe CHECKPOINT HIDDEN LAYERS SESSIONS [argmax|sample] [oppfit_probability] [seed] [session_ticks] [opponent_pool]\n"); return 2; }
+    if (argc < 5) { fprintf(stderr, "usage: session_probe CHECKPOINT HIDDEN LAYERS SESSIONS [argmax|sample] [oppfit_probability] [seed] [session_ticks] [opponent_pool] [death_price, 0 = drawn]\n"); return 2; }
     int sessions = atoi(argv[4]);
     int hard = !(argc > 5 && !strcmp(argv[5], "sample"));
     double oppfit = argc > 6 ? atof(argv[6]) : 0.5;
     unsigned seed = argc > 7 ? (unsigned)atoi(argv[7]) : 1;
     double session_ticks = argc > 8 ? atof(argv[8]) : 3000;
     double pool = argc > 9 ? atof(argv[9]) : 0;
+    double price = argc > 10 ? atof(argv[10]) : 0;
     DictItem items[] = {{.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 0}, {.key = "session_ticks", .value = session_ticks},
-        {.key = "curveball_probability", .value = 0.1}, {.key = "death_price", .value = 0}, {.key = "live_loadout", .value = 3}, {.key = "deployable", .value = 1},
+        {.key = "curveball_probability", .value = 0.1}, {.key = "death_price", .value = price}, {.key = "live_loadout", .value = 3}, {.key = "deployable", .value = 1},
         {.key = "motor", .value = 1}, {.key = "domain_randomization", .value = 1}, {.key = "oppfit_probability", .value = oppfit}, {.key = "opponent_pool", .value = pool}};
     Dict kwargs = {.items = items, .size = sizeof(items) / sizeof(*items)};
     Env* env = (Env*)calloc(1, sizeof(*env));
