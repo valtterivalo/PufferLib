@@ -261,6 +261,11 @@ static const char* request_unavailable(const Request* q) {
     for (int i = 0; i < q->rules.n; i++)
         if (q->rules.command[i].kind == HUMAN_COMMAND_STOP && !q->feasible.pause_ok)
             return q->auto_retaliate_source == 1 ? "auto_retaliate_on" : "auto_retaliate_unknown";
+    return NULL;
+}
+
+/* The lookahead simulates poison over its horizon, so it needs the poison phase of both sides over that horizon. The RL net reads no poison: gs_rl_server skips this. */
+static const char* request_poison_unavailable(const Request* q) {
     int poison_attack[2] = {request_poison_attack(q, 0), request_poison_attack(q, 1)};
     for (int side = 0; side < 2; side++) {
         if (!q->poison_source[side] && (q->poison_seen[side] || poison_attack[0] || poison_attack[1]))
@@ -729,13 +734,19 @@ static void server_respond(FILE* out, const Request* q, double micros) {
     fprintf(out, "\n");
 }
 
-/* The own-side observations a request must carry; everything else the sim has priors for. Returns the UNAVAILABLE reason or NULL. */
+/* The own-side observations a request must carry; everything else the sim has priors for. Returns the UNAVAILABLE reason or NULL. The lookahead's own main also
+ * needs request_poison_unavailable; the RL server and the tools built on it do not. */
 static const char* server_unavailable(const Request* q) {
     const char* reason = request_unavailable(q);
     if (reason) return reason;
     if (q->attack_history == RISKFIGHT_ATTACK_UNKNOWN) return "local_attack_history_unknown";
     if (q->attack_clock_low != q->attack_clock_high) return "local_attack_history_interval";
     return NULL;
+}
+
+static const char* lookahead_unavailable(const Request* q) {
+    const char* reason = server_unavailable(q);
+    return reason ? reason : request_poison_unavailable(q);
 }
 
 #include "gs_lookahead_warm.h"
@@ -751,7 +762,7 @@ static double server_warm(void) {
         read_request(in, &q);
         fclose(in);
         q.id = i;
-        const char* unavailable = server_unavailable(&q);
+        const char* unavailable = lookahead_unavailable(&q);
         if (unavailable) { fprintf(stderr, "warm-up request %d is unavailable: %s\n", i % WARM_REQUEST_COUNT, unavailable); exit(2); }
         double micros = server_decide(&q, la_seconds());
         la_quiesce(); /* the next warm-up request is parsed (it rewrites the stat-item rows) only when no straggler of this one is left */
@@ -823,7 +834,7 @@ int main(int argc, char** argv) {
         read_request(stdin, &q);
         double arrived = la_seconds();
         request_declare_priors(&q);
-        const char* unavailable = server_unavailable(&q);
+        const char* unavailable = lookahead_unavailable(&q);
         if (unavailable) {
             printf("UNAVAILABLE %d %s\n", q.id, unavailable);
             fflush(stdout);
