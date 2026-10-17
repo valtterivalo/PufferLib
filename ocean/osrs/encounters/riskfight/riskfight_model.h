@@ -70,7 +70,7 @@ enum {
     RF_OPPONENT_START = RF_EQUIPPED_START + NUM_GEAR_SLOTS,
     RF_HISTORY_START = RF_OPPONENT_START + NUM_GEAR_SLOTS + 14,
     RF_PRICE = RF_HISTORY_START + RF_HISTORY_TICKS * RF_EVENT_WIDTH,   /* death price: what our death costs us over what his kill wins us, scaled by 1 / RF_PRICE_MAX */
-    /* Appended blocks, in order: threat features (riskfight_threat.h), then the session block. */
+    /* Appended blocks, in order: threat features (riskfight_threat.h), then the session block, then the timing block. */
     RF_THREAT_START = RF_PRICE + 1,
     /* Session block (riskfight_write_session_observation): [0] session ticks left over RF_SESSION_HORIZON_TICKS, capped at 1;
      * [1] his special energy as a player counts it (100 minus the specs seen, plus the regeneration since), over 100; [2] 1 while the session is waiting between
@@ -80,7 +80,20 @@ enum {
      * [7] 1 when a teleport now would be kosher, 0 when rude (riskfight_norms.h: both specials spent, or a supply class of ours out). */
     RF_SESSION_START = RF_THREAT_START + RF_THREAT_SIZE,
     RF_SESSION_SIZE = 8,
-    RF_OBS_SIZE = RF_SESSION_START + RF_SESSION_SIZE,
+    /* Timing block (riskfight_write_timing_observation), what a viewer knows or cheaply infers of his timing, so the net need not rebuild it from the history:
+     *   0 his_ready_min      the fewest ticks until he can swing a normal attack (riskfight_his_ready): 1 when he can on the tick about to be played, 0 when he
+     *                        could already before; from his last swing (tick, weapon speed) plus the least attack delay his meals seen since can have added (a
+     *                        meal the bar has not classified yet counts its least, 0: never slower than he may be). / RF_OBSERVATION_ATTACK_AGE_SCALE, capped at 1
+     *   1 his_ready_max      the same with the most delay consistent with what was seen: a meal adds the most a combo of one tick adds (5, food and karambwan)
+     *                        from the tick its animation shows, narrowed to its class when his bar next moves. / RF_OBSERVATION_ATTACK_AGE_SCALE, capped at 1
+     *   2 his_next_tick_max  the most he can deal on the next tick: the chance range's combo (riskfight_tick_damage_bound) with the opening normal hit or
+     *                        special only when his_ready_min <= 1; the instant maul specials his energy affords (they ignore the clock) and his Vengeance echo
+     *                        always. / RF_THREAT_DAMAGE_SCALE, capped at 1 (128 is past any hitpoints: the observation stays in [-1, 1])
+     *   3 his_hp_lower, 4 his_hp_upper   his hitpoints bounds from his bar (99 to 121 when no bar is known). / RF_THREAT_DAMAGE_SCALE, the scale of the
+     *                        threat block's max and spec_max, so they compare directly with the OURS rows. */
+    RF_TIMING_START = RF_SESSION_START + RF_SESSION_SIZE,
+    RF_TIMING_SIZE = 5,
+    RF_OBS_SIZE = RF_TIMING_START + RF_TIMING_SIZE,
 };
 /* Ticks left beyond which the end of the session no longer changes what is worth doing: several fight cycles. */
 enum { RF_SESSION_HORIZON_TICKS = 1500 };
@@ -118,6 +131,10 @@ typedef struct {
     int last_attack_speed;
     int consume_food_est, consume_potion_est, consume_karam_est, consume_delay_est;
     int pending_consume_tick, pending_bar_before, pending_damage_since;
+    /* The attack delay his meals seen since his last swing add (riskfight_meal_seen, riskfight_meals_resolve, riskfight_his_ready): the least and the most the
+     * meals the bar has classified add, and the meals of the pending group (pending_consume_tick) in all and since his last swing, whose kind is not known yet. */
+    int meal_delay_lo, meal_delay_hi;
+    int pending_meals, pending_meals_since_swing;
     int last_cast_tick, last_proc_tick;
     /* His Vengeance as the viewer knows it (riskfight_veng_seen, riskfight_his_veng_up): up from the fight's start (fighters cast it before), down after a proc or a
      * hit landing on him for damage without one (a hit proves no Vengeance was up), up again after a seen cast. */
@@ -376,26 +393,99 @@ static void riskfight_finalize_context(EncounterState* state, EncounterContext* 
     ctx->route_topology = pvp_route_topology_finalize();
 }
 
-/** Observed heal range -> max (food, potion, karambwan, attack delay) lock ticks over bag-legal consume combos. */
-static void riskfight_classify_consume_heal(int lo, int hi,
-        int* food, int* potion, int* karam, int* delay) {
-    static const int heals[] = {0, 11, 16, 20, 24, 27, 31, 36, 40, 44, 47, 60};
-    static const int eff_food[] = {3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3};
-    static const int eff_potion[] = {3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3};
-    static const int eff_karam[] = {0, 0, 0, 2, 0, 0, 2, 2, 0, 2, 2, 2};
-    static const int eff_delay[] = {0, 3, 0, 2, 3, 3, 5, 2, 3, 5, 5, 5};
-    int n = (int)(sizeof(heals) / sizeof(heals[0]));
-    int f = 0, po = 0, k = 0, d = 0, matched = 0;
-    for (int i = 0; i < n; i++) {
-        if (heals[i] < lo || heals[i] > hi) continue;
-        matched = 1;
-        if (eff_food[i] > f) f = eff_food[i];
-        if (eff_potion[i] > po) po = eff_potion[i];
-        if (eff_karam[i] > k) k = eff_karam[i];
-        if (eff_delay[i] > d) d = eff_delay[i];
+/** The meals of one tick a viewer tells apart only by their heal: at most one food of the food clock (a shark, an anglerfish, a pie bite, ...), one of the
+ * karambwan clock (a karambwan, a halibut) and one brew dose, each on its own clock, every food the engine knows; or a drink that heals nothing (a restore, a super
+ * combat). Heal at his assumed base hitpoints, attack delay by the engine's rule (osrs_food_attack_delay_ticks; a drink adds none). Built once at load. */
+typedef struct { int heal, delay, karambwan_clock; } RiskfightMealCombo;
+enum { RF_MEAL_COMBO_COUNT = (NUM_FOOD_TYPES + 1) * (NUM_FOOD_TYPES + 1) * 2 };
+static RiskfightMealCombo RF_MEAL_COMBOS[RF_MEAL_COMBO_COUNT];
+static int RF_MEAL_COMBOS_BUILT, RF_MEAL_HEAL_MOST;
+
+__attribute__((constructor)) static void riskfight_build_meal_combos(void) {
+    for (int hard = 0; hard <= NUM_FOOD_TYPES; hard++) /* NUM_FOOD_TYPES: none of that clock */
+        for (int fast = 0; fast <= NUM_FOOD_TYPES; fast++)
+            for (int brew = 0; brew < 2; brew++) {
+                if ((hard < NUM_FOOD_TYPES && osrs_food_on_karambwan_clock((FoodType)hard)) || (fast < NUM_FOOD_TYPES && !osrs_food_on_karambwan_clock((FoodType)fast))) continue;
+                RiskfightMealCombo c = {brew ? osrs_brew_heal_amount(RF_THREAT_BASE_HITPOINTS) : 0, 0, fast < NUM_FOOD_TYPES};
+                if (hard < NUM_FOOD_TYPES) { c.heal += osrs_food_heal_amount((FoodType)hard); c.delay += osrs_food_attack_delay_ticks((FoodType)hard); }
+                if (fast < NUM_FOOD_TYPES) { c.heal += osrs_food_heal_amount((FoodType)fast); c.delay += osrs_food_attack_delay_ticks((FoodType)fast); }
+                if (c.heal > RF_MEAL_HEAL_MOST) RF_MEAL_HEAL_MOST = c.heal;
+                RF_MEAL_COMBOS[RF_MEAL_COMBOS_BUILT++] = c;
+            }
+}
+
+/** What a heal in [lo, hi] says of the meals behind it, over the combos whose heal fits (all of them when none does): the most food, potion and karambwan lock
+ * ticks, and the least and the most attack delay. */
+typedef struct { int food, potion, karam, delay_min, delay_max; } RiskfightMealClass;
+static RiskfightMealClass riskfight_classify_consume_heal(int lo, int hi) {
+    RiskfightMealClass out = {0, 0, 0, INT_MAX, 0};
+    for (int pass = 0; pass < 2 && out.delay_min == INT_MAX; pass++)
+        for (int i = 0; i < RF_MEAL_COMBOS_BUILT; i++) {
+            const RiskfightMealCombo* c = &RF_MEAL_COMBOS[i];
+            if (pass == 0 && (c->heal < lo || c->heal > hi)) continue;
+            out.food = 3; out.potion = 3;
+            if (c->karambwan_clock) out.karam = 2;
+            if (c->delay < out.delay_min) out.delay_min = c->delay;
+            if (c->delay > out.delay_max) out.delay_max = c->delay;
+        }
+    return out;
+}
+
+/** A meal animation of his seen on the tick before fight tick `tick` (the tick its observation is written on), his bar then `bar_before`. Meals until the next
+ * bar change form one pending group; a meal on the tick of his swing came before it (inputs resolve before the attack) and adds nothing to its clock. */
+static inline void riskfight_meal_seen(RiskfightVisibleOpponent* v, int tick, int bar_before) {
+    if (v->pending_consume_tick < 0) {
+        v->pending_consume_tick = tick;
+        v->pending_bar_before = bar_before;
+        v->pending_damage_since = 0;
     }
-    if (!matched) { f = 3; po = 3; k = 2; d = 5; }
-    *food = f; *potion = po; *karam = k; *delay = d;
+    v->pending_meals++;
+    if (v->last_attack_tick != tick - 1) v->pending_meals_since_swing++;
+}
+
+/** His bar moved at fight tick `tick` (his bar now v->health_bar) with meals pending: their heal is what the bar moved less the damage seen since. The consume
+ * estimates take the group's class; each meal of the group is bounded by the combos whose heal fits what that one meal can have healed (the group's heal less
+ * the most the others can heal, up to all of it), and the meals since his last swing add those delay bounds. A bar not known bounds nothing. */
+static void riskfight_meals_resolve(RiskfightVisibleOpponent* v, int tick) {
+    OsrsHealthBarRange before = osrs_health_bar_range(v->pending_bar_before, OSRS_PLAYER_HEALTH_BAR_SCALE, RF_THREAT_BASE_HITPOINTS, RF_THREAT_OVERHEAL_CAP);
+    OsrsHealthBarRange after = osrs_health_bar_range(v->health_bar, OSRS_PLAYER_HEALTH_BAR_SCALE, RF_THREAT_BASE_HITPOINTS, RF_THREAT_OVERHEAL_CAP);
+    RiskfightMealClass each = riskfight_classify_consume_heal(INT_MIN, INT_MAX);
+    if (before.kind == OSRS_HEALTH_BAR_KNOWN && after.kind == OSRS_HEALTH_BAR_KNOWN) {
+        OsrsHealthChangeRange ch = osrs_health_bar_unobserved_change(before, after, v->pending_damage_since);
+        RiskfightMealClass group = riskfight_classify_consume_heal(ch.lower, ch.upper);
+        int elapsed = tick - v->pending_consume_tick;
+        v->consume_food_est = group.food - elapsed > 0 ? group.food - elapsed : 0;
+        v->consume_potion_est = group.potion - elapsed > 0 ? group.potion - elapsed : 0;
+        v->consume_karam_est = group.karam - elapsed > 0 ? group.karam - elapsed : 0;
+        v->consume_delay_est = group.delay_max - elapsed > 0 ? group.delay_max - elapsed : 0;
+        each = riskfight_classify_consume_heal(ch.lower - (v->pending_meals - 1) * RF_MEAL_HEAL_MOST, ch.upper);
+    }
+    v->meal_delay_lo += v->pending_meals_since_swing * each.delay_min;
+    v->meal_delay_hi += v->pending_meals_since_swing * each.delay_max;
+    v->pending_consume_tick = -1;
+    v->pending_damage_since = 0;
+    v->pending_meals = v->pending_meals_since_swing = 0;
+}
+
+/** His swing (not an instant special) seen on fight tick `tick` with a weapon of `speed`: his attack clock restarts, the meals before it no longer delay him. */
+static inline void riskfight_his_swing_seen(RiskfightVisibleOpponent* v, int tick, int speed) {
+    v->last_attack_tick = tick;
+    v->last_attack_speed = speed;
+    v->meal_delay_lo = v->meal_delay_hi = 0;
+    v->pending_meals_since_swing = 0;
+}
+
+/** The ticks until he can swing a normal attack, as the observation of fight tick `now` reads them: 1 when he can swing on the tick about to be played, 0 when he
+ * could already on the one before (idle), 0 too before any swing is seen. His clock (osrs_pvp_combat.h, can_attack_now) frees the swing of tick T at T + speed,
+ * and every meal after the swing adds its attack delay (osrs_player_consumables.h, the continuous clock: added to the signed clock, so a meal long after the
+ * clock ran out may still leave him ready). `most` 0 takes the least delay his seen meals can have added (a meal whose kind the bar has not told adds its least,
+ * 0: it may be a drink), 1 the most. */
+static inline int riskfight_his_ready(const RiskfightVisibleOpponent* v, int now, int most) {
+    if (v->last_attack_tick < 0) return 0;
+    RiskfightMealClass unknown = riskfight_classify_consume_heal(INT_MIN, INT_MAX);
+    int delay = most ? v->meal_delay_hi + v->pending_meals_since_swing * unknown.delay_max : v->meal_delay_lo + v->pending_meals_since_swing * unknown.delay_min;
+    int left = v->last_attack_tick + v->last_attack_speed + delay - now + 1;
+    return left > 0 ? left : 0;
 }
 
 /** One tick of the regeneration of his special energy as a player counts it (the sim's own clock: +OSRS_SPEC_REGEN_AMOUNT every OSRS_SPEC_REGEN_INTERVAL ticks below 100). */
@@ -454,6 +544,8 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
         v->consume_karam_est = 0; v->consume_delay_est = 0;
         v->pending_consume_tick = -1; v->pending_bar_before = 0;
         v->pending_damage_since = 0;
+        v->meal_delay_lo = v->meal_delay_hi = 0;
+        v->pending_meals = v->pending_meals_since_swing = 0;
         return;
     }
     if (v->consume_food_est > 0) v->consume_food_est--;
@@ -472,33 +564,11 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
     event[6] = consuming;
     event[7] = v->health_bar;
     int bar_event = opponent->hit_landed_this_tick;
-    if (consuming && v->pending_consume_tick < 0) {
-        v->pending_consume_tick = s->env.tick;
-        v->pending_bar_before = bar_before;
-        v->pending_damage_since = 0;
-    }
+    if (consuming) riskfight_meal_seen(v, s->env.tick, bar_before);
     if (bar_event && v->pending_consume_tick >= 0)
         v->pending_damage_since += opponent->hit_damage;
     if (bar_event && v->pending_consume_tick >= 0) {
-        if (opponent->current_hitpoints > 0) {
-            OsrsHealthBarRange before = osrs_health_bar_range(v->pending_bar_before,
-                OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121);
-            OsrsHealthBarRange after = osrs_health_bar_range(v->health_bar,
-                OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121);
-            if (before.kind == OSRS_HEALTH_BAR_KNOWN && after.kind == OSRS_HEALTH_BAR_KNOWN) {
-                OsrsHealthChangeRange ch = osrs_health_bar_unobserved_change(before, after,
-                    v->pending_damage_since);
-                int f, po, k, d;
-                riskfight_classify_consume_heal(ch.lower, ch.upper, &f, &po, &k, &d);
-                int elapsed = s->env.tick - v->pending_consume_tick;
-                v->consume_food_est = f - elapsed > 0 ? f - elapsed : 0;
-                v->consume_potion_est = po - elapsed > 0 ? po - elapsed : 0;
-                v->consume_karam_est = k - elapsed > 0 ? k - elapsed : 0;
-                v->consume_delay_est = d - elapsed > 0 ? d - elapsed : 0;
-            }
-            v->pending_consume_tick = -1;
-            v->pending_damage_since = 0;
-        }
+        if (opponent->current_hitpoints > 0) riskfight_meals_resolve(v, s->env.tick);
     } else if (bar_event) {
         v->pending_damage_since = 0;
     }

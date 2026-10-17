@@ -158,10 +158,8 @@ static void rt_observe(RiskfightVisibleOpponent* v, const RtSeen* seen, int n, c
         v->last_swing_tick = n - 1;
         riskfight_threat_note_swing(&v->threat, (uint8_t)item, n - 1, seen->swing_spec > 0);
         /* The maul special is instant: the sim logs the hits but does not move his swing clock. */
-        if (item == ITEM_NONE || !pvp_is_maul(item)) {
-            v->last_attack_tick = n - 1;
-            v->last_attack_speed = q->his_speed > 0 ? q->his_speed : item == ITEM_NONE ? 4 : ITEM_DATABASE[item].attack_speed;
-        }
+        if (item == ITEM_NONE || !pvp_is_maul(item))
+            riskfight_his_swing_seen(v, n - 1, q->his_speed > 0 ? q->his_speed : item == ITEM_NONE ? 4 : ITEM_DATABASE[item].attack_speed);
     }
     if (seen->swing_spec > 0) {
         assert(seen->swing_spec <= 2 && n - 1 - v->last_swing_tick <= 1 && "special count with no swing of his in this tick or the one before");
@@ -182,28 +180,10 @@ static void rt_observe(RiskfightVisibleOpponent* v, const RtSeen* seen, int n, c
     event[6] = seen->consuming;
     event[7] = v->health_bar;
     int bar_event = seen->hit_landed;
-    if (seen->consuming && v->pending_consume_tick < 0) {
-        v->pending_consume_tick = n;
-        v->pending_bar_before = bar_before;
-        v->pending_damage_since = 0;
-    }
+    if (seen->consuming) riskfight_meal_seen(v, n, bar_before);
     if (bar_event && v->pending_consume_tick >= 0) v->pending_damage_since += seen->hit_damage;
-    if (bar_event && v->pending_consume_tick >= 0) {
-        OsrsHealthBarRange before = osrs_health_bar_range(v->pending_bar_before, OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121);
-        OsrsHealthBarRange after = osrs_health_bar_range(v->health_bar, OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121);
-        if (before.kind == OSRS_HEALTH_BAR_KNOWN && after.kind == OSRS_HEALTH_BAR_KNOWN) {
-            OsrsHealthChangeRange ch = osrs_health_bar_unobserved_change(before, after, v->pending_damage_since);
-            int f, po, k, d;
-            riskfight_classify_consume_heal(ch.lower, ch.upper, &f, &po, &k, &d);
-            int elapsed = n - v->pending_consume_tick;
-            v->consume_food_est = f - elapsed > 0 ? f - elapsed : 0;
-            v->consume_potion_est = po - elapsed > 0 ? po - elapsed : 0;
-            v->consume_karam_est = k - elapsed > 0 ? k - elapsed : 0;
-            v->consume_delay_est = d - elapsed > 0 ? d - elapsed : 0;
-        }
-        v->pending_consume_tick = -1;
-        v->pending_damage_since = 0;
-    } else if (bar_event) v->pending_damage_since = 0;
+    if (bar_event && v->pending_consume_tick >= 0) riskfight_meals_resolve(v, n);
+    else if (bar_event) v->pending_damage_since = 0;
 }
 
 /* The anglerfish overheal lock of our side (Player.pvp_overheal_block) from what the client showed of him. The snapshot's own derivation reads the O line's

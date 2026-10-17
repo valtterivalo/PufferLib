@@ -22,10 +22,7 @@ static void riskfight_record_attack(RiskfightState* s, int agent, int hits, int 
     event[2] = p->attack_style_this_tick;
     riskfight_threat_note_swing(&visible->threat, (uint8_t)weapon, s->env.tick, p->used_special_this_tick);
     if (agent == 1) s->ragger_swings++;
-    if (!instant) {
-        visible->last_attack_tick = s->env.tick;
-        visible->last_attack_speed = get_slot_gear_bonuses(p)->attack_speed;
-    }
+    if (!instant) riskfight_his_swing_seen(visible, s->env.tick, get_slot_gear_bonuses(p)->attack_speed);
 }
 /* `count` special attacks of `agent` with `weapon` this tick: counted, and seen by the other side, whose estimate of his special energy pays the cost of each.
  * A double granite maul is one animation and two hits, so two specials; every other special is one (a Behead costs nothing and still counts). */

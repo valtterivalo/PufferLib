@@ -42,8 +42,9 @@ __attribute__((constructor)) static void riskfight_build_inventory_rows(void) {
  *   then every instant special (the granite maul's) the energy left after the opening pays for, all landing on the same tick. The maul counts when the pool
  *   only says he may carry it (any slot of the block): it stays hidden in the bag until the special,
  * plus, while his Vengeance is up, the echo of our own best hit (3/4). The ring of recoil is not visible, so its reflection is not counted. The combo matters
- * because the range gates our meals: an axe hit followed by a maul special is one tick of damage, not the larger of the two. */
-static int riskfight_chance_range_of(const float* threat, int spec_est, int his_veng) {
+ * because the range gates our meals: an axe hit followed by a maul special is one tick of damage, not the larger of the two. `opening` 0 drops the opening hit (his
+ * clock does not free a swing yet, riskfight_his_ready): only the instant specials, which ignore the clock, and the echo remain. */
+static int riskfight_tick_damage_bound(const float* threat, int spec_est, int his_veng, int opening) {
     const int stacks_full = threat[RF_THREAT_STACKS_OFFSET] * OSRS_SOUL_STACKS_MAX > OSRS_SOUL_STACKS_MAX - 0.5f;
     int instant_cost = 0, instant_max = 0; /* the instant special with the most damage per energy */
     for (int i = 0; i < RF_THREAT_HIS_SLOTS; i++) {
@@ -52,8 +53,8 @@ static int riskfight_chance_range_of(const float* threat, int spec_est, int his_
         if (o[0] <= 0 || cost <= 0 || lroundf(o[11] * RF_THREAT_SPEED_SCALE) != 1) continue;
         if (!instant_cost || spec * instant_cost > instant_max * cost) { instant_cost = cost; instant_max = spec; }
     }
-    int range = 0;
-    for (int i = 0; i < RF_THREAT_HIS_SLOTS; i++) {
+    int range = opening || !instant_cost ? 0 : spec_est / instant_cost * instant_max;
+    for (int i = 0; opening && i < RF_THREAT_HIS_SLOTS; i++) {
         const float* o = threat + i * RF_THREAT_HIS_WIDTH;
         if (o[0] < 1) continue;
         int hit = (int)lroundf(o[2] * RF_THREAT_DAMAGE_SCALE);
@@ -71,6 +72,9 @@ static int riskfight_chance_range_of(const float* threat, int spec_est, int his_
     }
     if (his_veng) range += (int)lroundf(threat[RF_THREAT_OURS_OFFSET + 1] * RF_THREAT_DAMAGE_SCALE) * 3 / 4;
     return range;
+}
+static inline int riskfight_chance_range_of(const float* threat, int spec_est, int his_veng) {
+    return riskfight_tick_damage_bound(threat, spec_est, his_veng, 1);
 }
 
 /** Whether his Vengeance counts as up for the chance range: up from the fight's start (fighters cast it before the fight: the user's recordings show a proc before any
@@ -115,6 +119,19 @@ static void riskfight_write_session_observation(const RiskfightState* s, int age
     int range = riskfight_chance_range_of(obs + RF_THREAT_START, v->spec_est, riskfight_his_veng_up(v));
     out[6] = fmaxf(-1.0f, fminf(1.0f, (float)(s->env.players[agent].current_hitpoints - range) / 121.0f));
     out[7] = riskfight_teleport_kosher_now(&s->env.players[agent], obs + RF_THREAT_START, v->spec_est);
+}
+
+/** The timing block (RF_TIMING_START, layout in riskfight_model.h): his readiness and the most he can deal on the next tick, and his hitpoints bounds, from what a
+ * viewer sees, written by the sim and the live server alike (riskfight_write_observation). Reads the threat block, so it comes after it. */
+static void riskfight_write_timing_observation(const RiskfightState* s, int agent, float* obs) {
+    const RiskfightVisibleOpponent* v = &s->visible[agent];
+    float* out = obs + RF_TIMING_START;
+    int ready_min = riskfight_his_ready(v, s->env.tick, 0);
+    out[0] = fminf(1.0f, (float)ready_min / RF_OBSERVATION_ATTACK_AGE_SCALE);
+    out[1] = fminf(1.0f, (float)riskfight_his_ready(v, s->env.tick, 1) / RF_OBSERVATION_ATTACK_AGE_SCALE);
+    out[2] = fminf(1.0f, (float)riskfight_tick_damage_bound(obs + RF_THREAT_START, v->spec_est, riskfight_his_veng_up(v), ready_min <= 1) / RF_THREAT_DAMAGE_SCALE);
+    out[3] = (float)riskfight_threat_his_hp_lower(v->health_bar) / RF_THREAT_DAMAGE_SCALE;
+    out[4] = (float)riskfight_threat_his_hp_upper(v->health_bar) / RF_THREAT_DAMAGE_SCALE;
 }
 
 /** The observation up to the price, and the weapons of the agent's bag when `bag_weapons` is given (the threat block needs them). The bag rows follow `order`. */
@@ -196,13 +213,14 @@ static void riskfight_write_script_observation(const RiskfightState* s, int agen
     riskfight_threat_write_stacks(&s->env.players[agent], &s->visible[agent].threat, obs + RF_THREAT_START); /* the Soulreaper stacks are the one thing a script reads there */
 }
 
-/** The full observation, the net's: the base with the bag in canonical order (riskfight_bag.h), then the appended blocks in order (threat features, session). */
+/** The full observation, the net's: the base with the bag in canonical order (riskfight_bag.h), then the appended blocks in order (threat features, session, timing). */
 static void riskfight_write_observation(const RiskfightState* s, int agent, float* obs) {
     RiskfightBagWeapons bag_weapons = {{0}, 0};
     const RiskfightBagOrder order = riskfight_bag_order(&s->env.players[agent]);
     riskfight_write_observation_core(s, agent, obs, &order, &bag_weapons);
     riskfight_threat_write(&s->env.players[agent], &bag_weapons, &s->visible[agent].threat, s->visible[agent].health_bar, obs + RF_THREAT_START);
     riskfight_write_session_observation(s, agent, obs);
+    riskfight_write_timing_observation(s, agent, obs);
 }
 
 /** Head offsets into the mask, and the mask every state starts from: action 0 of every head and all

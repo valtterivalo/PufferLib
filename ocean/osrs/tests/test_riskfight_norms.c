@@ -189,7 +189,7 @@ static void test_player_reading(void) {
 
 /* The session block carries the reading, written by the same code in the sim and in gs_rl_server. */
 static void test_observation(void) {
-    assert(RF_SESSION_SIZE == 8 && RF_OBS_SIZE == RF_SESSION_START + RF_SESSION_SIZE);
+    assert(RF_SESSION_SIZE == 8 && RF_TIMING_START == RF_SESSION_START + RF_SESSION_SIZE);
     env = make_env(1, 11);
     RiskfightState* s = &env->state;
     float obs[RF_OBS_SIZE];

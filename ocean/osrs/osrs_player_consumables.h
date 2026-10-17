@@ -50,6 +50,16 @@ static inline int osrs_player_can_eat_food_type(const Player* p, FoodType type) 
     return r.consumed;
 }
 
+/** Whether `type` is eaten on the karambwan clock (karambwan, halibut: the combo foods) rather than the food clock. */
+static inline int osrs_food_on_karambwan_clock(FoodType type) {
+    return type == FOOD_KARAMBWAN || type == FOOD_HALIBUT;
+}
+
+/** The ticks a meal of `type` adds to the eater's attack clock: a karambwan-clock food 2, every other food 3. Drinks add none. */
+static inline int osrs_food_attack_delay_ticks(FoodType type) {
+    return osrs_food_on_karambwan_clock(type) ? 2 : 3;
+}
+
 static inline OsrsPlayerEatResult osrs_player_eat_food_effects_with_clock(Player* p, FoodType type, OsrsFoodAttackClock clock) {
     osrs_require_player_food_action(type);
     OsrsPlayerEatResult out = {0, 0, 0, 0};
@@ -70,13 +80,13 @@ static inline OsrsPlayerEatResult osrs_player_eat_food_effects_with_clock(Player
         p->ate_karambwan_this_tick = 1;
         p->last_karambwan_heal = out.hp_healed;
         p->last_karambwan_waste = out.hp_wasted;
-        out.attack_delay_ticks = 2;
+        out.attack_delay_ticks = osrs_food_attack_delay_ticks(type);
     } else {
         p->food_timer = type == FOOD_SUMMER_PIE ? 1 : 3;
         p->ate_food_this_tick = 1;
         p->last_food_heal = out.hp_healed;
         p->last_food_waste = out.hp_wasted;
-        out.attack_delay_ticks = 3;
+        out.attack_delay_ticks = osrs_food_attack_delay_ticks(type);
     }
 
     p->current_hitpoints += out.hp_healed;

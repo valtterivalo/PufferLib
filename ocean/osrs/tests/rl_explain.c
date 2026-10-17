@@ -3,7 +3,7 @@
  *
  *   cc -std=c11 -O2 -I. -o /tmp/rl_explain ocean/osrs/tests/rl_explain.c -lm
  *   /tmp/rl_explain CHECKPOINT HIDDEN LAYERS RUN.requests [FROM [TO]]
- *   /tmp/rl_explain - 0 0 RUN.requests [FROM [TO]]      no net: only the observation each request produces, its threat block printed (what the net would be given)
+ *   /tmp/rl_explain - 0 0 RUN.requests [FROM [TO]]      no net: only the observation each request produces, its timing and threat blocks printed (what the net would be given)
  *
  * Run from a directory that resolves ocean/osrs/data (the repository root or ~/.light2/engine-release/home). */
 #define GS_RL_SERVER_NO_MAIN
@@ -67,6 +67,15 @@ static void rx_threat(const float* obs) {
     }
 }
 
+/* The timing block of an observation (riskfight_model.h) in ticks and hitpoints as the net reads them (capped at 1), and the next-tick bound uncapped. */
+static void rx_timing(const RiskfightState* s, const float* obs) {
+    const float* t = obs + RF_TIMING_START;
+    const RiskfightVisibleOpponent* v = &s->visible[0];
+    printf(" | timing ready %.0f-%.0f next_tick_max %.0f (%d) his hp %.0f-%.0f", t[0] * RF_OBSERVATION_ATTACK_AGE_SCALE, t[1] * RF_OBSERVATION_ATTACK_AGE_SCALE,
+        t[2] * RF_THREAT_DAMAGE_SCALE, riskfight_tick_damage_bound(obs + RF_THREAT_START, v->spec_est, riskfight_his_veng_up(v), riskfight_his_ready(v, s->env.tick, 0) <= 1),
+        t[3] * RF_THREAT_DAMAGE_SCALE, t[4] * RF_THREAT_DAMAGE_SCALE);
+}
+
 int main(int argc, char** argv) {
     if (argc < 5) { fprintf(stderr, "usage: rl_explain CHECKPOINT HIDDEN LAYERS RUN.requests [FROM [TO]]\n"); return 2; }
     int from = argc > 5 ? atoi(argv[5]) : 0, to = argc > 6 ? atoi(argv[6]) : 1 << 30;
@@ -94,7 +103,9 @@ int main(int argc, char** argv) {
         if (!g_fight.net) {
             float obs[RF_OBS_SIZE];
             riskfight_write_observation(&g_base.state, 0, obs);
-            printf("%d %s his bar %d\n", q.tick, obs_only ? "OBS" : "DEC", g_fight.vis.health_bar);
+            printf("%d %s his bar %d swing %d spec %d eat %d", q.tick, obs_only ? "OBS" : "DEC", g_fight.vis.health_bar, seen.swing_raw, seen.swing_spec, seen.consuming);
+            rx_timing(&g_base.state, obs);
+            printf("\n");
             rx_threat(obs);
             continue;
         }
@@ -125,6 +136,7 @@ int main(int argc, char** argv) {
             printf(" | sess rep %.2f annoy %.2f margin %.2f kosher %.0f (no_spec %d no_food %d no_restore %d no_boost %d his_cheapest %d)", sb[4], sb[5], sb[6], sb[7],
                 osrs_escape_no_special(&own), osrs_escape_no_hard_food(&own), osrs_escape_no_restore(&own), osrs_escape_no_boost(&own),
                 riskfight_threat_cheapest_spec(o + RF_THREAT_START));
+            rx_timing(s, o);
         }
         float pr[512];
         rx_probs(g_fight.net, mask, RF_PRIMARY, pr);
