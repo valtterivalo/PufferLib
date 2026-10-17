@@ -87,11 +87,11 @@ enum { RF_SESSION_HORIZON_TICKS = 1500 };
 /* The regear delay is 250 ticks at its median and 640 at its 90th percentile, more with a reputation: waits beyond 1000 ticks read 1 in the wait-left feature. */
 enum { RF_WAIT_SCALE_TICKS = 1000 };
 /* Over-eating is rude (the user's account): once the opponent has seen more than RF_OVEREAT_PATIENCE overeats in a fight he teleports within RF_ANNOYED_LEAVE_TICKS ticks.
- * The patience sits just above the user's own play, measured with this very definition (riskfight_chance_range) on his October 2026 recordings (scripts/measure_overeats.py,
- * ocean/osrs/tests/overeat_tapes.c): 121 fights with the opponent's composition observed, 1661 meals of his, 421 of them (25%) overeats; per fight mean 3.5, p50 3, p75 5, p90 9,
- * p95 11, max 17 (histogram 0:35 1:14 2:7 3:16 4:12 5:7 6:8 7:5 8:3 9:3 10:4 11:2 12:3 13:1 17:1). Rule: the smallest integer above his p90, so 6% of his own fights (7 of 121)
- * would annoy an opponent (the provisional 6 annoyed 18%). With his Vengeance counted up only after a seen cast the p90 is 10, which would make it 11. */
-enum { RF_OVEREAT_PATIENCE = 10, RF_ANNOYED_LEAVE_TICKS = 4 };
+ * The patience sits just above the user's own play, measured with this very definition (riskfight_chance_range, his Vengeance counted up only after a seen cast that has
+ * not proc'd) on his October 2026 recordings (scripts/measure_overeats.py, ocean/osrs/tests/overeat_tapes.c): p90 of overeats per fight 10. Rule: the smallest integer above
+ * his p90. The earlier definition, which counted his Vengeance up from the fight's start until a proc, gave 121 fights, 1661 meals, 421 (25%) overeats, p90 9 and a
+ * patience of 10. */
+enum { RF_OVEREAT_PATIENCE = 11, RF_ANNOYED_LEAVE_TICKS = 4 };
 /* The reputation that reads 1 in the session block (riskfight_session.h): the user's account of how a few rude teleports weigh. */
 #define RF_REP_OBS_SCALE 4.0f
 /* Ticks left of a session whose end is not modelled: what riskfight_reset leaves and the live server keeps (a live session has no budget). */

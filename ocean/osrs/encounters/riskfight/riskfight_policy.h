@@ -54,13 +54,18 @@ static int riskfight_chance_range_of(const float* threat, int spec_est, int his_
     return range;
 }
 
+/** Whether his Vengeance counts as up for the chance range: a cast of his was seen and it has not proc'd since. Before any cast is seen it is not up. */
+static inline int riskfight_his_veng_up(const RiskfightVisibleOpponent* v) {
+    return v->last_cast_tick > v->last_proc_tick;
+}
+
 /** The chance range of `agent`'s opponent against `agent` as the sim holds it now (written the way the observation writes it). */
 static int riskfight_chance_range(const RiskfightState* s, int agent) {
     float threat[RF_THREAT_SIZE];
     RiskfightBagWeapons none = {{0}, 0};
     const RiskfightVisibleOpponent* v = &s->visible[agent];
     riskfight_threat_write(&s->env.players[agent], &none, &v->threat, v->health_bar, threat);
-    return riskfight_chance_range_of(threat, v->spec_est, v->last_cast_tick >= v->last_proc_tick);
+    return riskfight_chance_range_of(threat, v->spec_est, riskfight_his_veng_up(v));
 }
 
 /** The three floats of the session block that move while the session waits between fights (the sim is not stepped then): ticks left, wait left, reputation. */
@@ -87,7 +92,7 @@ static void riskfight_write_session_observation(const RiskfightState* s, int age
     out[4] = clock[2];
     out[5] = fminf(1.0f, (float)s->overeats[agent] / (RF_OVEREAT_PATIENCE + 1));
     const RiskfightVisibleOpponent* v = &s->visible[agent];
-    int range = riskfight_chance_range_of(obs + RF_THREAT_START, v->spec_est, v->last_cast_tick >= v->last_proc_tick);
+    int range = riskfight_chance_range_of(obs + RF_THREAT_START, v->spec_est, riskfight_his_veng_up(v));
     out[6] = fmaxf(-1.0f, fminf(1.0f, (float)(s->env.players[agent].current_hitpoints - range) / 121.0f));
     out[7] = riskfight_teleport_kosher_now(&s->env.players[agent], obs + RF_THREAT_START, v->spec_est);
 }
@@ -235,6 +240,77 @@ static int riskfight_consumable_useful(const Player* p, OsrsConsumableKind kind)
     }
 }
 
+/** The weapon a special-attack action spends energy on, and its cost: the wielded weapon when its special costs energy, else the cheapest spec weapon of the bag (the plain
+ * granite maul costs 60, the ornate 50; the lower item index on a tie), else the wielded weapon at 50. */
+typedef struct { uint8_t item; int cost; } RiskfightSpecWeapon;
+
+static RiskfightSpecWeapon riskfight_spec_weapon(const Player* p) {
+    uint8_t wielded = p->equipped[GEAR_SLOT_WEAPON];
+    int wielded_cost = osrs_spec_cost(wielded);
+    if (wielded_cost > 0) return (RiskfightSpecWeapon){wielded, wielded_cost};
+    RiskfightSpecWeapon bag = {wielded, 0};
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[slot]);
+        if (m->gear_slot != GEAR_SLOT_WEAPON) continue;
+        int cost = osrs_spec_cost(m->item_idx);
+        if (cost > 0 && (!bag.cost || cost < bag.cost || (cost == bag.cost && m->item_idx < bag.item))) bag = (RiskfightSpecWeapon){m->item_idx, cost};
+    }
+    if (!bag.cost) bag.cost = 50;
+    return bag;
+}
+
+/** The most our hits already in flight to him can deal, from what a player knows of them, never their rolled damage (hidden until the hitsplat; masking on it would
+ * leak the roll): a direct hit at most the largest normal max of our weapons (the wielded one and the bag's, as the OURS rows rate them), a special hit the largest
+ * spec max of them (a multi-hit special counts its whole max per hit: an upper bound); a recoil or Vengeance hit of ours carries the damage it echoes, which was seen.
+ * The sim and the live server read the same fields (kind, is_special) and the same weapons. */
+static int riskfight_in_flight_max(const RiskfightState* s, int agent) {
+    const Player* p = &s->env.players[agent];
+    int bar = s->visible[agent].health_bar, total = 0, normal = -1, special = -1;
+    for (int i = 0; i < p->num_pending_hits; i++) {
+        const PendingHit* h = &p->pending_hits[i];
+        if (h->kind != OSRS_HIT_DIRECT) { total += h->damage; continue; }
+        if (normal < 0) {
+            RiskfightOurMaxes most = riskfight_threat_our_maxes(p, p->equipped[GEAR_SLOT_WEAPON], bar);
+            for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+                const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[slot]);
+                if (m->gear_slot != GEAR_SLOT_WEAPON) continue;
+                RiskfightOurMaxes w = riskfight_threat_our_maxes(p, m->item_idx, bar);
+                if (w.max > most.max) most.max = w.max;
+                if (w.spec_max > most.spec_max) most.spec_max = w.spec_max;
+            }
+            normal = most.max;
+            special = most.spec_max;
+        }
+        total += h->is_special ? special : normal;
+    }
+    return total;
+}
+
+/** The two blatant mistakes the mask removes (the user's rules), read off what a player knows: the threat block's numbers and his health bar.
+ * - meals: a meal (food, karambwan, pie bite, brew dose) is offered only while our hitpoints are at most his chance range (riskfight_chance_range): it is only ever
+ *   eaten to stay out of his reach.
+ * - spec_ko: bit `k` set when special action k (k SPEC_TOGGLE clicks, riskfight_policy_commands) may be taken. With a granite maul (an instant special per click) it
+ *   is k specials: allowed when k x its spec max plus the most our hits in flight can deal (riskfight_in_flight_max) reaches the lower bound of his hitpoints from his
+ *   bar (RF_THREAT_BASE_HITPOINTS while no bar is known). With any other weapon the clicks flip the armed bar: an action that leaves it armed (armed now XOR k odd)
+ *   is allowed when one spec max plus the in-flight reach does; one that leaves it disarmed is always allowed (disarming is never blocked). The spec max is the OURS
+ *   row's of the weapon the action would use (riskfight_spec_weapon). */
+typedef struct { uint8_t meals, spec_ko; } RiskfightThreatGates;
+
+static RiskfightThreatGates riskfight_threat_gates(const RiskfightState* s, int agent, RiskfightSpecWeapon spec) {
+    const Player* p = &s->env.players[agent];
+    const RiskfightVisibleOpponent* v = &s->visible[agent];
+    RiskfightThreatGates gates = {p->current_hitpoints <= riskfight_chance_range(s, agent), 0};
+    int spec_max = riskfight_threat_our_maxes(p, spec.item, v->health_bar).spec_max;
+    int reach = riskfight_in_flight_max(s, agent), his_lower = riskfight_threat_his_hp_lower(v->health_bar);
+    int instant = pvp_is_maul(spec.item);
+    for (int k = 1; k < RF_ACTION_DIMS[RF_SPECIAL]; k++) {
+        int armed_after = p->spec_armed != (k & 1);
+        int allowed = instant ? k * spec_max + reach >= his_lower : !armed_after || spec_max + reach >= his_lower;
+        if (allowed) gates.spec_ko |= 1u << k;
+    }
+    return gates;
+}
+
 /** The net's mask: its bag actions index the canonical order of riskfight_bag.h. */
 static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsigned char* mask) {
     const Player* p = &s->env.players[agent];
@@ -251,16 +327,14 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
         heads[head][RF_UNEQUIP] = p->equipped[gear_slot] != ITEM_NONE && has_empty;
     }
     int has_teleport = 0, one_handed_switch = 0, has_shield = 0, two_handed_wieldable = 0;
-    /* One spec of the wielded spec weapon, else of the cheapest spec weapon in the bag: the plain granite maul costs 60, the ornate 50. */
-    int wielded_spec_cost = osrs_spec_cost(p->equipped[GEAR_SLOT_WEAPON]), bag_spec_cost = 0;
+    const RiskfightSpecWeapon spec = riskfight_spec_weapon(p);
+    const RiskfightThreatGates gates = riskfight_threat_gates(s, agent, spec);
     for (int entry = 0; entry < OSRS_INVENTORY_SIZE; entry++) {
         const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[order.slot[entry]]);
         if (m->gear_slot >= 0) {
             int allowed = osrs_can_equip_metadata(p, m, has_empty);
             gear_masks[m->gear_slot][entry + 1] = allowed;
             if (m->gear_slot == GEAR_SLOT_WEAPON) {
-                int cost = osrs_spec_cost(m->item_idx);
-                if (cost > 0 && (!bag_spec_cost || cost < bag_spec_cost)) bag_spec_cost = cost;
                 if (!item_is_two_handed(m->item_idx)) one_handed_switch |= allowed;
                 else two_handed_wieldable |= allowed;
             }
@@ -268,12 +342,14 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
         }
         if (m->click_action == OSRS_CLICK_EAT) {
             int head = m->consumable_kind == OSRS_CONSUMABLE_HALIBUT || m->consumable_kind == OSRS_CONSUMABLE_KARAMBWAN ? RF_COMBO : RF_FOOD;
-            /* A meal that heals nothing is not offered: an anglerfish at full hitpoints inside the PvP overheal lock (the lock only forbids the overheal) like a shark at full. */
-            heads[head][entry + 1] = riskfight_consumable_useful(p, (OsrsConsumableKind)m->consumable_kind) &&
+            /* A meal that heals nothing is not offered: an anglerfish at full hitpoints inside the PvP overheal lock (the lock only forbids the overheal) like a shark at full.
+             * Nor is one above his chance range (riskfight_threat_gates). */
+            heads[head][entry + 1] = gates.meals && riskfight_consumable_useful(p, (OsrsConsumableKind)m->consumable_kind) &&
                 osrs_can_eat_consumable_kind(p, (OsrsConsumableKind)m->consumable_kind);
         }
         heads[RF_DRINK][entry + 1] = m->click_action == OSRS_CLICK_DRINK && p->potion_timer == 0 &&
             riskfight_consumable_useful(p, (OsrsConsumableKind)m->consumable_kind) &&
+            (m->consumable_kind != OSRS_CONSUMABLE_BREW || gates.meals) &&
             (m->consumable_kind != OSRS_CONSUMABLE_DIVINE_COMBAT || p->current_hitpoints > OSRS_DIVINE_DAMAGE);
         has_teleport |= m->click_action == OSRS_CLICK_TELEPORT;
     }
@@ -284,9 +360,8 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
     }
     heads[RF_VENGEANCE][1] = !p->veng_active && p->veng_cooldown <= 1 &&
         p->current_magic >= OSRS_VENGEANCE_MAGIC_LEVEL && s->inventory_use[agent].vengeance_sacks > 0;
-    int spec_cost = wielded_spec_cost > 0 ? wielded_spec_cost : bag_spec_cost > 0 ? bag_spec_cost : 50;
     for (int action = 1; action < RF_ACTION_DIMS[RF_SPECIAL]; action++)
-        heads[RF_SPECIAL][action] = p->special_energy >= action * spec_cost;
+        heads[RF_SPECIAL][action] = p->special_energy >= action * spec.cost && ((gates.spec_ko >> action) & 1);
     heads[RF_PRIMARY][RF_TELEPORT] = has_teleport &&
         osrs_teleport_allowed(s->env.pvp_runtime.teleport[agent], s->env.tick);
     for (int action = 1; action < RF_ACTION_DIMS[RF_PRAYER]; action++)
@@ -315,7 +390,8 @@ static void riskfight_write_wait_mask(unsigned char* mask) {
 }
 
 /** Everything riskfight_write_action_mask reads, reduced to what its result depends on (hitpoints only through the comparisons it makes, the timers only
- * through "is zero", the veng cooldown only through "<= 1", the levels and the overheal lock only through each bag slot's riskfight_consumable_useful bit).
+ * through "is zero", the veng cooldown only through "<= 1", the levels and the overheal lock only through each bag slot's riskfight_consumable_useful bit,
+ * the threat block, his bar and our hits in flight only through riskfight_threat_gates).
  * The mask changes on about one agent-tick in six, so the env, which keeps the last mask in the agent's
  * buffer, rewrites it only when the key differs. `valid` is 0 while the buffer holds something else (the wait mask); `buffer` guards against the buffer moving.
  * ADD EVERY NEW INPUT OF riskfight_write_action_mask HERE: test_riskfight_env_trace.c compares the buffer with a fresh mask every step. */
@@ -324,6 +400,7 @@ typedef struct {
     uint8_t equipped[NUM_GEAR_SLOTS];
     uint8_t below_full, above_divine, food_ready, karambwan_ready, potion_ready, prayer, magic_ok, veng_active, veng_cooled, has_sacks,
         teleport_ok, deployable, valid;
+    RiskfightThreatGates gates;
     uint32_t useful; /* bit `slot`: riskfight_consumable_useful of that physical slot's eat or drink item */
     int special_energy;
     const unsigned char* buffer;
@@ -339,6 +416,7 @@ static inline void riskfight_mask_key(const RiskfightState* s, int agent, const 
             key->useful |= 1u << slot;
     }
     memcpy(key->equipped, p->equipped, NUM_GEAR_SLOTS);
+    key->gates = riskfight_threat_gates(s, agent, riskfight_spec_weapon(p));
     key->below_full = p->current_hitpoints < p->base_hitpoints;
     key->above_divine = p->current_hitpoints > OSRS_DIVINE_DAMAGE;
     key->food_ready = p->food_timer == 0;

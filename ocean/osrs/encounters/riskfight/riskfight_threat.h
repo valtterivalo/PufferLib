@@ -167,24 +167,61 @@ static inline void riskfight_threat_write_stacks(const Player* p, const Riskfigh
     out[RF_THREAT_STACKS_OFFSET + 1] = (float)p->soul_stacks / OSRS_SOUL_STACKS_MAX;
 }
 
+/** What `p` wears, summed (the Player's cache when it is current, else summed here), and the Dharok pieces of it besides the wielded weapon. */
+static void riskfight_threat_worn(const Player* p, EquipmentBonuses* worn, int* dharok_armour) {
+    uint8_t wielded = p->equipped[GEAR_SLOT_WEAPON];
+    if (!p->slot_gear_dirty) {
+        *worn = osrs_equipment_bonuses_of_gear(&p->slot_cached_bonuses);
+        *dharok_armour = p->equipment_effect_profile.dharok_piece_count;
+    } else {
+        osrs_sum_equipment_bonuses(p->equipped, worn);
+        OsrsEquipmentEffectProfile effects;
+        osrs_derive_equipment_effect_profile(p->equipped, &effects);
+        *dharok_armour = effects.dharok_piece_count;
+    }
+    if (wielded != ITEM_NONE && (ITEM_DATABASE[wielded].effect_mask & OSRS_ITEM_EFFECT_DHAROK_PIECE)) (*dharok_armour)--;
+}
+
+/** His hitpoints as the bar `bar_ratio` bounds them: [lower, upper], RF_THREAT_BASE_HITPOINTS and RF_THREAT_OVERHEAL_CAP while no bar is known. */
+static inline int riskfight_threat_his_hp_lower(int bar_ratio) {
+    OsrsHealthBarRange bar = osrs_health_bar_range(bar_ratio, OSRS_PLAYER_HEALTH_BAR_SCALE, RF_THREAT_BASE_HITPOINTS, RF_THREAT_OVERHEAL_CAP);
+    return bar.kind == OSRS_HEALTH_BAR_KNOWN ? bar.lower : RF_THREAT_BASE_HITPOINTS;
+}
+static inline int riskfight_threat_his_hp_upper(int bar_ratio) {
+    OsrsHealthBarRange bar = osrs_health_bar_range(bar_ratio, OSRS_PLAYER_HEALTH_BAR_SCALE, RF_THREAT_BASE_HITPOINTS, RF_THREAT_OVERHEAL_CAP);
+    return bar.kind == OSRS_HEALTH_BAR_KNOWN ? bar.upper : RF_THREAT_OVERHEAL_CAP;
+}
+
+/** Our weapon `item` as an OURS row rates it. `his_hp_upper` is -1 until a ranged weapon needed it (a bolt's effect reads it); the first ranged weapon fills it in. */
+static OsrsThreatWeapon riskfight_threat_ours_weapon(const Player* p, const EquipmentBonuses* worn, int dharok_armour, const OsrsThreatActor* us, uint8_t item,
+    int bar_ratio, int* his_hp_upper) {
+    OsrsThreatWeapon w = osrs_threat_weapon_swapped(worn, dharok_armour, p->equipped, item, us);
+    if (w.style == ATTACK_STYLE_RANGED && *his_hp_upper < 0) *his_hp_upper = riskfight_threat_his_hp_upper(bar_ratio);
+    return w;
+}
+
+/** The OURS row's max and spec_max of our weapon `item` against the other side's bar `bar_ratio`, unscaled: the most one normal attack and its special (all hits) can deal,
+ * spec_max 0 for a weapon with none. */
+typedef struct { int max, spec_max; } RiskfightOurMaxes;
+
+static RiskfightOurMaxes riskfight_threat_our_maxes(const Player* p, uint8_t item, int bar_ratio) {
+    EquipmentBonuses worn;
+    int dharok_armour, his_hp_upper = -1;
+    riskfight_threat_worn(p, &worn, &dharok_armour);
+    OsrsThreatActor us = riskfight_threat_actor_of(p);
+    OsrsThreatWeapon w = riskfight_threat_ours_weapon(p, &worn, dharok_armour, &us, item, bar_ratio, &his_hp_upper);
+    return (RiskfightOurMaxes){osrs_threat_effect_max(&w, osrs_threat_max_hit_at(&w, RF_THREAT_BASE_HITPOINTS, p->current_hitpoints), his_hp_upper),
+        w.spec_hits > 0 ? osrs_threat_effect_max(&w, w.spec_max, his_hp_upper) : 0};
+}
+
 /** Writes the RF_THREAT_SIZE floats of agent `p` against the other side `t` (its slots, its health bar). `bag` holds the weapons of p's inventory. */
 static void riskfight_threat_write(const Player* p, const RiskfightBagWeapons* bag, const RiskfightThreat* t, int bar_ratio, float* out) {
     memset(out, 0, RF_THREAT_SIZE * sizeof(float));
     OsrsThreatActor us = riskfight_threat_actor_of(p);
-    /* What we wear, summed: the Player's cache when it is current, else summed here. */
     EquipmentBonuses worn;
     int dharok_armour;
     uint8_t wielded = p->equipped[GEAR_SLOT_WEAPON];
-    if (!p->slot_gear_dirty) {
-        worn = osrs_equipment_bonuses_of_gear(&p->slot_cached_bonuses);
-        dharok_armour = p->equipment_effect_profile.dharok_piece_count;
-    } else {
-        osrs_sum_equipment_bonuses(p->equipped, &worn);
-        OsrsEquipmentEffectProfile effects;
-        osrs_derive_equipment_effect_profile(p->equipped, &effects);
-        dharok_armour = effects.dharok_piece_count;
-    }
-    if (wielded != ITEM_NONE && (ITEM_DATABASE[wielded].effect_mask & OSRS_ITEM_EFFECT_DHAROK_PIECE)) dharok_armour--;
+    riskfight_threat_worn(p, &worn, &dharok_armour);
     OsrsDefenceRolls ours = osrs_defence_rolls_from(&worn, &us);
     int his_hp_lower = -1, his_hp_upper = -1;
     for (int i = 0; i < t->count; i++) {
@@ -195,10 +232,7 @@ static void riskfight_threat_write(const Player* p, const RiskfightBagWeapons* b
         o[1] = s->shown;
         int max_hit = w->max_hit;
         if (w->dharok) {
-            if (his_hp_lower < 0) {
-                OsrsHealthBarRange bar = osrs_health_bar_range(bar_ratio, OSRS_PLAYER_HEALTH_BAR_SCALE, RF_THREAT_BASE_HITPOINTS, RF_THREAT_OVERHEAL_CAP);
-                his_hp_lower = bar.kind == OSRS_HEALTH_BAR_KNOWN ? bar.lower : RF_THREAT_BASE_HITPOINTS;
-            }
+            if (his_hp_lower < 0) his_hp_lower = riskfight_threat_his_hp_lower(bar_ratio);
             max_hit = osrs_threat_max_hit_at(w, RF_THREAT_BASE_HITPOINTS, his_hp_lower);
         }
         o[2] = (float)osrs_threat_effect_max(w, max_hit, p->current_hitpoints) / RF_THREAT_DAMAGE_SCALE;
@@ -216,13 +250,9 @@ static void riskfight_threat_write(const Player* p, const RiskfightBagWeapons* b
     float* block = out + RF_THREAT_OURS_OFFSET;
     for (int i = 0; i <= bag->count; i++) {
         uint8_t item = i == 0 ? wielded : bag->item[i - 1];
-        OsrsThreatWeapon w = osrs_threat_weapon_swapped(&worn, dharok_armour, p->equipped, item, &us);
+        OsrsThreatWeapon w = riskfight_threat_ours_weapon(p, &worn, dharok_armour, &us, item, bar_ratio, &his_hp_upper);
         float* o = block + i * RF_THREAT_OURS_WIDTH;
         o[0] = 1;
-        if (w.style == ATTACK_STYLE_RANGED && his_hp_upper < 0) {
-            OsrsHealthBarRange bar = osrs_health_bar_range(bar_ratio, OSRS_PLAYER_HEALTH_BAR_SCALE, RF_THREAT_BASE_HITPOINTS, RF_THREAT_OVERHEAL_CAP);
-            his_hp_upper = bar.kind == OSRS_HEALTH_BAR_KNOWN ? bar.upper : RF_THREAT_OVERHEAL_CAP;
-        }
         o[1] = (float)osrs_threat_effect_max(&w, osrs_threat_max_hit_at(&w, RF_THREAT_BASE_HITPOINTS, p->current_hitpoints), his_hp_upper) / RF_THREAT_DAMAGE_SCALE;
         o[2] = osrs_threat_hit_chance(&w, &t->his_defence);
         o[3] = (float)w.speed / RF_THREAT_SPEED_SCALE;
