@@ -562,6 +562,34 @@ static void riskfight_script_consume(const RiskfightObservedSelf* self,
     }
 }
 
+/* His hit followed by an instant maul special: the tick after a swing of his (attack timer at speed - 1, no meal in between), with the energy for k specials (k up to two)
+ * and our hitpoints within his combo, he switches to the maul and lands the k specials on that tick (a swing of his against a seat that holds the PID lands on the same
+ * tick). Rate per swing by margin = our hitpoints before his swing (the upper bound of our bar on the tick before it) - (his opening max + k x maul special max), both at
+ * the levels a player assumes of him (osrs_threat_actor_assumed). Measured on the user's recordings (scripts/measure_combos.py: 123 fights with his composition seen,
+ * the 263 swings of fighters who did a maul special in the fight, with the energy for one): margin < -40: 8 of 111 (72 per mille); -40 to 0: 3 of 146 (21); >= 0: 0 of 6.
+ * Every recorded combo came one tick after the swing, none on the swing's own tick. */
+static const int RF_COMBO_PM_DEEP = 72, RF_COMBO_PM_NEAR = 21, RF_COMBO_DEEP_MARGIN = -40;
+
+/** Specials of the maul combo this tick (0: none), see RF_COMBO_PM_DEEP. `maul` the maul in his kit, ITEM_NONE without one. */
+static int riskfight_script_combo(const float* obs, const RiskfightObservedSelf* self, uint8_t maul, uint32_t seed, uint32_t tick) {
+    if (maul == ITEM_NONE || self->weapon == ITEM_NONE || pvp_is_maul(self->weapon) || tick < 2) return 0;
+    int speed = ITEM_DATABASE[self->weapon].attack_speed + osrs_stance_speed_mod((FightStyle)lroundf(obs[16] * 3));
+    if (self->attack_timer != speed - 1 || self->food_timer || self->karambwan_timer) return 0;
+    int k = min_int(RF_ACTION_DIMS[RF_SPECIAL] - 1, (int)lroundf(obs[6] * 100) / osrs_spec_cost(maul));
+    if (k < 1) return 0;
+    int bar_before = (int)lroundf(obs[RF_HISTORY_START + RF_EVENT_WIDTH + 7] * RF_OBSERVATION_HEALTH_BAR_SCALE);
+    OsrsHealthBarRange before = osrs_health_bar_range(bar_before, OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121);
+    int our_hp = before.kind == OSRS_HEALTH_BAR_KNOWN ? before.upper : 121;
+    uint8_t equipment[NUM_GEAR_SLOTS];
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) equipment[slot] = (uint8_t)lroundf(obs[RF_EQUIPPED_START + slot] * RF_OBSERVATION_ITEM_SCALE);
+    OsrsThreatActor opener = osrs_threat_actor_assumed(osrs_threat_style_of_weapon(self->weapon)), melee = osrs_threat_actor_assumed(ATTACK_STYLE_MELEE);
+    OsrsThreatWeapon opening = osrs_threat_weapon(equipment, self->weapon, &opener);
+    int opening_max = osrs_threat_effect_max(&opening, osrs_threat_max_hit_at(&opening, 99, self->hitpoints), our_hp);
+    int margin = our_hp - (opening_max + k * osrs_threat_weapon(equipment, maul, &melee).spec_max);
+    int per_mille = margin < RF_COMBO_DEEP_MARGIN ? RF_COMBO_PM_DEEP : margin < 0 ? RF_COMBO_PM_NEAR : 0;
+    return riskfight_sample_event(seed, tick - 1, 27, per_mille) ? k : 0;
+}
+
 /** Weapon rolls are keyed on the tick the next attack comes off cooldown, so one attack gets one decision.
  * consume_ticks counts this round's ticks on which the fighter ate or drank. */
 static void riskfight_script(const float* obs, const RiskfightProfile* profile, uint32_t seed,
@@ -574,10 +602,6 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     int hp = self.hitpoints;
     const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
     actions[RF_PRIMARY] = RF_ATTACK;
-    int consume_band = (hp >= 40) + (hp >= 65) + (hp >= 73) + (hp >= 90);
-    if (riskfight_sample_event(seed, tick, 11, profile->consume_pm[consume_band]))
-        riskfight_script_consume(&self, &inventory, actions);
-    if (actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO]) actions[RF_PRIMARY] = RF_STOP;
     actions[RF_VENGEANCE] = !obs[11] && obs[12] <= 0.02f && riskfight_sample_event(seed, tick, 13, profile->veng_pm);
 
     int opp_bar = (int)lroundf(opponent[0] * OSRS_PLAYER_HEALTH_BAR_SCALE);
@@ -604,18 +628,24 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
         if (plain_spec == ITEM_NONE || key > osrs_spec_cost(plain_spec) * 256 + plain_spec) plain_spec = w;
     }
     if (plain_spec == plain_main) plain_spec = ITEM_NONE;
+    int combo_specs = riskfight_script_combo(obs, &self, maul_item, seed, tick);
+    /* The combo's tick is all clicks of the switch and the specials: no meal on it. */
+    int consume_band = (hp >= 40) + (hp >= 65) + (hp >= 73) + (hp >= 90);
+    if (!combo_specs && riskfight_sample_event(seed, tick, 11, profile->consume_pm[consume_band]))
+        riskfight_script_consume(&self, &inventory, actions);
+    if (actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO]) actions[RF_PRIMARY] = RF_STOP;
     uint8_t generic_spec = plain_spec != ITEM_NONE ? plain_spec : plain_main != ITEM_NONE && osrs_spec_cost(plain_main) > 0 ? plain_main : ITEM_NONE;
     int generic_cost = generic_spec == ITEM_NONE ? 100 : osrs_spec_cost(generic_spec);
     int axe_band = (opp_bar >= 12) + (opp_bar >= 24);
     int axe_swing = has_axe && hp < 99 &&
         riskfight_sample_event(seed, attack_tick, 23, profile->axe_pm[axe_band]);
-    int vw_spec = has_vw && obs[6] >= 0.5f && opponent[0] < 0.65f &&
+    int vw_spec = !combo_specs && has_vw && obs[6] >= 0.5f && opponent[0] < 0.65f &&
         riskfight_sample_event(seed, attack_tick, 21, profile->vw_pm);
     int maul_cost = maul_item == ITEM_NONE ? 100 : osrs_spec_cost(maul_item);
     /* The ornate maul waits for the energy of two specials and lands both at once; the plain one costs 60 and gets one. */
     int maul_specs = maul_item == ITEM_NONE ? 0 : maul_item == ITEM_GRANITE_MAUL_ORNATE ? 2 : 1;
-    int maul_spec = !vw_spec && maul_specs && obs[6] * 100 >= maul_cost * maul_specs - 1 && opponent[0] < 0.65f && opp_upper <= 76 && hp < 99 &&
-        riskfight_sample_event(seed, tick, 22, profile->maul_pm);
+    int maul_spec = combo_specs || (!vw_spec && maul_specs && obs[6] * 100 >= maul_cost * maul_specs - 1 && opponent[0] < 0.65f && opp_upper <= 76 && hp < 99 &&
+        riskfight_sample_event(seed, tick, 22, profile->maul_pm));
     int generic_roll = generic_spec != ITEM_NONE && !vw_spec && !maul_spec && obs[6] * 100 >= generic_cost - 0.5f && opponent[0] < 0.65f &&
         riskfight_sample_event(seed, attack_tick, 25, profile->vw_pm);
     int voidwaker_main = plain_main == ITEM_NONE && inventory.main_weapon == ITEM_NONE && (self.weapon == ITEM_VOIDWAKER || inventory.item_slot[ITEM_VOIDWAKER]);
@@ -628,7 +658,7 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     int behead = weapon == ITEM_SOULREAPER_AXE && !vw_spec && !maul_spec && !generic_roll && stacks == OSRS_SOUL_STACKS_MAX && opponent[0] < 0.65f &&
         riskfight_sample_event(seed, attack_tick, 26, profile->vw_pm);
     int armed_wanted = vw_spec || generic_roll || behead;
-    actions[RF_SPECIAL] = maul_spec ? maul_specs : !holding_maul && armed_wanted != (obs[13] >= 0.5f);
+    actions[RF_SPECIAL] = maul_spec ? (combo_specs ? combo_specs : maul_specs) : !holding_maul && armed_wanted != (obs[13] >= 0.5f);
     /* Ranged weapons are fought on Rigour and rapid, the rest on Piety and aggressive. */
     int ranged_weapon = weapon != ITEM_NONE && get_item_attack_style(weapon) == ATTACK_STYLE_RANGED;
     actions[RF_PRAYER] = ranged_weapon ? OFFENSIVE_PRAYER_RIGOUR : OFFENSIVE_PRAYER_PIETY;
