@@ -81,6 +81,7 @@ typedef struct {
     long hp121, hp120, below_120, opened_us, opened_him, opened_both, bar_partial, bar_hidden, spec_him, spec_us, veng_us, veng_him, dist1, food_short, hit_in_flight_us, hit_in_flight_him, hurt;
 } Tally;
 
+static long dharok_hidden_starts, dharok_hidden_low;
 /** One start as the training draws it, on a fresh kit and opponent; checks the state against the row and tallies what the state shows. */
 static void draw_and_check(Env* e, int rematch, Tally* t, long* seats) {
     RiskfightState* s = &e->state;
@@ -115,14 +116,19 @@ static void draw_and_check(Env* e, int rematch, Tally* t, long* seats) {
     assert(doses_of(mine, OSRS_CONSUMABLE_SUPER_RESTORE) == doses_of(&kit_before[us], OSRS_CONSUMABLE_SUPER_RESTORE) - min_int(r->d_restore, doses_of(&kit_before[us], OSRS_CONSUMABLE_SUPER_RESTORE)));
     assert(doses_of(mine, OSRS_CONSUMABLE_SUPER_COMBAT) == doses_of(&kit_before[us], OSRS_CONSUMABLE_SUPER_COMBAT) - min_int(r->d_combat, doses_of(&kit_before[us], OSRS_CONSUMABLE_SUPER_COMBAT)));
     assert(count_kind(mine, OSRS_CONSUMABLE_TELEPORT) == count_kind(&kit_before[us], OSRS_CONSUMABLE_TELEPORT) - min_int(r->d_tab, count_kind(&kit_before[us], OSRS_CONSUMABLE_TELEPORT)));
-    /* His: inside his bar, the tape's estimates, the kit's supplies. */
+    /* His: inside his bar, the tape's estimates, the kit's supplies. A Dharok pool opponent with no bar in the row starts where spectated Dharok fighters do
+     * (riskfight_start_dharok_hitpoints: a regear's 99-121 or a measured ten below 99), and the bar he shows follows it. */
     OsrsHealthBarRange range = osrs_health_bar_range(r->bar, OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121);
     const int hurt_kit = kit_before[him].current_hitpoints < 99;
+    const int dharok_hidden = !hurt_kit && range.kind == OSRS_HEALTH_BAR_MISSING && him == 1 && riskfight_dharok_opponent(s);
+    dharok_hidden_starts += dharok_hidden;
+    dharok_hidden_low += dharok_hidden && his->current_hitpoints < 99;
     if (hurt_kit) assert(his->current_hitpoints == kit_before[him].current_hitpoints);
     else if (range.kind == OSRS_HEALTH_BAR_KNOWN && range.upper < 121) assert(his->current_hitpoints >= range.lower && his->current_hitpoints <= range.upper);
+    else if (dharok_hidden) assert(his->current_hitpoints >= 1 && his->current_hitpoints <= 121 && (his->current_hitpoints >= 99 || RF_START_DHAROK_LOW[his->current_hitpoints / 10] > 0));
     else assert(his->current_hitpoints >= 99 && his->current_hitpoints <= 121);
     assert(s->visible[us].health_bar == osrs_health_bar_ratio(his->current_hitpoints, his->base_hitpoints, 30));
-    if (!hurt_kit) assert(s->visible[us].health_bar == (r->bar >= 0 ? r->bar : OSRS_PLAYER_HEALTH_BAR_SCALE));
+    if (!hurt_kit && !dharok_hidden) assert(s->visible[us].health_bar == (r->bar >= 0 ? r->bar : OSRS_PLAYER_HEALTH_BAR_SCALE));
     assert(his->special_energy == r->h_spec && his->veng_active == r->h_veng);
     assert(s->visible[us].spec_est == r->h_spec && s->visible[him].spec_est == r->e_spec);
     assert(count_kind(his, OSRS_CONSUMABLE_ANGLERFISH) <= count_kind(&kit_before[him], OSRS_CONSUMABLE_ANGLERFISH));
@@ -204,7 +210,9 @@ static void test_marginals_and_mapping(void) {
         /* Both the bar and the hitpoints are one function of the row: a shown bar below full is the measured one. */
         destroy(e);
     }
-    printf("marginals: 12000 starts of each pool reproduce the measured marginals (4.5 sigma)\n");
+    /* The bot-eval pool holds Dharok kits, so some hidden-bar starts are a Dharok opponent's, and some of those start below 99. */
+    assert(dharok_hidden_starts > 0 && dharok_hidden_low > 0);
+    printf("marginals: 12000 starts of each pool reproduce the measured marginals (4.5 sigma); %ld Dharok hidden-bar starts, %ld below 99\n", dharok_hidden_starts, dharok_hidden_low);
 }
 
 /** Self-play: the user's part is either seat when seat 1 is a net, seat 0 when the script or OppFit plays him. */
