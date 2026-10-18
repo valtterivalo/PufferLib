@@ -20,7 +20,8 @@ enum { RISKFIGHT_CONSUME_BANDS = 5, RISKFIGHT_AXE_BANDS = 3, RISKFIGHT_TAB_SUPPL
  * axe rates are a profile's greataxe wields per tick without the axe in hand by own HP at 40 and 80: over the training mean they scale riskfight_script's
  * per-attack RF_AXE_SWING_PM (his propensity), tab rates are indexed by
  * [consume ticks this round / 8, capped][own HP below 40]. dharok_eating: meals on the spectated Dharok rates (riskfight_script_dharok_meal) instead of the
- * consume bands' thresholds, which then repot only; never set in a profile table, the step sets it for a Dharok pool opponent (riskfight_opponent_script). */
+ * consume bands' thresholds, which then repot only, and the teleport tab on his own HP (RF_DHAROK_TAB_PM) instead of tab_pm; never set in a profile table, the
+ * step sets it for a Dharok pool opponent (riskfight_opponent_script). */
 typedef struct {
     uint16_t consume_pm[RISKFIGHT_CONSUME_BANDS];
     uint16_t vw_pm, maul_pm;

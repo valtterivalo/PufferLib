@@ -734,6 +734,11 @@ static const uint16_t RF_DHAROK_MEAL_PM[5][RF_MEAL_PHASES] = {
 static const uint16_t RF_DHAROK_MEAL_SINGLE_PM[10] = {150, 130, 100, 170, 310, 790, 970, 970, 920, 1000};
 static const uint16_t RF_DHAROK_MEAL_DOUBLE_PM[10] = {40, 140, 280, 540, 650, 210, 20, 30, 80, 0};
 enum { RF_DHAROK_MEAL_BREW_PM = 400 };
+/* A Dharok pool opponent's teleport tab, on his own hitpoints rather than on supplies used (tab_pm): of the 261 spectated Dharok v Dharok duels, the 198 that end
+ * without a knockout end with the lower fighter at hitpoints 36 (median), 67% at 46 or less. Ends per mille per fighter-tick, the lower side taken as the one
+ * leaving, at hitpoints 0-19, 20-39, 40-59, 60 up: 28.5, 13.5, 3.5, 0.8; the human profiles' tab_pm gave him 6.8, 7.2, 3.1, 2.2. Low, he tabbed too rarely,
+ * stayed in and plain hits finished him: 20% of sim knockouts against 1 of 63 spectated. */
+static const uint16_t RF_DHAROK_TAB_PM[4] = {29, 14, 4, 1};
 
 /** The phase of the other side's attack clock a meal decided now lands in: the tick after his swing (opponent[5], ticks since it, is 1), the tick his weapon frees
  * his next swing (it equals his weapon's speed), or between (also before his first swing). `opponent` the opponent block of the script observation. */
@@ -960,8 +965,8 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
         !inventory.kind_slot[OSRS_CONSUMABLE_MARLIN] &&
         !inventory.kind_slot[OSRS_CONSUMABLE_SUMMER_PIE] &&
         !inventory.kind_slot[OSRS_CONSUMABLE_HALIBUT] && !inventory.kind_slot[OSRS_CONSUMABLE_BREW];
-    if ((hp < 30 && out_of_heals) ||
-            riskfight_sample_event(seed, tick, 31, profile->tab_pm[supply_band][hp < 40]))
+    int tab_pm = profile->dharok_eating ? RF_DHAROK_TAB_PM[min_int(3, hp / 20)] : profile->tab_pm[supply_band][hp < 40];
+    if ((hp < 30 && out_of_heals) || riskfight_sample_event(seed, tick, 31, tab_pm))
         actions[RF_PRIMARY] = RF_TELEPORT;
 }
 #endif
