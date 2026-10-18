@@ -10,7 +10,7 @@ static float actions[2][RF_HEADS];
 static float rewards[2], terminals[2], resets[2];
 static unsigned char masks[2][RF_MASK_SIZE];
 
-static Env* make_pool_env(int session_ticks, double price, unsigned rng, int pool) {
+static Env* make_tagged_env(int session_ticks, double price, unsigned rng, int pool, int tag) {
     DictItem items[] = {{.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 1},
         {.key = "session_ticks", .value = session_ticks}, {.key = "curveball_probability", .value = 0},
         {.key = "death_price", .value = price}, {.key = "opponent_pool", .value = pool}};
@@ -18,6 +18,7 @@ static Env* make_pool_env(int session_ticks, double price, unsigned rng, int poo
     Env* e = (Env*)calloc(1, sizeof(*e));
     e->rng = rng;
     puf_init(e, &kwargs);
+    e->tag = tag;
     for (int i = 0; i < 2; i++) e->agents[i] = (Agent){
         .observations = observations[i], .actions = actions[i], .rewards = &rewards[i],
         .terminals = &terminals[i], .resets = &resets[i], .action_mask = masks[i], .policy = i};
@@ -27,7 +28,10 @@ static Env* make_pool_env(int session_ticks, double price, unsigned rng, int poo
     memset(actions, 0, sizeof(actions));
     return e;
 }
+static Env* make_pool_env(int session_ticks, double price, unsigned rng, int pool) { return make_tagged_env(session_ticks, price, rng, pool, 0); }
 static Env* make_env(int session_ticks, double price, unsigned rng) { return make_pool_env(session_ticks, price, rng, 0); }
+/* Seat 1 a frozen policy (tag 1): the drawn or configured price holds; pure self-play (tag 0) fights at price 1 (test_riskfight_mix). */
+static Env* make_frozen_env(int session_ticks, double price, unsigned rng) { return make_tagged_env(session_ticks, price, rng, 0, 1); }
 
 static void destroy(void) { puf_close(env); free(env); env = NULL; }
 
@@ -406,7 +410,7 @@ static void test_ragger_rags_and_leaves(void) {
 /* Seat 1's death price is the inverse of seat 0's (death_price is us / him: his is him / us), clamped to the price range [0.1, 2.5]: his reward of a death is minus
  * it, of a mutual death 1 minus it, and his observation reads it where seat 0's reads death_price. */
 static void test_seat_one_price_mirrors(void) {
-    env = make_env(6000, 2.0, 23);
+    env = make_frozen_env(6000, 2.0, 23);
     assert(riskfight_seat_price(&env->state, 0) == 2.0f && riskfight_seat_price(&env->state, 1) == 0.5f);
     float obs[RF_OBS_SIZE];
     riskfight_write_observation(&env->state, 0, obs);
@@ -440,7 +444,7 @@ static void test_seat_one_price_mirrors(void) {
 static void test_reward_scale_stays_within_one(void) {
     assert(RF_REWARD_SCALE * (RF_PRICE_MAX_X10 / 10.0f) == 1.0f);
     /* The largest price: our death is -1, a kill 1 / Pmax, a mutual death 1 - 2.5 = -1.5 / 2.5; seat 1's price is 0.4, his death -0.4 / 2.5. */
-    env = make_env(6000, RF_PRICE_MAX_X10 / 10.0, 21);
+    env = make_frozen_env(6000, RF_PRICE_MAX_X10 / 10.0, 21);
     env->state.env.players[0].current_hitpoints = 0;
     puf_step(env);
     assert(rewards[0] == -1.0f && rewards[1] == 1 * RF_REWARD_SCALE);
@@ -455,7 +459,7 @@ static void test_reward_scale_stays_within_one(void) {
     assert(fabsf(rewards[0] - (1 - 2.5f) * RF_REWARD_SCALE) < 1e-6f && fabsf(rewards[1] - (1 - 0.4f) * RF_REWARD_SCALE) < 1e-6f);
     destroy();
     /* Drawn prices over many fights of a session: every reward of every outcome stays within [-1, 1], and one scale serves every fight. */
-    env = make_env(60000, 0, 22);
+    env = make_frozen_env(60000, 0, 22);
     float most = 0;
     for (int fight = 0; fight < 400; fight++) {
         env->state.env.players[fight & 1].current_hitpoints = 0;

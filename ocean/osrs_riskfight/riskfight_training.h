@@ -31,6 +31,7 @@ typedef struct {
     int omissions;
     float rep; /* our reputation in this session (riskfight_session.h): rude teleports, decaying; read at every new opponent and by the observation */
     float his_rep; /* seat 1's, kept the same way from its own rude teleports while a net plays it (self-play): it lengthens the waits as ours does */
+    int mirror; /* this opponent is the learning policy itself (pure self-play): the even mirror of riskfight_training_draw_opponent */
 } RiskfightTraining;
 
 static RiskfightTrainingConfig riskfight_training_config(Dict* kwargs) {
@@ -214,9 +215,15 @@ static void riskfight_training_draw_opponent(RiskfightTraining* training, Riskfi
     }
     context->opp_driven = training->opponent == RF_TRAIN_SCRIPTED;
     const int driven = !context->self_play || context->opp_driven;
+    /* Pure self-play is an even mirror: both seats wear our kits (drawn as ours, or ours itself without a kit mix) and fight at price 1
+     * (riskfight_training_new_opponent). Self-play is there for skilled opponents; stakes and pool kits are modelled against frozen and scripted ones. */
+    training->mirror = learning_seat;
     context->loadout[1] = context->opp_default;
     context->opp_plain = 0;
-    if (!driven) {
+    if (training->mirror) {
+        context->opp_plain = 1;
+        context->loadout[1] = context->kit_mix != RF_KIT_MIX_NONE ? riskfight_training_draw_kit(training, context->kit_mix) : context->loadout[0];
+    } else if (!driven) {
         context->opp_plain = !riskfight_training_draw(training, training->config.pool_probability);
         if (context->kit_mix != RF_KIT_MIX_NONE) context->loadout[1] = riskfight_training_draw_kit(training, context->kit_mix);
     }
@@ -226,7 +233,7 @@ static void riskfight_training_draw_opponent(RiskfightTraining* training, Riskfi
  * A midfight start (a scaffold that is off by default) happens only at the first fight of a session. */
 static RiskfightTrainingStart riskfight_training_new_opponent(RiskfightTraining* training, RiskfightState* state,
     RiskfightContext* context, int allow_midfight) {
-    state->death_price = training->config.death_price > 0 ? training->config.death_price :
+    state->death_price = training->mirror ? 1.0f : training->config.death_price > 0 ? training->config.death_price :
         training->config.price_table ? RF_PRICE_TABLE[encounter_rand_int(&training->rng, RF_PRICE_TABLE_COUNT)] :
         0.4f * powf(RF_PRICE_MAX_X10 / 4.0f, encounter_rand_float(&training->rng));
     RiskfightTrainingStart start = RF_START_FRESH;

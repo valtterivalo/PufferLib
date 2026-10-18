@@ -82,6 +82,7 @@ static void test_mix_fractions(void) {
         for (int d = 0; d < draws; d++) {
             tally(&all, env);
             tally(tag ? &teacher : &selfplay, env);
+            if (!tag) assert(env->state.death_price == 1.0f && env->training.mirror); /* pure self-play: the even mirror, price 1 */
             puf_reset(env);
         }
         destroy(env);
@@ -93,15 +94,15 @@ static void test_mix_fractions(void) {
     assert(within(frozen, all.n, h * (1 - s)));
     assert(within(scripted, all.n, h * s));
     assert(pure + frozen + scripted == all.n);
-    /* A net wears a pool kit with probability q, else one of ours, half and half. */
-    assert(within(all.net_pool, all.net, q));
+    /* A frozen net wears a pool kit with probability q, else one of ours; the learning policy in seat 1 always wears one of ours (the mirror). Ours: a third each. */
+    assert(selfplay.net_pool == 0 && within(teacher.net_pool, teacher.net, q));
     assert(within(all.net_live, all.net - all.net_pool, 1.0 / 3));
     assert(within(all.net_vw, all.net - all.net_pool, 1.0 / 3));
     assert(all.net_live + all.net_vw + all.net_pies == all.net - all.net_pool);
     assert(all.driven_pool == all.driven && all.driven > 0);
     printf("mix: self-play %.3f frozen %.3f scripted/oppfit %.3f (expected %.3f %.3f %.3f); net pool kit %.3f (%.2f), live %.3f of the three kits (live, vw, vw with pies)\n",
         (double)pure / all.n, (double)frozen / all.n, (double)scripted / all.n, 1 - h, h * (1 - s), h * s,
-        (double)all.net_pool / all.net, q, (double)all.net_live / (all.net - all.net_pool));
+        (double)teacher.net_pool / teacher.net, q, (double)all.net_live / (all.net - all.net_pool));
 }
 
 /* live_loadout 4: our kit, drawn once per session, is the Dharok kit half the time and each Voidwaker kit a sixth; a net in seat 1 wearing one of ours draws the same way. */
