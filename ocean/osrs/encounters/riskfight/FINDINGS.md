@@ -336,3 +336,49 @@ Live, s6t0 drank super restores at full prayer with nothing drained (prayer 87-9
   - Busy hand: while the motor chain of our previous decision had unlanded clicks, the next decision was dropped whole and nothing told the net (ATTACK adds a click every tick, so about 40% of follow-ups such as orb then axe were lost). Now that decision's mask is the no-op of every head and tactics `[30]` hand_busy reads 1 (`RiskfightState.hand_busy`). Live, the same bit is an `OBS` request (the plugin's committed run or unlanded clicks).
   - Spec gate: wield maul + k specials was gated on the wielded Voidwaker (k = 2 disarms it, always offered), so it double-specced at his full hitpoints. `riskfight_spec_clicks` drops the toggles when the maul's own gate (k × its spec max + in flight ≥ his lower bound) is shut, in the step and in `rt_records`. The mask is unchanged.
   - Dharok roll: a normal hit rolled 0..max and then multiplied the roll, leaving gaps in the damage grid. It now rolls uniformly over 0..the multiplied max (`calculate_max_hit`, as the specials did). `osrs_direct_ko_probability` lost its Dharok parameter. The other post-roll multiplier in the engine, the Elysian spirit shield, is a defensive reduction that applies to damage taken, which is correct.
+
+## 2026-10-18 morning: why the nets never use the Dharok axe, orb or maul
+
+- **Interpretability (s13t04, 82,955 Dharok fight steps; harness `/tmp/np`):**
+  - **Dead pathway.** Where the axe or maul is offered (48,105 steps), the chosen action's logit sits above "wield axe" by a median 7.9 nats (maul 8.9, orb 8.3, double spec 9.3), independent of state. Below 50 HP it is still 7.7; unmasked, the axe ranks 28th of 30 on the weapon head.
+  - **Attribution.** d(axe logit)/d(axe-row max) is −0.0014 nats per point of damage, and the axe max is the 91st most influential input.
+  - **Counterfactual.** Setting the axe max to 0, ×0.5, ×1.5 or 128 moves the axe logit by at most 0.026 nats, and no weapon/orb/body choice flips. Food heads move up to 0.33, so the method can see effects.
+  - **The hidden state does encode the relevant quantities** (held-out ridge R², layer 1 / layer 2): our HP 0.78/0.72, his HP lower bound 0.93/0.92, axe max 0.73/0.64, his spec estimate 0.82/0.68, his ready_min 0.46/0.35, "a maul spec could KO" 0.55/0.68. The last beats a linear fit on the raw observation (0.53), so the net builds it.
+  - The decoder rows for axe/maul/orb ignore those directions (≤ 0.035 nats per SD). This is a learned state-independent "never", not a judgment made state by state.
+- **Value in the sim, before the fixes below** (strongest hand rules from engine truth, ~20,000 fights per arm, kills per 100):
+  - holding the VW special until P(KO) ≥ 0.3: +8.2 ± 0.5 over "spec when allowed";
+  - maul KO at P ≥ 0.5: +0.6;
+  - orb-then-axe: −0.7 at best.
+
+  Why the axe can't pay:
+  - scripted opponents sat at 73-75 HP (eat below 73);
+  - our hit chance is 0.31 for both weapons, and per tick the axe's KO chance (0.0047) barely beats VW's (0.0035), which the switch and the lost defender eat;
+  - his reachable damage at a window (64-70) means orbing below about 69 HP is never safe.
+- **Reachability:** no engine or mask block. Two misfires:
+  - the motor silently dropped a whole decision while a click was pending (40% of orb→axe follow-ups lost);
+  - the special head's KO gate used the wielded VW when the same decision wielded the maul, so wield maul + k=2 double-specced at full HP.
+- **Damage roll:** the Dharok bonus multiplied the ROLLED damage; OSRS rolls 0 to the multiplied max.
+- **Fixed** (merged at 3dd7c0513; RF_OBS_SIZE 492):
+  - **Tactics block (30 + 1 floats):**
+    - axe max now / at HP−10 / at HP−20 with the set back on, and a "set incomplete" flag;
+    - an identity one-hot per OURS row;
+    - can_wield_2h;
+    - exact P(KO) for an axe hit, a VW hit, a VW spec, 1 and 2 maul specs, over his HP bounds;
+    - his Vengeance up; orb carried; HP > 1;
+    - the safe window;
+    - hand busy.
+  - **Hand busy:** in the sim, our decisions are masked to the no-op while motor clicks are pending. Live, the same holds on OBS ticks (the plugin is mid-run).
+  - **Attack clicks:** only when not already attacking (or with a special), as live. A double maul spec while already attacking now fires live too; it didn't before.
+  - **Spec clicks** on a same-decision maul wield follow the maul's KO gate (one shared function, sim and server).
+  - **Dharok damage** rolls 0 to the multiplied max.
+  - **Dharok opponents** eat on his attack clock (measured by HP band × phase: after his swing / ready / between), and VW specials are gated at his bar ≤ 25 as 96% of 451 real ones are.
+
+    | Measure | Before | After | Real |
+    |---|---|---|---|
+    | VW specs per tick | 0.0042 | 0.0068 | 0.0068 |
+    | Damage per tick | 1.69 | 1.77 | 2.03 incl. orb |
+    | KOs by axe | 23% | 27% | 41% |
+
+    "Other" KOs (plain hits on low victims) are still 26% against 1.6%.
+  - **Training zeroes the recurrent state at each fight start** without a terminal: an env `resets` flag, and `zero_reset_state` in the rollout and the BPTT replay. GAE still runs across fights. Live always started fights from zero state; training had carried it across the ~7 fights of a session.
+- **Sweep 16** trains on all of this. Sweep 15 (461 observations) reached 11.65 (run 85).
