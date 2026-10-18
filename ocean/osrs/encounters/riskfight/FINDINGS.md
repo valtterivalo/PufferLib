@@ -1058,3 +1058,26 @@ Harness: `dh`, both seats on the Dharok script with personas, starts drawn, 6,00
   - Dharok fighters keep their strength boost: the greataxe bag and the repot table (dcc97daa0).
 
   KO share went from .195 to .283 (real .271 uncensored) and escape share from .803 to .716.
+
+## 2026-10-19: Smite and dry prayer; where the 40-59 and 80+ KOs and the 80+ time remain (branch ko-high2)
+
+Harness: `dh`, both seats on the Dharok script with personas, starts drawn, 6,000 fights, 3 seeds; read with the same tools on the `spectator.duels` format. Overheads come from the raw recordings (`overheadIcon`). Scripts are in /tmp/eg (`smite.py`, `top.py`, `accb.py`, `healsz.py`, `vengspec.py`, `coinc.py`).
+
+- **Real fighters keep Smite up and never run dry.**
+  - Smite is on 0.91 of Dharok fighter-ticks from the first swing, and on by 2 ticks after the first swing (median).
+  - Smite goes off in 24 of 1,020 fighter-windows, for a median of 4 ticks.
+  - No KO came after a dry bar. Dry prayer isn't behind the high-HP KO gap.
+- **The scripts never prayed Smite.** Their overhead action was 0 (none). Only the net's seat got Smite and Piety, from the plugin.
+  - Now every script keeps Smite up (`actions[RF_OVERHEAD]`), as the user said players do and the overhead data show.
+  - Sim prayer still never runs dry (2.7e-5 of ticks at 0 prayer), because the restores keep up.
+  - Potions that heal nothing rise from 19 / 30 / 21 to 25 / 32 / 23 per 1,000 ticks (real 22 / 39 / 35).
+  - KOs, endings and occupancy don't move. Smite drains our net's prayer as it does live.
+- **KOs at 40-59:** VW specs at victim bar 22-26 kill at P .038 real against .009 sim.
+  - Real 70-112 killing ticks stack a VW spec or AGS with the attacker's own Vengeance echo.
+  - Real VW specs land with his Vengeance proc in .079 of specs, against .026 for normal swings (3.0×). The sim shows .033 against .040 (0.8×).
+  - **Tried and reverted:** a timing rule (VW spec × up to 12 when his Vengeance is up and the other side's weapon is ready). It only moves the ratio to 1.4 and leaves KOs at 40-59 at 24, because spec energy binds. The real timing needs a better cue than his attack clock. It is open.
+- **80+ time:** after both have been below 80, sim fighters spend .12 of ticks at bar 27+, against .04 real.
+  - These match real: entries from lower bands (meal sizes and fed shares by band within .05), damage per tick at 27+ (1.39 against 1.53), and accuracy at every other band.
+  - Normal swings into victims back at bar 27+ hit at .39 real against .31 sim (n 721). This is the one mismatch found. Strips are 2% in every band, so they don't explain it.
+- **Gap list after** (3 seeds; c-main before is in brackets): KO share .288 (.283); escape .712 (.716); KO per 10,000 by victim HP 98 / 61 / 24 / 4.7 / 0.9 (real 117 / 47 / 32 / 4.6 / 2.1); time at 80+ .33 (real .21); opponent's median HP when the low fighter (1-20) is ready 63 (real 59).
+- Tests pass: test_riskfight_dharok_script, _mix, _mechanics, _session and _scripts. The env_trace goldens are not refreshed: script overheads changed.
