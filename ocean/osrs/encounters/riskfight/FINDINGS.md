@@ -921,3 +921,17 @@ Live candidate a1: anchor hyperparameters, 182.7M steps on 37d061a46. Greedy lad
 
   The band-3 refit moves none of the sim targets beyond seed noise.
 - Tests pass: test_riskfight_dharok_script, _mix, _mechanics, _session. The goldens are not refreshed.
+
+## 2026-10-19: the 4-HP skip is the policy's error, not the sim's
+
+- **Paired probe** (a2 argmax, 750 sessions, c-main 727192ed2): every decision with his HP < 40, our HP ≤ 60 and within his threat range, food allowed. Each is cloned and played out with a meal forced vs none.
+
+  | Our HP | n | a2 eats | Skipping gains KO / adds deaths | Skipping pays only if a death costs less than |
+  |---|---|---|---|---|
+  | ≤ 20 | 957 | .12 | +.08 / +.086 | 0.9 kills |
+  | 21-40 | 2940 | .09 | +.09 / +.067 | 1.3 kills |
+  | 41-60 | 4627 | .05 | +.12 / +.019 | 6 kills |
+- **The sim's harshness on a skipper is about real.** At ≤ 20 HP with him < 40 and no heal before his next hit, that hit kills .25 in the sim against .19 real when skipping (real n 53, 95% CI about .09-.29), and .022 against .017 when eating.
+- **The live fight priced our death at 2.04 of his kills.** K line: him/us 0.49. We were unskulled, so the 3 most valuable items are kept.
+- **a2 ignores the price there.** On live ticks 169-176, setting the price obs to 0.4, 1.0, 2.04 or 2.5 leaves food use at 0.00-0.09; our HP (4 / 30 / 59) doesn't move it either. Only his bar does.
+- **Reading:** the net learned "he's low, don't eat" from the common case (41-60 HP, where it pays) and didn't separate the rarer ≤ 20 HP / high-price states where it's a losing trade. The sim and observation carry what's needed: our HP, the price, his timer, his spec, his Vengeance. A 182M-step anchor net doesn't use them here, which makes training budget, not fidelity, the next question for this behaviour.
