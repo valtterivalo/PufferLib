@@ -703,7 +703,6 @@ Open, not bugs:
 
 Live candidate a1: anchor hyperparameters, 182.7M steps on 37d061a46. Greedy ladder 8.88; argmax probe 7.85 per hour in the Dharok kit, 8.65 in VW. No axe, orb or maul use. Body or legs come off on 0.55 steps per fight. Installed with the parity fixes; replays of 4 live sessions run clean.
 
-<<<<<<< HEAD
 ## 2026-10-19: armour strips stay allowed (the user's call)
 
 - **a1's strips don't pay.** a1 takes off Dharok body or legs on 0.55 steps per fight in the sim; live it unequipped the legs, worn slot 7, at ticks 179-182. A paired counterfactual (65a6d7335, reverted: clone at each strip, strip vs never strip for the rest of the fight) gave:
@@ -763,7 +762,7 @@ Live candidate a1: anchor hyperparameters, 182.7M steps on 37d061a46. Greedy lad
   - The spread moves toward real. Axe share sd over fighter-fights is .35 pooled, .40-.41 with personas, and .46 real.
   - The harness's crude unfed-at-next-hit reading (.38 sim against .064 real on current status) is not like for like, so the eat spread is not checked in the sim.
 - Tests pass: test_riskfight_dharok_script, _mix, _mechanics, _session. The goldens are not refreshed: the persona changes Dharok pool opponents' meal and axe rolls.
-=======
+
 ## 2026-10-19: low-HP offence, and eating while we are below his range
 
 - **The policy side: in the sim, not eating when he is low pays.** Setup:
@@ -799,7 +798,6 @@ Live candidate a1: anchor hyperparameters, 182.7M steps on 37d061a46. Greedy lad
 - **Open:**
   - `RF_AXE_SWING_PM` is fitted on the stale bar at the swing, which doesn't count meals eaten since his last hitsplat. The script reads its band from true HP after its meals, so low fighters drop out of the <40 axe band.
   - Reading the band from his HP at his last hitsplat is the next step. The `personas` branch also edits the `axe_pm` line.
->>>>>>> lowhp-offence
 
 ## 2026-10-19: food attack delay on the ready tick, data against the wiki's wording
 
