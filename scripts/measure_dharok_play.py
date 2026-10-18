@@ -25,6 +25,9 @@ A Dharok fighter is a duel side that, on some tick, wears Dharok's helm, platebo
     proc of his since) and the opponent's bar the tick before (riskfight_policy.h's RF_AXE_SWING_PM). Then the knockouts of the Dharok v Dharok duels: the
     killer's state at his axe swing (Vengeance up, an orb drop or a strip in the 5 ticks up to it, the opponent swinging the tick before, both bars) against
     all axe swings and all Dharok ticks, and the axe swings carrying his own reflect on the knockout.
+(e) Voidwaker specials of Dharok fighters holding a Voidwaker, by the opponent's bar the tick before: specials per 1,000 ticks and their cumulative share. The
+    lowest bar holding 95% of the specials at or below it is riskfight_policy.h's RF_VW_SPEC_BAR_MAX (the script's gate). The rate stays at 6-13 per 1,000
+    ticks up to bar 25 and falls to under 1 from bar 27; the gate cuts where the specials end, not at a fixed share of the bar.
 """
 import argparse
 import collections
@@ -41,6 +44,9 @@ DHAROK_BODY = {4720, 4892, 4893, 4894, 4895}
 DHAROK_LEGS = {4722, 4898, 4899, 4900, 4901}
 HEAD, WEAPON, BODY, LEGS = 0, 3, 4, 7
 BAR, SPEC, DMG, NHIT, VENG_CAST, VENG_PROC, DEAD, ANIMS = 0, 4, 5, 6, 7, 8, 11, 12
+WEAPON_FIELD = 1  # the R line's weapon (item id in hand); WEAPON above is the composition slot
+VOIDWAKER = 27690
+VW_GATE_SHARE = 0.95  # (e)
 FOLLOW = 20       # ticks after a strip's start in which its outcome is read
 OPP_SWING_WINDOW = 4
 OWN_SWING_WINDOW = 2
@@ -287,6 +293,32 @@ def measure(duels):
                    f"{50 * round((lower + upper) / 2 / 50)} per mille")
     out.append("")
     out.append(measure_axe_swings(duels, dh))
+    out.append("")
+    out.append(measure_vw_specs(duels))
+    return "\n".join(out)
+
+
+def measure_vw_specs(duels):
+    ticks, specs = collections.Counter(), collections.Counter()
+    for d in duels:
+        pair = [Side(d, 0), Side(d, 1)]
+        if not all(s.is_dharok() for s in pair): continue
+        for side, s in enumerate(pair):
+            rows = [r[2 + side] for r in d["rows"]]
+            if not any(r[WEAPON_FIELD] == str(VOIDWAKER) or r[SPEC] == "VW" for r in rows): continue
+            for i in range(1, len(rows)):
+                if s.third[i]: continue
+                ticks[s.opp_bar[i - 1]] += 1
+                specs[s.opp_bar[i - 1]] += rows[i][SPEC] == "VW"
+    total, cum, gate = sum(specs.values()), 0, None
+    out = [f"(e) Voidwaker specials by the opponent's bar the tick before ({total} specials of fighters holding a Voidwaker)",
+           "| bar | ticks | specials | per 1,000 ticks | cumulative share |", "|---|---|---|---|---|"]
+    for bar in range(31):
+        cum += specs[bar]
+        rate = specs[bar] / max(1, ticks[bar])
+        if gate is None and cum >= VW_GATE_SHARE * total: gate = bar
+        out.append(f"| {bar} | {ticks[bar]} | {specs[bar]} | {1000 * rate:.1f} | {cum / max(1, total):.3f} |")
+    out.append(f"RF_VW_SPEC_BAR_MAX (the lowest bar with {VW_GATE_SHARE:.0%} of the specials at or below it): {gate}")
     return "\n".join(out)
 
 

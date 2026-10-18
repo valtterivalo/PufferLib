@@ -579,21 +579,40 @@ static void riskfight_script_consume(const RiskfightObservedSelf* self,
     }
 }
 
-/* A Dharok pool opponent's meals (RiskfightProfile.dharok_eating): he keeps his hitpoints low for the greataxe and eats on his own hitpoints by tens, not on the
- * crater thresholds above. Measured on the 261 spectated Dharok v Dharok duels by scripts/measure_dharok_eating.py (512 fighters; a meal is a rise of his bar,
- * read on nearly every tick, plus the damage he took, of 8 or more): meals per tick at hitpoints 0-9 ... 90-98 are 81, 130, 140, 155, 164, 158, 93, 16, 4.4,
- * 0.7 per mille, none from 99 up; single (under 30) / double (anglerfish and karambwan, under 48) / triple (and a brew dose) as RF_DHAROK_MEAL_SINGLE_PM /
- * _DOUBLE_PM, the rest triple. A single is an anglerfish (+7 bar points with no damage between the reads, 316 at 50-79 hitpoints) or a brew dose (+4 and +5,
- * 260; +6, 259, is either): RF_DHAROK_MEAL_BREW_PM of them a brew dose. RF_DHAROK_MEAL_PM are the per-tick tries, fitted on /tmp/dhsim so the meals the sim
- * lands (a try waits out no timer) come back at the measured rates. */
-static const uint16_t RF_DHAROK_MEAL_PM[10] = {38, 95, 123, 160, 173, 172, 107, 18, 5, 2};
+/* A Dharok pool opponent's meals (RiskfightProfile.dharok_eating): he keeps his hitpoints low for the greataxe and eats on his own hitpoints and the other side's
+ * attack clock, not on the crater thresholds above. Measured on the 261 spectated Dharok v Dharok duels by scripts/measure_dharok_eating.py (512 fighters; a meal
+ * is a rise of his bar, read on nearly every tick, plus the damage he took, of 8 or more): meals per tick at hitpoints 0-9 ... 90-98 are 81, 130, 140, 155, 164,
+ * 158, 93, 16, 4.4, 0.7 per mille, none from 99 up; single (under 30) / double (anglerfish and karambwan, under 48) / triple (and a brew dose) as
+ * RF_DHAROK_MEAL_SINGLE_PM / _DOUBLE_PM, the rest triple. A single is an anglerfish (+7 bar points with no damage between the reads, 316 at 50-79 hitpoints) or a
+ * brew dose (+4 and +5, 260; +6, 259, is either): RF_DHAROK_MEAL_BREW_PM of them a brew dose.
+ * When he eats is the clock (measure_dharok_eating.py (c)): below 60 hitpoints the meals come the tick after the other side's swing (225-424 per mille) and on
+ * the tick his next swing frees (256-280), 53-68 on the ticks between. A meal at a flat rate per tick left him low through the other side's swings, and
+ * plain hits killed him: 27% of sim knockouts against 1.6% spectated. RF_DHAROK_MEAL_PM[bar / 6][phase] (RiskfightMealPhase) are the per-tick tries. */
+typedef enum { RF_MEAL_AFTER_SWING, RF_MEAL_SWING_FREES, RF_MEAL_BETWEEN, RF_MEAL_PHASES } RiskfightMealPhase;
+static const uint16_t RF_DHAROK_MEAL_PM[5][RF_MEAL_PHASES] = {
+    {225, 256, 53}, {388, 273, 67}, {424, 280, 68}, {89, 57, 18}, {5, 6, 2},
+};
 static const uint16_t RF_DHAROK_MEAL_SINGLE_PM[10] = {150, 130, 100, 170, 310, 790, 970, 970, 920, 1000};
 static const uint16_t RF_DHAROK_MEAL_DOUBLE_PM[10] = {40, 140, 280, 540, 650, 210, 20, 30, 80, 0};
 enum { RF_DHAROK_MEAL_BREW_PM = 400 };
 
-static void riskfight_script_dharok_meal(const RiskfightObservedSelf* self, const RiskfightObservedInventory* inventory, uint32_t seed, uint32_t tick, int* actions) {
+/** The phase of the other side's attack clock a meal decided now lands in: the tick after his swing (opponent[5], ticks since it, is 1), the tick his weapon frees
+ * his next swing (it equals his weapon's speed), or between (also before his first swing). `opponent` the opponent block of the script observation. */
+static RiskfightMealPhase riskfight_meal_phase(const float* obs, const float* opponent) {
+    if (opponent[4] < 0.5f) return RF_MEAL_BETWEEN;
+    int since = (int)lroundf(opponent[5] * RF_OBSERVATION_ATTACK_AGE_SCALE);
+    if (since == 1) return RF_MEAL_AFTER_SWING;
+    uint8_t weapon = (uint8_t)lroundf(obs[RF_OPPONENT_START + GEAR_SLOT_WEAPON] * RF_OBSERVATION_ITEM_SCALE);
+    return weapon != ITEM_NONE && since == ITEM_DATABASE[weapon].attack_speed ? RF_MEAL_SWING_FREES : RF_MEAL_BETWEEN;
+}
+
+static void riskfight_script_dharok_meal(const float* obs, const RiskfightObservedSelf* self, const RiskfightObservedInventory* inventory, uint32_t seed,
+    uint32_t tick, int* actions) {
     int hp = self->hitpoints;
-    if (hp >= 99 || !riskfight_sample_event(seed, tick, 32, RF_DHAROK_MEAL_PM[hp / 10])) return;
+    if (hp >= 99) return;
+    const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
+    int band = min_int(4, hp * OSRS_PLAYER_HEALTH_BAR_SCALE / 99 / 6);
+    if (!riskfight_sample_event(seed, tick, 32, RF_DHAROK_MEAL_PM[band][riskfight_meal_phase(obs, opponent)])) return;
     int size = (int)(riskfight_sample_hash(seed, tick, 33) % 1000u);
     int pieces = size < RF_DHAROK_MEAL_SINGLE_PM[hp / 10] ? 1 : size < RF_DHAROK_MEAL_SINGLE_PM[hp / 10] + RF_DHAROK_MEAL_DOUBLE_PM[hp / 10] ? 2 : 3;
     int brew = self->potion_timer == 0 ? inventory->kind_slot[OSRS_CONSUMABLE_BREW] : 0;
@@ -704,6 +723,10 @@ static const int16_t RF_AXE_SWING_PM[3][2][3] = {
 };
 /* The training profiles' mean axe_pm per own band (AXE_WIELD_PM_OWN_BAND, scripts/mine_riskfight_behavior.py): a profile's axe_pm over it is his own propensity. */
 static const int RF_AXE_WIELD_MEAN[3] = {75, 44, 15};
+/* The Voidwaker special waits for the other side's bar at or below this (scripts/measure_dharok_play.py (e): of 451 spectated specials of Dharok fighters holding
+ * a Voidwaker, 96% came at his bar 25 or less; the rate is 6-13 per 1,000 ticks up to bar 25 and under 1 from bar 27). The old gate, bar under 19.5 (0.65), cut
+ * the 60-79 hitpoint specials that are half of the spectated ones, and the sim landed 0.0042 specials per fighter-tick against 0.0068. */
+enum { RF_VW_SPEC_BAR_MAX = 25 };
 
 /** Weapon rolls are keyed on the tick the next attack comes off cooldown, so one attack gets one decision.
  * consume_ticks counts this round's ticks on which the fighter ate or drank. */
@@ -748,11 +771,11 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     int consume_band = (hp >= 40) + (hp >= 65) + (hp >= 73) + (hp >= 90);
     if (!combo_specs && riskfight_sample_event(seed, tick, 11, profile->consume_pm[consume_band]))
         riskfight_script_consume(&self, &inventory, !profile->dharok_eating, actions);
-    if (!combo_specs && profile->dharok_eating) riskfight_script_dharok_meal(&self, &inventory, seed, tick, actions);
+    if (!combo_specs && profile->dharok_eating) riskfight_script_dharok_meal(obs, &self, &inventory, seed, tick, actions);
     if (actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO]) actions[RF_PRIMARY] = RF_STOP;
     uint8_t generic_spec = plain_spec != ITEM_NONE ? plain_spec : plain_main != ITEM_NONE && osrs_spec_cost(plain_main) > 0 ? plain_main : ITEM_NONE;
     int generic_cost = generic_spec == ITEM_NONE ? 100 : osrs_spec_cost(generic_spec);
-    int vw_spec = !combo_specs && has_vw && obs[6] >= 0.5f && opponent[0] < 0.65f &&
+    int vw_spec = !combo_specs && has_vw && obs[6] >= 0.5f && opp_bar <= RF_VW_SPEC_BAR_MAX &&
         riskfight_sample_event(seed, attack_tick, 21, profile->vw_pm);
     int maul_cost = maul_item == ITEM_NONE ? 100 : osrs_spec_cost(maul_item);
     /* The ornate maul waits for the energy of two specials and lands both at once; the plain one costs 60 and gets one. */
