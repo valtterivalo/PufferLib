@@ -76,6 +76,23 @@ static void rx_timing(const RiskfightState* s, const float* obs) {
         t[3] * RF_THREAT_DAMAGE_SCALE, t[4] * RF_THREAT_DAMAGE_SCALE);
 }
 
+/* The tactics block of an observation (riskfight_model.h) in hitpoints and ticks: the axe maxes, the OURS rows' identities, the knockout chances. */
+static void rx_tactics(const float* obs) {
+    const float* t = obs + RF_TACTICS_START;
+    static const char KIND[RF_TACTICS_KINDS] = {'V', 'M', 'A', 'o'};
+    printf(" | tactics axe %.0f/%.0f/%.0f%s rows ", t[RF_TACTICS_AXE_MAX] * RF_THREAT_DAMAGE_SCALE, t[RF_TACTICS_AXE_MAX + 1] * RF_THREAT_DAMAGE_SCALE,
+        t[RF_TACTICS_AXE_MAX + 2] * RF_THREAT_DAMAGE_SCALE, t[RF_TACTICS_STRIPPED] > 0 ? " STRIPPED" : "");
+    for (int row = 0; row < RF_THREAT_OURS_SLOTS; row++) {
+        char c = '-';
+        for (int k = 0; k < RF_TACTICS_KINDS; k++) if (t[RF_TACTICS_IDENTITY + row * RF_TACTICS_KINDS + k] > 0) c = KIND[k];
+        putchar(c);
+    }
+    const float* ko = t + RF_TACTICS_KO;
+    printf(" 2h %.0f ko axe %.3f vw %.3f vw_spec %.3f maul %.3f maul2 %.3f his_veng %.0f orb %.0f hp>1 %.0f safe %.0f", t[RF_TACTICS_CAN_WIELD_2H],
+        ko[0], ko[1], ko[2], ko[3], ko[4], t[RF_TACTICS_HIS_VENG], t[RF_TACTICS_ORB], t[RF_TACTICS_HP_ABOVE_1],
+        t[RF_TACTICS_SAFE_WINDOW] * RF_OBSERVATION_ATTACK_AGE_SCALE);
+}
+
 int main(int argc, char** argv) {
     if (argc < 5) { fprintf(stderr, "usage: rl_explain CHECKPOINT HIDDEN LAYERS RUN.requests [FROM [TO]]\n"); return 2; }
     int from = argc > 5 ? atoi(argv[5]) : 0, to = argc > 6 ? atoi(argv[6]) : 1 << 30;
@@ -105,6 +122,7 @@ int main(int argc, char** argv) {
             riskfight_write_observation(&g_base.state, 0, obs);
             printf("%d %s his bar %d swing %d spec %d eat %d", q.tick, obs_only ? "OBS" : "DEC", g_fight.vis.health_bar, seen.swing_raw, seen.swing_spec, seen.consuming);
             rx_timing(&g_base.state, obs);
+            rx_tactics(obs);
             printf("\n");
             rx_threat(obs);
             continue;
@@ -137,6 +155,7 @@ int main(int argc, char** argv) {
                 osrs_escape_no_special(&own), osrs_escape_no_hard_food(&own), osrs_escape_no_restore(&own), osrs_escape_no_boost(&own),
                 riskfight_threat_cheapest_spec(o + RF_THREAT_START));
             rx_timing(s, o);
+            rx_tactics(o);
         }
         float pr[512];
         rx_probs(g_fight.net, mask, RF_PRIMARY, pr);

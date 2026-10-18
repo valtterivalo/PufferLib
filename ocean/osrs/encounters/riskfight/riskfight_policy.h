@@ -131,6 +131,114 @@ static void riskfight_write_timing_observation(const RiskfightState* s, int agen
     out[4] = (float)riskfight_threat_his_hp_upper(v->health_bar) / RF_THREAT_DAMAGE_SCALE;
 }
 
+/** P(X >= need) for one attack X: 0 on a miss (chance 1 - `hit`), else uniform on the integers [lo, hi]. */
+static inline double riskfight_attack_tail(double hit, int lo, int hi, int need) {
+    if (need <= 0) return 1;
+    if (need <= lo) return hit;
+    if (need > hi) return 0;
+    return hit * (hi - need + 1) / (hi - lo + 1);
+}
+
+/** The chance `attacks` (1 or 2) independent attacks of riskfight_attack_tail's law deal at least his hitpoints, uniform over the integers [hp_lower, hp_upper].
+ * Two attacks: the first misses (the second alone must do it) or lands k uniform on [lo, hi] (the second must deal hitpoints - k), exact. */
+static float riskfight_ko_chance(float hit, int lo, int hi, int attacks, int hp_lower, int hp_upper) {
+    assert(attacks == 1 || attacks == 2);
+    assert(0 <= lo && lo <= hi && hp_lower <= hp_upper);
+    double sum = 0;
+    for (int hp = hp_lower; hp <= hp_upper; hp++) {
+        double alone = riskfight_attack_tail(hit, lo, hi, hp);
+        if (attacks == 1) { sum += alone; continue; }
+        double after_hit = 0;
+        for (int k = lo; k <= hi; k++) after_hit += riskfight_attack_tail(hit, lo, hi, hp - k);
+        sum += (1 - hit) * alone + hit * after_hit / (hi - lo + 1);
+    }
+    return (float)(sum / (hp_upper - hp_lower + 1));
+}
+
+/** The tactics block (RF_TACTICS_START, layout in riskfight_model.h), written by the sim and the live server alike (riskfight_write_observation). Reads the threat
+ * block's OURS rows (`bag` the weapons that fill them) and his hitpoints bounds, so it comes after the threat block. */
+static void riskfight_write_tactics_observation(const RiskfightState* s, int agent, const RiskfightBagWeapons* bag, float* obs) {
+    const Player* p = &s->env.players[agent];
+    const RiskfightVisibleOpponent* v = &s->visible[agent];
+    float* out = obs + RF_TACTICS_START;
+    memset(out, 0, RF_TACTICS_SIZE * sizeof(float));
+    /* Our bag: the greataxe, the stripped Dharok's pieces, the orb, a two-hander we could wield. */
+    int has_empty = osrs_first_empty_inventory_cell(p->inventory_cells, -1) >= 0;
+    int axe = p->equipped[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE, orb = 0, can_wield_2h = 0;
+    uint8_t stripped[NUM_GEAR_SLOTS];
+    memset(stripped, ITEM_NONE, sizeof(stripped));
+    for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++) {
+        const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[cell]);
+        orb |= m->click_action == OSRS_CLICK_SELF_DAMAGE;
+        if (m->gear_slot < 0) continue;
+        axe |= m->item_idx == ITEM_DHAROKS_GREATAXE;
+        if (m->gear_slot == GEAR_SLOT_WEAPON && item_is_two_handed(m->item_idx)) can_wield_2h |= osrs_can_equip_metadata(p, m, has_empty);
+        uint8_t worn_piece = p->equipped[m->gear_slot];
+        if ((m->gear_slot == GEAR_SLOT_BODY || m->gear_slot == GEAR_SLOT_LEGS) && (ITEM_DATABASE[m->item_idx].effect_mask & OSRS_ITEM_EFFECT_DHAROK_PIECE) &&
+            (worn_piece == ITEM_NONE || !(ITEM_DATABASE[worn_piece].effect_mask & OSRS_ITEM_EFFECT_DHAROK_PIECE)))
+            stripped[m->gear_slot] = m->item_idx;
+    }
+    out[RF_TACTICS_STRIPPED] = stripped[GEAR_SLOT_BODY] != ITEM_NONE || stripped[GEAR_SLOT_LEGS] != ITEM_NONE;
+    int axe_max = 0;
+    if (axe) {
+        /* The set with the stripped pieces back on: their bonuses replace what the slot wears, each adds a Dharok's piece. */
+        EquipmentBonuses worn;
+        int dharok_armour;
+        riskfight_threat_worn(p, &worn, &dharok_armour);
+        uint8_t equipment[NUM_GEAR_SLOTS];
+        memcpy(equipment, p->equipped, sizeof(equipment));
+        const int pieces[2] = {GEAR_SLOT_BODY, GEAR_SLOT_LEGS};
+        for (int i = 0; i < 2; i++) {
+            int slot = pieces[i];
+            if (stripped[slot] == ITEM_NONE) continue;
+            if (equipment[slot] != ITEM_NONE) osrs_threat_bonus_item(&worn, equipment[slot], -1);
+            osrs_threat_bonus_item(&worn, stripped[slot], 1);
+            equipment[slot] = stripped[slot];
+            dharok_armour++;
+        }
+        OsrsThreatActor us = riskfight_threat_actor_of(p);
+        OsrsThreatWeapon w = osrs_threat_weapon_swapped(&worn, dharok_armour, equipment, ITEM_DHAROKS_GREATAXE, &us);
+        for (int clicks = 0; clicks < 3; clicks++) {
+            int hit_max = osrs_threat_max_hit_at(&w, RF_THREAT_BASE_HITPOINTS, max_int(1, p->current_hitpoints - 10 * clicks));
+            if (clicks == 0) axe_max = hit_max;
+            out[RF_TACTICS_AXE_MAX + clicks] = fminf(1.0f, (float)hit_max / RF_THREAT_DAMAGE_SCALE);
+        }
+    }
+    /* The OURS rows: what each holds, and the rows of the weapons the knockout chances read. */
+    const float *vw = NULL, *maul = NULL, *axe_row = NULL;
+    const float* rows = obs + RF_THREAT_START + RF_THREAT_OURS_OFFSET;
+    for (int i = 0; i <= bag->count; i++) {
+        uint8_t item = i == 0 ? p->equipped[GEAR_SLOT_WEAPON] : bag->item[i - 1];
+        const float* row = rows + i * RF_THREAT_OURS_WIDTH;
+        int kind = item == ITEM_VOIDWAKER ? 0 : pvp_is_maul(item) ? 1 : item == ITEM_DHAROKS_GREATAXE ? 2 : 3;
+        out[RF_TACTICS_IDENTITY + i * RF_TACTICS_KINDS + kind] = 1;
+        if (kind == 0 && !vw) vw = row;
+        if (kind == 1 && !maul) maul = row;
+        if (kind == 2 && !axe_row) axe_row = row;
+    }
+    out[RF_TACTICS_CAN_WIELD_2H] = can_wield_2h;
+    int lower = riskfight_threat_his_hp_lower(v->health_bar), upper = riskfight_threat_his_hp_upper(v->health_bar);
+    float* ko = out + RF_TACTICS_KO;
+    if (axe_row) ko[0] = riskfight_ko_chance(axe_row[2], 0, axe_max, 1, lower, upper);
+    if (vw) {
+        int normal_max = (int)lroundf(vw[1] * RF_THREAT_DAMAGE_SCALE), spec_max = (int)lroundf(vw[5] * RF_THREAT_DAMAGE_SCALE);
+        ko[1] = riskfight_ko_chance(vw[2], 0, normal_max, 1, lower, upper);
+        ko[2] = riskfight_ko_chance(vw[6], osrs_voidwaker_min_hit(normal_max), spec_max, 1, lower, upper);
+    }
+    if (maul) {
+        int spec_max = (int)lroundf(maul[5] * RF_THREAT_DAMAGE_SCALE);
+        ko[3] = riskfight_ko_chance(maul[6], 0, spec_max, 1, lower, upper);
+        ko[4] = riskfight_ko_chance(maul[6], 0, spec_max, 2, lower, upper);
+    }
+    out[RF_TACTICS_HIS_VENG] = riskfight_his_veng_up(v);
+    out[RF_TACTICS_ORB] = orb;
+    out[RF_TACTICS_HP_ABOVE_1] = p->current_hitpoints > 1;
+    /* Our clock in his_ready's convention: the step decrements the timer before the swing, which needs it below 0 (can_attack_now). */
+    int ours = p->has_attack_timer ? max_int(0, p->attack_timer + 1) : 0;
+    int window = riskfight_his_ready(v, s->env.tick, 0) - ours;
+    out[RF_TACTICS_SAFE_WINDOW] = fmaxf(-1.0f, fminf(1.0f, (float)window / RF_OBSERVATION_ATTACK_AGE_SCALE));
+}
+
 /** The observation up to the price, and the weapons of the agent's bag when `bag_weapons` is given (the threat block needs them). The bag rows follow `order`. */
 static void riskfight_write_observation_core(const RiskfightState* s, int agent, float* obs, const RiskfightBagOrder* order, RiskfightBagWeapons* bag_weapons) {
     const Player* p = &s->env.players[agent];
@@ -210,7 +318,8 @@ static void riskfight_write_script_observation(const RiskfightState* s, int agen
     riskfight_threat_write_stacks(&s->env.players[agent], &s->visible[agent].threat, obs + RF_THREAT_START); /* the Soulreaper stacks are the one thing a script reads there */
 }
 
-/** The full observation, the net's: the base with the bag in canonical order (riskfight_bag.h), then the appended blocks in order (threat features, session, timing). */
+/** The full observation, the net's: the base with the bag in canonical order (riskfight_bag.h), then the appended blocks in order (threat features, session, timing,
+ * tactics). */
 static void riskfight_write_observation(const RiskfightState* s, int agent, float* obs) {
     RiskfightBagWeapons bag_weapons = {{0}, 0};
     const RiskfightBagOrder order = riskfight_bag_order(&s->env.players[agent]);
@@ -218,6 +327,7 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
     riskfight_threat_write(&s->env.players[agent], &bag_weapons, &s->visible[agent].threat, s->visible[agent].health_bar, obs + RF_THREAT_START);
     riskfight_write_session_observation(s, agent, obs);
     riskfight_write_timing_observation(s, agent, obs);
+    riskfight_write_tactics_observation(s, agent, &bag_weapons, obs);
 }
 
 /** Head offsets into the mask, and the mask every state starts from: action 0 of every head and all

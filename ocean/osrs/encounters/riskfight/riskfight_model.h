@@ -73,7 +73,7 @@ enum {
     RF_OPPONENT_START = RF_EQUIPPED_START + NUM_GEAR_SLOTS,
     RF_HISTORY_START = RF_OPPONENT_START + NUM_GEAR_SLOTS + 14,
     RF_PRICE = RF_HISTORY_START + RF_HISTORY_TICKS * RF_EVENT_WIDTH,   /* death price: what our death costs us over what his kill wins us, scaled by 1 / RF_PRICE_MAX */
-    /* Appended blocks, in order: threat features (riskfight_threat.h), then the session block, then the timing block. */
+    /* Appended blocks, in order: threat features (riskfight_threat.h), then the session block, then the timing block, then the tactics block. */
     RF_THREAT_START = RF_PRICE + 1,
     /* Session block (riskfight_write_session_observation): [0] session ticks left over RF_SESSION_HORIZON_TICKS, capped at 1;
      * [1] his special energy as a player counts it (100 minus the specs seen, plus the regeneration since), over 100; [2] 1 while the session is waiting between
@@ -96,7 +96,31 @@ enum {
      *                        threat block's max and spec_max, so they compare directly with the OURS rows. */
     RF_TIMING_START = RF_SESSION_START + RF_SESSION_SIZE,
     RF_TIMING_SIZE = 5,
-    RF_OBS_SIZE = RF_TIMING_START + RF_TIMING_SIZE,
+    /* Tactics block (riskfight_write_tactics_observation), what a player computes in his head from his own kit, the OURS rows and the timing block, so the net
+     * spends its capacity on the fight's dynamics instead of rebuilding them:
+     *   0-2 axe_max          our Dharok's greataxe max hit at our hitpoints now, after one orb click (hitpoints - 10) and after two (- 20), never below 1
+     *                        hitpoint (the orb's Feel stops there), each with a stripped Dharok's body or legs of our bag back on (the set the swing is made
+     *                        in), the axe swapped in for what we wield. / RF_THREAT_DAMAGE_SCALE, capped at 1; 0 without a greataxe in the kit
+     *   3 stripped           1 while a Dharok's platebody or platelegs sits in our bag with its slot not wearing one (the set is incomplete now)
+     *   4-19 identity        per OURS row of the threat block (row 0 the weapon we wield, then the bag's weapons by item index), RF_TACTICS_KINDS one-hot
+     *                        floats: Voidwaker, granite maul (either), Dharok's greataxe, other; all 0 for an empty row
+     *   20 can_wield_2h      1 when a two-handed weapon of our bag could be wielded now (the mask's rule: a shield worn with a weapon needs a free cell)
+     *   21-25 ko             the chance one attack (or two maul specials) knocks him out, his hitpoints uniform over the timing block's bounds (an integer
+     *                        each, [his_hp_lower, his_hp_upper]), damage at least his hitpoints: 21 a greataxe hit (hit chance of its OURS row, uniform
+     *                        0..axe_max[0]), 22 a Voidwaker normal hit (its row: hit, uniform 0..max), 23 a Voidwaker special (always hits, uniform from
+     *                        max / 2 to its row's spec_max), 24 one granite maul special (its row: spec_hit, uniform 0..spec_max), 25 two of them
+     *                        (independent, exact convolution); 0 for a weapon not in the kit
+     *   26 his_veng_up       his Vengeance counted up (riskfight_his_veng_up)
+     *   27 orb               1 while we carry a locator orb, 28 1 while our hitpoints are above 1 (the orb can take one off)
+     *   29 safe_window       his_ready_min minus the ticks until our own next swing (same convention: 1 when we can swing on the tick about to be played,
+     *                        0 when we could already before), / RF_OBSERVATION_ATTACK_AGE_SCALE in [-1, 1]: positive, our swing comes first */
+    RF_TACTICS_START = RF_TIMING_START + RF_TIMING_SIZE,
+    RF_TACTICS_AXE_MAX = 0, RF_TACTICS_STRIPPED = 3, RF_TACTICS_IDENTITY = 4, RF_TACTICS_KINDS = 4,
+    RF_TACTICS_CAN_WIELD_2H = RF_TACTICS_IDENTITY + RF_THREAT_OURS_SLOTS * RF_TACTICS_KINDS,
+    RF_TACTICS_KO = RF_TACTICS_CAN_WIELD_2H + 1, RF_TACTICS_KO_COUNT = 5,
+    RF_TACTICS_HIS_VENG = RF_TACTICS_KO + RF_TACTICS_KO_COUNT, RF_TACTICS_ORB, RF_TACTICS_HP_ABOVE_1, RF_TACTICS_SAFE_WINDOW,
+    RF_TACTICS_SIZE,
+    RF_OBS_SIZE = RF_TACTICS_START + RF_TACTICS_SIZE,
 };
 /* Ticks left beyond which the end of the session no longer changes what is worth doing: several fight cycles. */
 enum { RF_SESSION_HORIZON_TICKS = 1500 };
