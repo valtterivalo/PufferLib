@@ -279,7 +279,7 @@ Live, s6t0 drank super restores at full prayer with nothing drained (prayer 87-9
 
   The script now strips and re-equips at those rates, and 60% of axe kits carry the orb.
 - **The script's axe now rolls on his own hitpoints** (bands at 40 and 80, `axe_pm` = wields per tick without the axe, 75 / 44 / 15 per 1,000 on the training mean). The profiles' old opponent-bar shares only set each profile's level (`axe_wield_profiles` in `mine_riskfight_behavior.py`). The two axe-only Dharok kits now hold a Voidwaker and an avernic defender, the commonest main weapon in the pool's Dharok rows (219 fights against 193 for the tentacle), and the axe is a switch. The 99 HP gate is gone.
-  - On `/tmp/dhsim` (6,000 script fights), the share of axe swings at 75+ HP fell from 66% to 51% (real: 23%). The rest is the HP gap: sim fighters spend 63% of ticks at 80+ HP, real ones 30%.
+  - On `/tmp/dhsim` (6,000 script fights), the share of axe swings at 75+ HP fell from 66% to 51% (real: 23%). The rest is the HP gap: sim fighters spend 63% of ticks at 80+ HP, real ones 30%. *(The real share read the carried bar, a stale-bar artifact: the bar moves only with hitsplats. Re-read with meals placed between hitsplats, real time at HP < 40 / 40-79 / 80+ is 0.050 / 0.631 / 0.319, not 0.089 / 0.637 / 0.273; see 2026-10-18 night.)*
 - **Housekeeping:**
   - env_trace goldens refreshed on both platforms (5db4ceb3a);
   - a sweep dir copied from the last one keeps the old `./puffer`. A failed nvcc build then silently ran the old binary once (sweep 13's first launch, killed within seconds); the binary is now deleted before every build.
@@ -309,7 +309,7 @@ Live, s6t0 drank super restores at full prayer with nothing drained (prayer 87-9
   - with a hidden start bar, they start at the spectated start HP.
 
   **Still open:** sim Dharok fighters take 1.65 damage per tick against 1.95 real, and the axe KO share is 9% against 41%. The script never stacks an axe hit with a Vengeance reflect or an orb'd low HP the way real KOs do. Sweep 14 trains on this env.
-- **The axe KO setup** (`scripts/measure_dharok_play.py` (d)): the "axe+reflect stack" is not an axe play. 13 real KOs carry the killer's reflect, but only 1 has his axe swing; most are a VW spec on the reflect. The 26 axe KOs come at his hitpoints 36 (56 at all axe swings) on a victim bar of 12.7/30 (17.4). Vengeance up (0.19 vs 0.32), the orb (0.12 vs 0.11) and strips (0 vs 0.03) do not stand out. The script's axe now rolls per attack on `RF_AXE_SWING_PM`, the measured share of non-special swings by own HP × Veng up × victim bar (e.g. 25 at 80+ HP on a full bar, 490 at 40-79 HP on a bar under 10, 794 below 40 HP), scaled by the profile's axe propensity. Orb, strip and Veng rules are unchanged: nothing in the data times them to the KO.
+- **The axe KO setup** (`scripts/measure_dharok_play.py` (d)): the "axe+reflect stack" is not an axe play. 13 real KOs carry the killer's reflect, but only 1 has his axe swing; most are a VW spec on the reflect. The 26 axe KOs come at his hitpoints 36 (56 at all axe swings) on a victim bar of 12.7/30 (17.4). *(Stale-bar check, 2026-10-18 night: the killer's 36 survives the re-read. 23 of 27 axe KOs show no eat animation since his last hitsplat, so the bar is his HP to within hidden meals; those 23 give a median of 33. The victim's bar is a lower bound.)* Vengeance up (0.19 vs 0.32), the orb (0.12 vs 0.11) and strips (0 vs 0.03) do not stand out. The script's axe now rolls per attack on `RF_AXE_SWING_PM`, the measured share of non-special swings by own HP × Veng up × victim bar (e.g. 25 at 80+ HP on a full bar, 490 at 40-79 HP on a bar under 10, 794 below 40 HP), scaled by the profile's axe propensity. Orb, strip and Veng rules are unchanged: nothing in the data times them to the KO.
   - `/tmp/dhsim` (6,000 fights, fight starts): KO by axe went from 10.1% to 22.7% (real 41%); reflect 12.8 → 13.2% (real 9.5); stack 3.4 → 3.0% (real 20.6, mostly VW); VW 35.5 → 33.0% (real 27); other 37.1 → 27.0% (real 1.6). Damage per tick taken went from 1.657 to 1.669 (real 1.973). The gap is no longer the axe decision: sim axe shares by state are within a few points of real. It is the HP distribution and the many small-hit KOs ("other").
 - **Overeat counting:** most meals the probe counts above the gate are motor-delayed clicks from a chain decided in range. One counting artefact: a brew consumed that tick shrank the range it was judged against. The range is now taken at the tick's start (d747134a6).
 - **Axe roll from the real KO table (9754d0d83).** The script's axe roll is now a per-attack table from 12,189 real non-special swings: per 1,000, by own HP × victim bar × own Vengeance. The victim's bar matters most (87 / 334 / 526), then own HP (50 / 194 / 640), then Vengeance (127 down, 239 up).
@@ -494,4 +494,31 @@ Measured on the 261 spectated Dharok v Dharok duels against 6000 sim fights (`ri
 
   The next opponent hit is the same size: 40+ in 0.19-0.24 real against 0.18-0.21 sim. Real low fighters are healed up before the opponent's next swing nearly every time. The sim's Dharok fighter is still low one time in five to eight. Most real "hits" on fighters already low are their own locator orb (10 damage, no opposing swing), not the opponent's.
 - **Meal timing, from eat animations rather than the bar.** Below 60 HP, the share of real meals at 0..7 ticks after the opponent's swing is 0, .16, .19, .29, .12, .08, .09, .06 (1834 animations). An animation is hidden on the eater's own swing tick and shows about half the time on a hit tick. The script's meals are .24, .46, .12, .10, .05, .02, .01, 0 (21975). It eats on the opponent's swing tick and the tick after, at per-tick tries (at most 424 per mille) that sometimes miss the whole window before his next swing. Real fighters spread their meals over the gap and finish before it closes.
-- **Open:** refit the Dharok meal rule from eat animations (corrected for visibility) with a "healed before his next swing" target. The fitted HP-band rates and the knockout comparisons that read bar HP between hits (killer HP at a knockout, time in a low band) need a re-read that only counts hitsplat ticks.
+- **Open (done 2026-10-18 night, below):** refit the Dharok meal rule from eat animations, corrected for visibility, with a "healed before his next swing" target, and re-read the knockout numbers that used bar HP between hits on hitsplat ticks only.
+
+## 2026-10-18 night: the Dharok meal rule refitted from eat animations; stale-bar numbers re-read
+
+- **New meal rule** (`scripts/fit_dharok_meals.py`, `RF_DHAROK_MEAL_PM[band][phase]`): the phases are ticks since the other side's swing (1, 2, 3, 4 up while his weapon is not ready, ready, none yet), not after / frees / between.
+  - Meals are timed by their eat animation, weighted by the chance it shows (`RF_MEAL_VISIBLE_*`, 0 on the eater's own swing tick).
+  - HP between hitsplats is the last bar plus the gap's heal, in step with the visible animations.
+  - Each band is scaled so its meals carry the heal the next hitsplat shows. The 829 animation is also a potion's: only 0.25-0.64 of animations by band are healing meals.
+  - Below 60 HP the rates are 154-301 per mille on every tick of his clock. The old fit's 225-424 "after his swing" was his hit landing.
+- **Sim, Dharok opponent as victim** (`dh_eat`, 6,000 fights, before → after), against real. HP just before the opponent's next hit, after an opponent hit left him in the band:
+
+  | Band | Real p10 / < 30 / next hit kills | Sim before | Sim after |
+  |---|---|---|---|
+  | 1-20 | 48 / 0.07 / 0.043 | 8 / 0.28 / 0.241 | 15 / 0.17 / 0.147 |
+  | 20-35 | 56 / 0.02 / 0.032 | 25 / 0.14 / 0.119 | 30 / 0.10 / 0.082 |
+  | 35-50 | 66 / 0.00 / 0.023 | 39 / 0.02 / 0.053 | 43 / 0.01 / 0.039 |
+
+  - **Meal clock**, ticks 0..7 since his swing:
+    - Real (visible animations): 0, .16, .19, .29, .12, .08, .09, .06.
+    - Sim before: .24, .46, .12, .10, .05, .02, .01, 0.
+    - Sim after: .18, .28, .22, .24, .04, .03, .02, 0, with per-tick rates now flat at 165-254 per mille.
+  - **Knockouts:** KO share of fights 0.496 → 0.436 (real 63 of 261, 0.24). KO by axe 0.31 → 0.32 (real 27 of 63, 0.43). Seat 0 of `dh_eat` is a HUMAN-profile script, not the Dharok meal rule.
+- **What is left:** the gap is roughly halved, not closed. Real low fighters almost never reach the next hit still low. Per-tick tries are memoryless, so a few sim fighters still go a whole cycle without a meal. Closing it needs a rule that depends on time since he was last hit low, outside the current per-tick form.
+- **Stale-bar re-reads.** The spectated bar moves only with hitsplats. Old values are stale-bar artifacts unless noted:
+  - **Killer HP at an axe KO:** 36 in FINDINGS (33 in the session reports). It holds. 23 of 27 axe KOs show no eat animation since the killer's last hitsplat; those 23 give a median of 33 (p25 16, p75 56).
+  - **Victim HP before a KO:** 46 (carried bar) is a stale-bar lower bound. 15 of 63 victims show an eat animation after their last hitsplat. Victims read within 2 ticks of the KO give a median of 50 (n 25). KO hitsplats exceed the last read in 49 of 63 (hitsplats are not capped at HP), so the KO tick cannot give his HP.
+  - **Time in HP bands:** < 40 / 40-79 / 80+ is 0.050 / 0.631 / 0.319 with meals placed between hitsplats. The carried bar gave 0.089 / 0.637 / 0.273, so real fighters spend about half as much time below 40 as the bar said.
+- Tests: test_riskfight_mix, _dharok_kit, _mechanics, _session, _dharok_script and _scripts pass. The env_trace goldens are not refreshed.

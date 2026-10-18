@@ -16,8 +16,8 @@ His bar (scale 30 of 99) is read on nearly every tick of a fight (the mean gap b
     at the earlier read j: AFTER his swing (a swing animation of his on tick j: the meal lands the tick after it), READY (j is the tick before the one his swing
     frees his next: j - swing = speed - 1, the meal lands on the tick he can swing again) and BETWEEN (every other tick, and before his first swing). His clock is
     his last swing animation that is not an instant special (the maul's 1667 leaves it running, as riskfight_his_swing_seen does), its speed SWING_SPEED by
-    animation (tools/rollout_export.py's table), 4 for the shared animations (Voidwaker, scimitar, daggers: all 4-tick weapons). This is riskfight_policy.h's
-    RF_DHAROK_MEAL_PM.
+    animation (tools/rollout_export.py's table), 4 for the shared animations (Voidwaker, scimitar, daggers: all 4-tick weapons). Superseded for
+    RF_DHAROK_MEAL_PM by fit_dharok_meals.py: the spectated bar moves only with a hitsplat, so a bar rise times a meal at the next hit, not when it was eaten.
 """
 import argparse
 import collections
