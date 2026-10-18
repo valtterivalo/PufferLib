@@ -10,7 +10,7 @@
 #include "../../tests/riskfight_motor.h"
 #include "riskfight_threat.h"
 
-enum { RF_PRICE_MAX_X10 = 25 };
+enum { RF_PRICE_MIN_X10 = 1, RF_PRICE_MAX_X10 = 25 };
 /* Every reward leaves the env divided by this ONE constant, the largest supported death price: a kill is 1 / Pmax, a death -price / Pmax, so PufferLib's clamp to
  * [-1, 1] never bites. It is global on purpose: scaling per fight would reweight fights against each other inside a session. */
 #define RF_REWARD_SCALE (10.0f / RF_PRICE_MAX_X10)
@@ -219,7 +219,7 @@ typedef struct {
     /* Scripted opponent reaction lag in ticks (domain randomization): his actions are those of opp_lag ticks ago. */
     int opp_lag;
     int opp_ring[4][RF_HEADS];
-    /* Stakes: the death price us/him (Stakes.ratio is him/us) of this fight; the reward of a death is minus this, of a kill 1. */
+    /* Stakes: the death price us/him (Stakes.ratio is him/us) of this fight, seat 0's (seat 1's is riskfight_seat_price); the reward of a death is minus this, of a kill 1. */
     float death_price;
     /* Specials each side used this fight (any weapon), and the session ticks left (RF_SESSION_OPEN outside a session). */
     int specs_used[2];
@@ -282,6 +282,13 @@ typedef struct {
 static inline float riskfight_outcome_reward(RiskfightOutcome outcome, float price) {
     return outcome == RISKFIGHT_KILL ? 1 : outcome == RISKFIGHT_DEATH ? -price :
         outcome == RISKFIGHT_MUTUAL_DEATH ? 1 - price : 0;
+}
+
+/** The death price of `seat`: death_price is seat 0's (us / him), so seat 1's is its inverse (him / us), clamped to the price range [0.1, 2.5] as the live
+ * server clamps seat 0's. Both the reward and the observation of a seat read this. */
+static inline float riskfight_seat_price(const RiskfightState* s, int seat) {
+    if (seat == 0) return s->death_price;
+    return fminf(RF_PRICE_MAX_X10 / 10.0f, fmaxf(RF_PRICE_MIN_X10 / 10.0f, 1.0f / s->death_price));
 }
 
 static void riskfight_write_observation(const RiskfightState*, int, float*);

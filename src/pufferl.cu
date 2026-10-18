@@ -3245,7 +3245,9 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
         puf_ini_get(ini, "train", "horizon");
     long local_timesteps = total_timesteps / ctx->world_size;
     long train_epochs = local_timesteps / batch_size;
-    long checkpoint_interval = puf_ini_get(ini, "base", "checkpoint_interval");
+    long selfplay_interval = puf_ini_get(ini, "selfplay", "checkpoint_interval");
+    long checkpoint_interval = use_selfplay && selfplay_interval > 0 ? selfplay_interval
+        : puf_ini_get(ini, "base", "checkpoint_interval");
     char target_key[128];
     sweep_metric_key(ini, target_key, sizeof(target_key));
     Dict last_log = {0};

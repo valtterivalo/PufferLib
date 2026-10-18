@@ -9,6 +9,8 @@
 # [bot_eval] draws it from the live table instead), fight_starts 1 (a fight starts as one of the 161 recorded ones did, riskfight_start.h), no reward shaping,
 # deployable, motor, live_loadout 4 (our kit drawn per session: the Dharok kit half the time, the VW kits the rest), domain randomization, the pool and OppFit
 # (0.5) for the opponents the script plays, 8 env threads.
+# Checkpoints: every 128 epochs (--base.checkpoint_interval) without self-play; a self-play trial checkpoints every [selfplay] checkpoint_interval (16) epochs
+# of the ini instead, each joining its frozen opponent pool.
 # Trial 0 is the anchor below: trial 34 of the third live sweep (20261017-riskfight-live-sweep3, 11.0 per hour, best on the probe too), run under the stronger
 # reputation cost of 2026-10-17 (rep_search 2.0, rep_rag 0.3, rep_half_life 6000, the ini defaults); the rest are Protein's. Scores are not comparable with sweep 3's.
 # max_runs and max_suggestion_cost come from the ini. A killed sweep resumes from RUN_DIR through --sweep.resume_dir (see src/sweep_resume.h). Arguments after RUN_DIR

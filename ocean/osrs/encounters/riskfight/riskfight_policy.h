@@ -309,7 +309,7 @@ static void riskfight_write_observation_core(const RiskfightState* s, int agent,
             out[7] /= RF_OBSERVATION_HEALTH_BAR_SCALE;
         } else memset(out, 0, RF_EVENT_WIDTH * sizeof(float));
     }
-    obs[RF_PRICE] = s->death_price * 10.0f / RF_PRICE_MAX_X10;
+    obs[RF_PRICE] = riskfight_seat_price(s, agent) * 10.0f / RF_PRICE_MAX_X10;
 }
 
 /** What the scripts read: the observation without its appended blocks (they read nothing from them), at the cost of the base. The bag in physical slot order: scripts
