@@ -939,3 +939,6 @@ Live candidate a1: anchor hyperparameters, 182.7M steps on 37d061a46. Greedy lad
   - Food use rises over the 4 ticks: .04, .15, .34, .32 (a2: .00-.05).
   - It now moves with the price (at tick 175: .14 at price 0.4, .34 at 2.04, .42 at 2.5) and with our HP (≈0 at our HP 30).
   - It is still below .5, so argmax still skips. The direction is right; the margin isn't there yet.
+- **Fast sweep 6** (369fdba02, 20 min): the anchor (run 0, 182.7M steps, 8.64, identical to a3) is best again.
+  - The five other trials are Protein's random warm-up draws, all at 5.2-5.9e7 steps, so the sweep never tested longer training.
+  - Run 4 (512x1, 5.9e7 steps) scores 8.10 in 53 s. At the live 4-HP ticks it eats at .00-.02 and ignores price and our HP: worse than a3.
