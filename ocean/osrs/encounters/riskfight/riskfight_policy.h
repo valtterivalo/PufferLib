@@ -729,12 +729,19 @@ static void riskfight_script_consume(const RiskfightObservedSelf* self,
  * 158, 93, 16, 4.4, 0.7 per mille, none from 99 up; single (under 30) / double (anglerfish and karambwan, under 48) / triple (and a brew dose) as
  * RF_DHAROK_MEAL_SINGLE_PM / _DOUBLE_PM, the rest triple. A single is an anglerfish (+7 bar points with no damage between the reads, 316 at 50-79 hitpoints) or a
  * brew dose (+4 and +5, 260; +6, 259, is either): RF_DHAROK_MEAL_BREW_PM of them a brew dose.
- * When he eats is the clock (measure_dharok_eating.py (c)): below 60 hitpoints the meals come the tick after the other side's swing (225-424 per mille) and on
- * the tick his next swing frees (256-280), 53-68 on the ticks between. A meal at a flat rate per tick left him low through the other side's swings, and
- * plain hits killed him: 27% of sim knockouts against 1.6% spectated. RF_DHAROK_MEAL_PM[bar / 6][phase] (RiskfightMealPhase) are the per-tick tries. */
-typedef enum { RF_MEAL_AFTER_SWING, RF_MEAL_SWING_FREES, RF_MEAL_BETWEEN, RF_MEAL_PHASES } RiskfightMealPhase;
+ * When he eats: scripts/fit_dharok_meals.py, not bar rises. The spectated bar moves only with a hitsplat (of the eat animations below 60 hitpoints none shows the
+ * bar rising before his next hitsplat), so a bar rise times a meal at the next hit: the old fit's "meal the tick after his swing" (225-424 per mille) was the
+ * tick his hit lands. Below 79 hitpoints (bands 0-3) the rate is fitted on current status, which needs no visibility model: after the other side's hit leaves him
+ * in the band, was he healed (bar + damage 8 or more over the read) by the other side's next hit, L ticks of that side's clock later? A constant per-tick rate h
+ * fits P(healed by L) = 1 - (1 - h)^L within its noise at every L (by his next 4-tick swing 0.97 / 0.98 / 0.94 / 0.41 by band, n 38 / 192 / 534 / 529), so
+ * there is no clock shape to keep and no longer memory to add: a fighter low after a hit is all but surely fed before the next one, and the earlier tables
+ * (eat animations weighted by their visibility, 154-301 per mille below 60) left 0.35 of them unfed by a 4-tick swing. That gave the next hit 0.08-0.15 kills
+ * in the sim against 0.03-0.04 spectated. Band 4 (79 up) keeps the animation rates: from there a meal mostly lifts him past 99, which the bar (30 at 99 and up)
+ * hides. By ticks since the other side's swing, 1, 2, 3, 4 up while his weapon is not ready, from its speed on, and before his first swing. RF_DHAROK_MEAL_PM[bar / 6][phase]
+ * (RiskfightMealPhase) are the per-tick tries. */
+typedef enum { RF_MEAL_SINCE_1, RF_MEAL_SINCE_2, RF_MEAL_SINCE_3, RF_MEAL_LATE, RF_MEAL_READY, RF_MEAL_NONE, RF_MEAL_PHASES } RiskfightMealPhase;
 static const uint16_t RF_DHAROK_MEAL_PM[5][RF_MEAL_PHASES] = {
-    {225, 256, 53}, {388, 273, 67}, {424, 280, 68}, {89, 57, 18}, {5, 6, 2},
+    {589, 589, 589, 589, 589, 589}, {572, 572, 572, 572, 572, 572}, {468, 468, 468, 468, 468, 468}, {115, 115, 115, 115, 115, 115}, {22, 20, 25, 37, 10, 10},
 };
 static const uint16_t RF_DHAROK_MEAL_SINGLE_PM[10] = {150, 130, 100, 170, 310, 790, 970, 970, 920, 1000};
 static const uint16_t RF_DHAROK_MEAL_DOUBLE_PM[10] = {40, 140, 280, 540, 650, 210, 20, 30, 80, 0};
@@ -761,14 +768,15 @@ static int riskfight_script_escape(const RiskfightProfile* profile, int dharok, 
  * (2: 22, 3: 63, 4: 48, 5: 38, 6 up: 34, the ready tick: 37 per mille), so no tick of his clock is singled out. */
 static const uint16_t RF_DHAROK_ORB_PM[2][5] = {{74, 109, 102, 30, 62}, {32, 59, 78, 55, 45}};
 
-/** The phase of the other side's attack clock a meal decided now lands in: the tick after his swing (opponent[5], ticks since it, is 1), the tick his weapon frees
- * his next swing (it equals his weapon's speed), or between (also before his first swing). `opponent` the opponent block of the script observation. */
+/** The phase of the other side's attack clock a meal decided now lands in: ticks since his swing (opponent[5]) 1, 2 or 3, 4 up while his weapon is not ready,
+ * from its speed on (READY), or before his first swing (NONE). `opponent` the opponent block of the script observation. */
 static RiskfightMealPhase riskfight_meal_phase(const float* obs, const float* opponent) {
-    if (opponent[4] < 0.5f) return RF_MEAL_BETWEEN;
+    if (opponent[4] < 0.5f) return RF_MEAL_NONE;
     int since = (int)lroundf(opponent[5] * RF_OBSERVATION_ATTACK_AGE_SCALE);
-    if (since == 1) return RF_MEAL_AFTER_SWING;
     uint8_t weapon = (uint8_t)lroundf(obs[RF_OPPONENT_START + GEAR_SLOT_WEAPON] * RF_OBSERVATION_ITEM_SCALE);
-    return weapon != ITEM_NONE && since == ITEM_DATABASE[weapon].attack_speed ? RF_MEAL_SWING_FREES : RF_MEAL_BETWEEN;
+    int speed = weapon != ITEM_NONE ? ITEM_DATABASE[weapon].attack_speed : 4;
+    if (since >= speed) return RF_MEAL_READY;
+    return since <= 1 ? RF_MEAL_SINCE_1 : since == 2 ? RF_MEAL_SINCE_2 : since == 3 ? RF_MEAL_SINCE_3 : RF_MEAL_LATE;
 }
 
 static void riskfight_script_dharok_meal(const float* obs, const RiskfightObservedSelf* self, const RiskfightObservedInventory* inventory, uint32_t seed,
