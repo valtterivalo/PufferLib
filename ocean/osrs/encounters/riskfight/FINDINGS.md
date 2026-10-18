@@ -548,3 +548,19 @@ Measured on the 261 spectated Dharok v Dharok duels against 6000 sim fights (`ri
   - **Meal clock**, ticks 0..7 since his swing: sim .18, .29, .30, .17, .04, .02, .01, 0; real (visible animations) 0, .16, .19, .29, .12, .08, .09, .06.
   - **Knockouts:** KO share 0.16 against real 0.24 (63 of 261); KO by axe 0.33 against 0.43. The sim now slightly under-kills low fighters.
 - Six tests pass (mix, dharok_kit, mechanics, session, dharok_script, scripts). The env_trace goldens are not refreshed.
+
+## 2026-10-18 night: self-play with both-seat data escapes, two seeds
+
+182.7M steps on the anchor (9a13c40f7: refitted Dharok meal rates, kit mix, both net seats escape by the data model in self-play and frozen-opponent envs). Greedy ladder, plus the argmax `session_probe` (300 sessions, net_stake per hour):
+
+| Arm | Seed | Ladder | Dharok | VW |
+|---|---|---|---|---|
+| A: no self-play | 73 | 7.37 | 7.11 | 7.15 |
+| C: half self-play | 73 | 6.45 | 6.58 | 5.85 |
+| A: no self-play | 74 | 8.41 | 8.46 | 8.53 |
+| C: half self-play | 74 | 6.84 | 6.76 | 6.63 |
+
+- **The collapse is gone:** with both seats escaping by the data model, self-play trials score 6.4-6.8, against 0.1 / −3.8 / 5.1 in fast sweep 3. They still trail the plain arm by 0.9-1.6 per hour at this budget, on both seeds and both kits.
+- **Self-play is off for now.** Sweeps pin `selfplay.enabled` to 0 (fast4). The machinery stays in place.
+- **Neither arm uses the Dharok tools:** no orb; axe swings only at about 96 HP or not at all.
+- **Scores fell across the board** compared with fast3 (run 0 10.31): after the meal refit, sim Dharok opponents heal before the next swing as real fighters do, so they are harder to KO. Scores aren't comparable across that change.
