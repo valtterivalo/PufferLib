@@ -680,3 +680,25 @@ Per-float audit of 474 live decisions (the 5 VW traces of 2026-10-17 through `gs
 - **His offset is a distance now.** Observation `opponent[1..2]` was his signed tile offset; the sim always seats him a tile east (+1 in 99.4% of steps), live he stood west in 66% of decisions, which the net had never seen. The writer takes `abs`, in the sim and live alike. Nothing else reads the sign (scripts read other opponent floats; pathing and range use positions).
 - **Pie kit is the live one.** `RF_VW_PIES` 4 to 2: 8 of the 9 live fight starts carry 2 summer pies and 12 anglerfish, the ninth the plain VW kit.
 - Left: live opponents stand far off at fight starts (dx up to 10, dy up to 15 in 7% of decisions; the sim has no approach), live eats far more (karambwan clock up 13% vs 0.2%), and a summer pie's hard-food clock: the plugin sends `tick + 3` for every hard food while the sim's pie locks 1 tick, so after a pie live still reads one tick high up to 2/3 where the sim reads 0.
+
+## 2026-10-19: live/sim observation parity audit, and live candidate a1
+
+Method: 474 live decisions from 5 VW traces compared, float by float, with 103k sim steps of s19t00 (`/tmp/obsaudit`). Bugs found and fixed:
+
+| Float | Live | Sim | Fix |
+|---|---|---|---|
+| Food / potion / karambwan timers | the plugin's `ready - tick`, up to 3/3 | its post-step clock, at most 2/3 | the server subtracts 1 (84be227c4) |
+| Pie lock | 3 ticks, as for any hard food | 1 tick | the lock is per item in the plugin (light #352) |
+| Our Vengeance cooldown | constant 30 (0.6) | counts down from 50 | the plugin sends the countdown from the tick varbit 2451 turned on; a click in flight reports 50 (light #350) |
+| Recoil damage used | literal 0 | counted | the plugin sends `RecoilRing` 40 − charges (light #351) |
+| Teleport lock after our special | never set, so the mask was always open | 8 ticks | the server records the special from the drop in `spec_us` (d1bf61bac) |
+| His offset dx/dy | he stood west of us (−1) in 66% of decisions | always +1 | both paths write |dx|, |dy| |
+| VW pies kit | 2 pies + 12 anglerfish in the live bag | 4 pies | the sim kit is now 2 pies |
+
+Open, not bugs:
+- Fights live start from approach distances that the sim never trains.
+- Live opponents were all melee.
+- The live divine timer is assumed (`500 - n`).
+- The Vengeance spam seen in replays is a replay artefact: the replay can't carry out the net's clicks.
+
+Live candidate a1: anchor hyperparameters, 182.7M steps on 37d061a46. Greedy ladder 8.88; argmax probe 7.85 per hour in the Dharok kit, 8.65 in VW. No axe, orb or maul use. Body or legs come off on 0.55 steps per fight. Installed with the parity fixes; replays of 4 live sessions run clean.
