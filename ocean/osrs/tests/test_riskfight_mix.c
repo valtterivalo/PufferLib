@@ -5,6 +5,8 @@
  *             net-played seat 1 is a pool kit with selfplay_pool_probability, else one of ours (live_loadout 3: the three Voidwaker kits; live_loadout 4: the Dharok
  *             kit half the time, else those three); the script and OppFit always take a pool kit.
  *   rematch   keeps seat 1's player, his kit and his price; a new opponent draws all three again.
+ *   classes   kit_same_class: a new opponent's kit is of seat 0's kit class (Dharok's, Soulreaper, melee) that often, else drawn without a condition;
+ *             learner_random_kit: seat 0 wears a pool kit it can play that often. In pure self-play both seats draw by that rule, at price 1. 100k draws each.
  *   symmetry  the observation and the mask are one function of a seat's own view: swapping the seats of a state swaps the two views, so a copy of one net
  *             in either seat is shown the mirrored fight. The session rules (rude teleport, rematch, regear, delays) treat both seats alike.
  * OppFit needs RF_OPPFIT_MODEL and RF_OPPFIT_EAT; the OppFit share is tested when they are set. */
@@ -503,6 +505,149 @@ static void test_every_fight_is_a_regear(void) {
     puts("regear: both seats start every fight, rematch or not, at 121 hitpoints with full supplies, special energy and prayer");
 }
 
+/* ---- Kit classes (kit_same_class, learner_random_kit). */
+static const char* const CLASS_NAME[RF_CLASS_COUNT] = {"any", "dharok", "soulreaper", "ranged", "melee"};
+
+/** The pool's draw mass per class, over the kits `filter` keeps (RF_CLASS_ANY: all; RF_PICK_LEARNER: the kits seat 0 can wear), normalized. */
+static void class_mass(int filter, double out[RF_CLASS_COUNT]) {
+    double total = 0;
+    memset(out, 0, sizeof(double) * RF_CLASS_COUNT);
+    for (int i = 0; i < RISKFIGHT_POOL_COUNT; i++) {
+        if (filter == RF_PICK_LEARNER && !riskfight_kit_learner_ok(&RISKFIGHT_POOL[i])) continue;
+        out[RISKFIGHT_POOL[i].kit_class] += RISKFIGHT_POOL[i].weight;
+        total += RISKFIGHT_POOL[i].weight;
+    }
+    for (int c = 0; c < RF_CLASS_COUNT; c++) out[c] /= total;
+}
+
+/** The seat wears its loadout as drawn: every worn slot (a ring the kit does not show is drawn on), the bag's contents in any order, the kit's hitpoints. */
+static void assert_wears(const Env* e, int seat) {
+    const RiskfightLoadout* l = e->context.loadout[seat];
+    const Player* p = &e->state.env.players[seat];
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
+        if (slot != GEAR_SLOT_RING || l->equipment[GEAR_SLOT_RING] != ITEM_NONE) assert(p->equipped[slot] == l->equipment[slot]);
+    int held[OSRS_ITEM_CONTENT_COUNT] = {0};
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) { held[l->inventory[slot]]++; held[p->inventory_cells[slot].content_code]--; }
+    for (int code = 0; code < OSRS_ITEM_CONTENT_COUNT; code++) assert(held[code] == 0);
+    assert(p->current_hitpoints == l->hitpoints);
+}
+
+/** A Dharok's kit as a player shows it: helm, platebody and platelegs worn, the greataxe wielded or in the bag. */
+static int shows_dharok(const Player* p) {
+    int axe = p->equipped[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE;
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) axe |= osrs_inventory_cell_metadata(&p->inventory_cells[slot])->item_idx == ITEM_DHAROKS_GREATAXE;
+    return axe && p->equipped[GEAR_SLOT_HEAD] == ITEM_DHAROKS_HELM && p->equipped[GEAR_SLOT_BODY] == ITEM_DHAROKS_PLATEBODY &&
+        p->equipped[GEAR_SLOT_LEGS] == ITEM_DHAROKS_PLATELEGS;
+}
+
+enum { CLASS_DRAWS = 100000 };
+static const double SAME = 0.8, RANDOM_KIT = 0.25;
+
+/* Seat 0 (live_loadout 4) wears one of ours or, with learner_random_kit, a pool kit it can play; the script's pool kit is of seat 0's class with kit_same_class,
+ * else from the whole pool: P(his class d | ours c) = s [c = d] + (1 - s) mass(d). Every kit drawn is worn and carried as drawn; a Dharok's draw shows the set. */
+static void test_kit_class_conditioning(void) {
+    DictItem knobs[] = {{.key = "self_play", .value = 0}, {.key = "live_loadout", .value = 4}, {.key = "domain_randomization", .value = 0},
+        {.key = "kit_same_class", .value = SAME}, {.key = "learner_random_kit", .value = RANDOM_KIT}};
+    Env* env = make_env(knobs, 5, 0, 31337);
+    double pool[RF_CLASS_COUNT], learner[RF_CLASS_COUNT];
+    class_mass(RF_CLASS_ANY, pool);
+    class_mass(RF_PICK_LEARNER, learner);
+    static int pair[RF_CLASS_COUNT][RF_CLASS_COUNT];
+    int ours_random = 0, dharok_seen = 0;
+    memset(pair, 0, sizeof(pair));
+    for (int i = 0; i < CLASS_DRAWS; i++) {
+        riskfight_training_reset(&env->training, &env->state, &env->context, env->tag);
+        const RiskfightContext* c = &env->context;
+        assert(c->opp_kit && c->opp_driven == 0 && !c->self_play);
+        const RiskfightKitClass mine = riskfight_loadout_class(c->loadout[0]);
+        assert(mine != RF_CLASS_RANGED);
+        if (c->our_kit) assert(riskfight_kit_learner_ok(c->our_kit) && c->our_kit->kit_class == (int)mine);
+        ours_random += c->our_kit != NULL;
+        pair[mine][c->opp_kit->kit_class]++;
+        assert_wears(env, 0);
+        assert_wears(env, 1);
+        if (c->opp_kit->kit_class == RF_CLASS_DHAROK) { assert(shows_dharok(&env->state.env.players[1])); dharok_seen++; }
+    }
+    /* Seat 0: a pool kit in learner_random_kit of the sessions; Dharok's with 1/2 of our kits and the learner pool's Dharok mass of the rest. */
+    int ours_n[RF_CLASS_COUNT] = {0};
+    for (int a = 0; a < RF_CLASS_COUNT; a++) for (int b = 0; b < RF_CLASS_COUNT; b++) ours_n[a] += pair[a][b];
+    assert(fabs((double)ours_random / CLASS_DRAWS - RANDOM_KIT) < 0.01);
+    const double ours_dharok = (1 - RANDOM_KIT) * 0.5 + RANDOM_KIT * learner[RF_CLASS_DHAROK];
+    assert(fabs((double)ours_n[RF_CLASS_DHAROK] / CLASS_DRAWS - ours_dharok) < 0.01);
+    printf("kit classes, script opponents (live_loadout 4, kit_same_class %.2f, learner_random_kit %.2f, %d draws):\n", SAME, RANDOM_KIT, CLASS_DRAWS);
+    for (int a = RF_CLASS_DHAROK; a < RF_CLASS_COUNT; a++) {
+        if (!ours_n[a]) continue;
+        printf("  ours %-10s %.4f:", CLASS_NAME[a], (double)ours_n[a] / CLASS_DRAWS);
+        for (int b = RF_CLASS_DHAROK; b < RF_CLASS_COUNT; b++) {
+            const double expected = SAME * (a == b) + (1 - SAME) * pool[b], seen = (double)pair[a][b] / ours_n[a];
+            printf(" his %s %.4f (%.4f)", CLASS_NAME[b], seen, expected);
+            /* Within 1% where seat 0's class has the draws to show it (sd under 0.002), within 4.5 sd elsewhere. */
+            if (ours_n[a] >= 20000) assert(fabs(seen - expected) < 0.01);
+            else assert(within(pair[a][b], ours_n[a], expected));
+        }
+        printf("\n");
+    }
+    printf("  dharok v dharok %.4f of the draws (expected %.4f); %d Dharok's opponents all show helm, platebody, platelegs and the greataxe\n",
+        (double)pair[RF_CLASS_DHAROK][RF_CLASS_DHAROK] / CLASS_DRAWS, ours_dharok * (SAME + (1 - SAME) * pool[RF_CLASS_DHAROK]), dharok_seen);
+    destroy(env);
+}
+
+/* Pure self-play (tag 0): seat 1 draws as seat 0 does, given seat 0's class with kit_same_class. The pair of classes is symmetric: seat 1's class has seat 0's
+ * law and P(same class) = s + (1 - s) sum p(c)^2. Both at price 1; both wear what they drew. Also the Dharok's variants: the pool's Dharok rows. */
+static void test_self_play_kit_symmetry(void) {
+    DictItem knobs[] = {{.key = "live_loadout", .value = 4}, {.key = "domain_randomization", .value = 0}, {.key = "scripted_probability", .value = 0},
+        {.key = "kit_same_class", .value = SAME}, {.key = "learner_random_kit", .value = RANDOM_KIT}};
+    Env* env = make_env(knobs, 5, 0, 4711);
+    static int pair[RF_CLASS_COUNT][RF_CLASS_COUNT];
+    int seat_n[2][RF_CLASS_COUNT] = {{0}}, his_random = 0;
+    memset(pair, 0, sizeof(pair));
+    for (int i = 0; i < CLASS_DRAWS; i++) {
+        riskfight_training_reset(&env->training, &env->state, &env->context, env->tag);
+        const RiskfightContext* c = &env->context;
+        assert(env->training.mirror && !c->opp_driven && env->state.death_price == 1.0f && riskfight_seat_price(&env->state, 1) == 1.0f);
+        assert(c->opp_kit == c->opp_chosen && (!c->opp_kit || riskfight_kit_learner_ok(c->opp_kit)));
+        const RiskfightKitClass a = riskfight_loadout_class(c->loadout[0]), b = riskfight_loadout_class(c->loadout[1]);
+        pair[a][b]++;
+        seat_n[0][a]++;
+        seat_n[1][b]++;
+        his_random += c->opp_kit != NULL;
+        assert_wears(env, 0);
+        assert_wears(env, 1);
+        if (b == RF_CLASS_DHAROK) assert(shows_dharok(&env->state.env.players[1]));
+    }
+    double same_expected = SAME, same = 0;
+    for (int k = RF_CLASS_DHAROK; k < RF_CLASS_COUNT; k++) {
+        const double p = (double)seat_n[0][k] / CLASS_DRAWS;
+        assert(fabs(p - (double)seat_n[1][k] / CLASS_DRAWS) < 0.01);
+        same_expected += (1 - SAME) * p * p;
+        same += (double)pair[k][k] / CLASS_DRAWS;
+        for (int j = RF_CLASS_DHAROK; j < RF_CLASS_COUNT; j++) assert(fabs((double)(pair[k][j] - pair[j][k]) / CLASS_DRAWS) < 0.01);
+    }
+    assert(fabs(same - same_expected) < 0.01);
+    assert(fabs((double)his_random / CLASS_DRAWS - RANDOM_KIT) < 0.01);
+    /* The Dharok's variants a draw can produce: the pool's Dharok rows (distinct loadouts; a ring the kit does not show is drawn on top) and our own kit. */
+    int variants = 0, setups = 0;
+    for (int i = 0; i < RISKFIGHT_POOL_COUNT; i++) {
+        if (RISKFIGHT_POOL[i].kit_class != RF_CLASS_DHAROK) continue;
+        int loadout_new = 1, setup_new = 1;
+        for (int j = 0; j < i; j++) {
+            if (RISKFIGHT_POOL[j].kit_class != RF_CLASS_DHAROK) continue;
+            loadout_new &= memcmp(&RISKFIGHT_POOL_LOADOUT[i], &RISKFIGHT_POOL_LOADOUT[j], sizeof(RiskfightLoadout)) != 0;
+            setup_new &= memcmp(RISKFIGHT_POOL[i].equipment, RISKFIGHT_POOL[j].equipment, NUM_GEAR_SLOTS) || RISKFIGHT_POOL[i].weapon_count != RISKFIGHT_POOL[j].weapon_count ||
+                memcmp(RISKFIGHT_POOL[i].weapons, RISKFIGHT_POOL[j].weapons, RF_KIT_WEAPONS);
+        }
+        variants += loadout_new;
+        setups += setup_new;
+    }
+    assert(riskfight_loadout_class(&RISKFIGHT_DHAROK_LOADOUT) == RF_CLASS_DHAROK && riskfight_loadout_class(&RISKFIGHT_VW_LOADOUT) == RF_CLASS_MELEE);
+    assert(setups >= 50);
+    printf("pure self-play kits: seat 0 dharok %.4f / seat 1 %.4f, same class %.4f (%.4f), seat 1 pool kit %.4f, dharok v dharok %.4f; "
+        "%d Dharok's loadouts in the pool (%d gear and weapon setups, the rest the orb copies) plus our own\n",
+        (double)seat_n[0][RF_CLASS_DHAROK] / CLASS_DRAWS, (double)seat_n[1][RF_CLASS_DHAROK] / CLASS_DRAWS, same, same_expected, (double)his_random / CLASS_DRAWS,
+        (double)pair[RF_CLASS_DHAROK][RF_CLASS_DHAROK] / CLASS_DRAWS, variants, setups);
+    destroy(env);
+}
+
 int main(void) {
     test_mix_fractions();
     test_dharok_mix_fractions();
@@ -516,6 +661,8 @@ int main(void) {
     test_start_views_mirror();
     test_session_rules_are_symmetric();
     test_every_fight_is_a_regear();
+    test_kit_class_conditioning();
+    test_self_play_kit_symmetry();
     puts("riskfight mix and seat symmetry passed");
     return 0;
 }

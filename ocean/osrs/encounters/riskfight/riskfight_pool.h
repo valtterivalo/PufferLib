@@ -10,6 +10,10 @@ enum { RF_POOL_MAX = 640, RF_KIT_WEAPONS = 5 };
 
 typedef enum { RF_KIT_EMPIRICAL, RF_KIT_ARCHETYPE, RF_KIT_EDGE } RiskfightKitKind;
 
+/* What kind of fighter a kit makes (riskfight_loadout_class), the classes a training draw conditions on (riskfight_training.h, kit_same_class): Dharok's
+ * (helm, platebody and platelegs worn and the greataxe carried), the Soulreaper axe, a ranged weapon, or any other melee kit. RF_CLASS_ANY: no condition. */
+typedef enum { RF_CLASS_ANY, RF_CLASS_DHAROK, RF_CLASS_SOULREAPER, RF_CLASS_RANGED, RF_CLASS_MELEE, RF_CLASS_COUNT } RiskfightKitClass;
+
 typedef struct {
     const char* name;
     const char* source;                  /* where the row comes from: the tapes/duels it was mined from, or the wiki/meta reason of an archetype */
@@ -23,6 +27,7 @@ typedef struct {
     int hitpoints;                       /* starting hitpoints (121: overhealed, as both sides of the live fights) */
     int ranged_level;                    /* ranged level he starts at (a ranger arrives boosted); 0 leaves the maxed account's 99 */
     int oppfit_ok;                       /* the fitted opponent (OppFit) can play this kit: melee weapons whose specials are VW, maul, AGS, claws */
+    int kit_class;                       /* RiskfightKitClass of its loadout (riskfight_loadout_class), set at load */
 } RiskfightKit;
 
 static RiskfightKit RISKFIGHT_POOL[RF_POOL_MAX];

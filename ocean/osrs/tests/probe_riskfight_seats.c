@@ -1,9 +1,9 @@
-/* Seat symmetry of pure self-play: one policy on both seats of tag-0 self-play envs (both seats in our kits, price 1), teleports taken out of both seats'
+/* Seat symmetry of pure self-play: one policy on both seats of tag-0 self-play envs (both seats' kits drawn by one rule, price 1), teleports taken out of both seats'
  * actions, kills by seat 0 and by seat 1 counted over many fights. In a fair mirror they are equal within noise.
  *
  *   probe_riskfight_seats [fights] [policy 0 script / 1 uniform random over the mask] [key=value env kwargs ...]
  * RANDOM_HEADS=<bit mask of RF_ heads>: those heads random, the rest the script's; SEAT1_FIRST: seat 1 decides first. Prints the kills, seat 1's PID share and
- * each seat's share of fights in the Dharok kit. Build as the suite builds riskfight_env_harness.h users (cc -DTRACE_FLOAT ... riskfight_oppfit_bridge.o). */
+ * each seat's share of fights in a Dharok's kit (riskfight_loadout_class). Build as the suite builds riskfight_env_harness.h users (cc -DTRACE_FLOAT ... riskfight_oppfit_bridge.o). */
 #include "riskfight_env_harness.h"
 #include <stdio.h>
 
@@ -77,7 +77,7 @@ int main(int argc, char** argv) {
                     }
                 }
             if (e->wait_left == 0) { pid_ticks++; pid1 += e->state.env.pid_holder; }
-            const int dharok[2] = {e->context.loadout[0] == &RISKFIGHT_DHAROK_LOADOUT, e->context.loadout[1] == &RISKFIGHT_DHAROK_LOADOUT};
+            const int dharok[2] = {riskfight_loadout_class(e->context.loadout[0]) == RF_CLASS_DHAROK, riskfight_loadout_class(e->context.loadout[1]) == RF_CLASS_DHAROK};
             const float before = e->log.fights_selfplay;
             puf_step(e);
             if (e->log.fights_selfplay > before) for (int s = 0; s < 2; s++) dharok_fights[s] += dharok[s];

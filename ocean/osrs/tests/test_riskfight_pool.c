@@ -143,7 +143,7 @@ static void test_every_kit_plays(void) {
         context.opp_kit = NULL;
         riskfight_reset((EncounterState*)&state, (EncounterContext*)&context, 7000 + (uint32_t)i);
         context.opp_kit = &RISKFIGHT_POOL[i];
-        riskfight_kit_apply(&state, context.opp_kit, 12345u + (uint32_t)i);
+        riskfight_kit_apply(&state, 1, context.opp_kit, 12345u + (uint32_t)i);
         riskfight_observe_visible(&state, 0, 1);
         state.opponent_profile = &RISKFIGHT_HUMAN_PROFILES[i % RISKFIGHT_HUMAN_TRAIN_PROFILES];
         int his_swings = 0, his_ranged = 0;

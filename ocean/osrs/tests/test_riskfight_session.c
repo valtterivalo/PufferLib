@@ -69,8 +69,10 @@ static int count_food(const Player* p) {
         n += osrs_inventory_cell_metadata(&p->inventory_cells[slot])->click_action == OSRS_CLICK_EAT;
     return n;
 }
+/** Empties `count` bag slots from `from`, sparing the teleport tab: the bags are shuffled at every reset, so the tab may sit anywhere. */
 static void empty_slots(Player* p, int from, int count) {
-    for (int slot = from; slot < from + count; slot++) p->inventory_cells[slot] = osrs_inventory_cell_from_content_code(0);
+    for (int slot = from; slot < from + count; slot++)
+        if (osrs_inventory_cell_metadata(&p->inventory_cells[slot])->click_action != OSRS_CLICK_TELEPORT) p->inventory_cells[slot] = osrs_inventory_cell_from_content_code(0);
 }
 
 /* A kill: he dies on the next tick; the next fight is a regear for both, after R. */

@@ -14,10 +14,15 @@ typedef struct {
     float rep_start_probability; /* the share of sessions that start with a reputation (RF_REP_START_PROBABILITY unless rep_start_probability is set) */
     RiskfightRepRules rep; /* what a reputation costs (riskfight_session.h): env keys rep_search, rep_rag, rep_half_life, defaulting to RF_REP_SEARCH, RF_REP_RAG, RF_REP_HALF_LIFE_TICKS */
     float pool_probability; /* self-play: the share of net-played opponents that wear a pool kit instead of one of our kits (needs opponent_pool) */
+    float same_class; /* kit_same_class: the share of new opponents whose kit is drawn among seat 0's kit class (RiskfightKitClass) instead of without a condition */
+    float learner_random_kit; /* the share of sessions in which seat 0 wears a pool kit it can play instead of one of our kits (needs live_loadout 3 or 4) */
 } RiskfightTrainingConfig;
 
 typedef enum { RF_TRAIN_LEARNED, RF_TRAIN_SCRIPTED } RiskfightTrainingOpponent;
 typedef enum { RF_START_FRESH, RF_START_MIDFIGHT, RF_START_PREFIX_TERMINAL } RiskfightTrainingStart;
+
+/** A kit a seat wears: its loadout, and the pool kit it is (NULL for one of ours). */
+typedef struct { const RiskfightLoadout* loadout; const RiskfightKit* kit; } RiskfightTrainingKit;
 
 typedef struct {
     RiskfightTrainingConfig config;
@@ -31,11 +36,13 @@ typedef struct {
     int omissions;
     float rep; /* our reputation in this session (riskfight_session.h): rude teleports, decaying; read at every new opponent and by the observation */
     float his_rep; /* seat 1's, kept the same way from its own rude teleports while a net plays it (self-play): it lengthens the waits as ours does */
-    int mirror; /* this opponent is the learning policy itself (pure self-play): the even mirror of riskfight_training_draw_opponent */
-    /* Seat 1's kit in the mirror, drawn with ours at the session's start and kept for all its opponents, as ours is kept. A kit drawn per opponent while ours
-     * is drawn per session gave the seats different kit shares per fight (a kit that ends fights sooner fills more of ours: 54% Dharok fights for seat 0 against
-     * 51% for seat 1 under a policy that orbs at random), and one policy then won more kills from one seat. */
-    const RiskfightLoadout* mirror_kit;
+    int mirror; /* this opponent is the learning policy itself (pure self-play): both seats drawn alike at price 1 (riskfight_training_draw_opponent) */
+    /* Seat 1's kit in the mirror and its ring's draw, drawn with ours at the session's start (by our rule, given our class with kit_same_class) and kept for
+     * all its opponents, as ours is kept. A kit drawn per opponent while ours is drawn per session gave the seats different kit shares per fight (a kit that
+     * ends fights sooner fills more of ours: 54% Dharok fights for seat 0 against 51% for seat 1 under a policy that orbs at random), and one policy then won
+     * more kills from one seat. */
+    RiskfightTrainingKit mirror_kit;
+    uint32_t mirror_roll;
 } RiskfightTraining;
 
 static RiskfightTrainingConfig riskfight_training_config(Dict* kwargs) {
@@ -73,6 +80,12 @@ static RiskfightTrainingConfig riskfight_training_config(Dict* kwargs) {
     DictItem* pool_share = dict_find(kwargs, "selfplay_pool_probability");
     config.pool_probability = pool_share ? (float)pool_share->value : 0;
     assert(config.pool_probability >= 0 && config.pool_probability <= 1);
+    DictItem* same_class = dict_find(kwargs, "kit_same_class");
+    config.same_class = same_class ? (float)same_class->value : 0;
+    assert(config.same_class >= 0 && config.same_class <= 1);
+    DictItem* random_kit = dict_find(kwargs, "learner_random_kit");
+    config.learner_random_kit = random_kit ? (float)random_kit->value : 0;
+    assert(config.learner_random_kit >= 0 && config.learner_random_kit <= 1);
     for (int i = 0; i < 5; i++) {
         DictItem* item = dict_find(kwargs, names[i]);
         if (item) values[i] = item->value;
@@ -110,6 +123,25 @@ static const RiskfightLoadout* riskfight_training_draw_kit(RiskfightTraining* tr
     if (kit_mix == RF_KIT_MIX_VW) return kits[encounter_rand_int(&training->rng, 3)];
     int draw = encounter_rand_int(&training->rng, 6);
     return draw < 3 ? &RISKFIGHT_DHAROK_LOADOUT : kits[draw - 3];
+}
+
+/** Seat 0's kit for a session (context->kit_mix set): with learner_random_kit a pool kit seat 0 can play (riskfight_kit_learner_ok), by its pool weight, else
+ * one of our kits (riskfight_training_draw_kit). A net-played seat 1 that wears one of ours draws by the same rule. */
+static RiskfightTrainingKit riskfight_training_draw_ours(RiskfightTraining* training, int kit_mix) {
+    if (riskfight_training_draw(training, training->config.learner_random_kit)) {
+        const RiskfightKit* kit = riskfight_pool_pick_where((float)(xorshift32(&training->rng) >> 8) / 16777216.0f, RF_PICK_LEARNER); /* 24 bits, as the reset's pick */
+        return (RiskfightTrainingKit){&RISKFIGHT_POOL_LOADOUT[kit - RISKFIGHT_POOL], kit};
+    }
+    return (RiskfightTrainingKit){riskfight_training_draw_kit(training, kit_mix), NULL};
+}
+
+/** riskfight_training_draw_ours given the class of the kit it returns, by rejection: exact, and it ends because `kit_class` is the class of seat 0's kit,
+ * which the same rule drew. */
+static RiskfightTrainingKit riskfight_training_draw_ours_of(RiskfightTraining* training, int kit_mix, RiskfightKitClass kit_class) {
+    for (;;) {
+        RiskfightTrainingKit drawn = riskfight_training_draw_ours(training, kit_mix);
+        if (riskfight_loadout_class(drawn.loadout) == kit_class) return drawn;
+    }
 }
 
 /** A scripted session opponent: a training human, or a synthetic curveball. */
@@ -202,9 +234,12 @@ static void riskfight_training_randomize(RiskfightTraining* training, RiskfightS
 
 /** Who plays the next new opponent and what he wears, drawn before his reset. He is played by the script or OppFit (the lone opponent of a self_play 0 env;
  * in a self-play env with a frozen policy, with probability scripted_probability) or by a net in seat 1: the learning policy, or the frozen checkpoint the
- * env is tagged with. The script and OppFit play pool kits (needs opponent_pool); a net wears a pool kit with selfplay_pool_probability, else one of our
- * kits, drawn as ours are (context->kit_mix). A pure self-play env (self_play, frozen_policy 0) always gives seat 1 to the learning policy: its rows train
- * policy 0, so a script there would teach the policy actions the env ignored. */
+ * env is tagged with. The script and OppFit play pool kits (needs opponent_pool); a frozen net wears a pool kit with selfplay_pool_probability, else a kit
+ * drawn as seat 0's is (riskfight_training_draw_ours; with no kit mix, live_loadout's). A pure self-play env (self_play, frozen_policy 0) always gives seat 1 to
+ * the learning policy: its rows train policy 0, so a script there would teach the policy actions the env ignored.
+ * The kit is conditioned on seat 0's kit class (riskfight_loadout_class): with kit_same_class a pool kit comes from the pool's kits of that class, and a kit
+ * drawn as seat 0's is drawn given that class; else without a condition. In Dharok's kit one mostly meets Dharok's kits, rarely a Voidwaker or a Soulreaper
+ * kit, and the other way round. A ragger keeps his ranged pool kit. */
 static void riskfight_training_draw_opponent(RiskfightTraining* training, RiskfightContext* context, int frozen_policy) {
     training->opponent = RF_TRAIN_LEARNED;
     training->scripted = NULL;
@@ -221,18 +256,26 @@ static void riskfight_training_draw_opponent(RiskfightTraining* training, Riskfi
     }
     context->opp_driven = training->opponent == RF_TRAIN_SCRIPTED;
     const int driven = !context->self_play || context->opp_driven;
-    /* Pure self-play is an even mirror: both seats wear our kits (drawn as ours, or ours itself without a kit mix) and fight at price 1
-     * (riskfight_training_new_opponent). Self-play is there for skilled opponents; stakes and pool kits are modelled against frozen and scripted ones. */
+    /* Pure self-play is symmetric: seat 1 wears the kit drawn with ours at the session's start (riskfight_training_reset), by our rule given our class with
+     * kit_same_class, and both fight at price 1 (riskfight_training_new_opponent). P(classes a, b) = p(a) ((1 - s) p(b) + s [a = b]) is symmetric in a and b. */
     training->mirror = learning_seat;
     context->loadout[1] = context->opp_default;
-    context->opp_plain = 0;
+    context->opp_chosen = NULL;
+    context->opp_class = RF_CLASS_ANY;
+    const RiskfightKitClass ours = riskfight_loadout_class(context->loadout[0] ? context->loadout[0] : &RISKFIGHT_DEFAULT_LOADOUT);
+    context->opp_plain = training->mirror || (!driven && !(context->opponent_pool && riskfight_training_draw(training, training->config.pool_probability)));
     if (training->mirror) {
-        context->opp_plain = 1;
-        context->loadout[1] = training->mirror_kit;
-    } else if (!driven) {
-        context->opp_plain = !riskfight_training_draw(training, training->config.pool_probability);
-        if (context->kit_mix != RF_KIT_MIX_NONE) context->loadout[1] = riskfight_training_draw_kit(training, context->kit_mix);
-    }
+        context->loadout[1] = training->mirror_kit.loadout;
+        context->opp_chosen = training->mirror_kit.kit;
+        context->opp_roll = training->mirror_roll;
+    } else if (context->opp_plain && context->kit_mix != RF_KIT_MIX_NONE) {
+        RiskfightTrainingKit his = riskfight_training_draw(training, training->config.same_class) ?
+            riskfight_training_draw_ours_of(training, context->kit_mix, ours) : riskfight_training_draw_ours(training, context->kit_mix);
+        context->loadout[1] = his.loadout;
+        context->opp_chosen = his.kit;
+        context->opp_roll = xorshift32(&training->rng);
+    } else if (!context->opp_plain && context->opponent_pool && !context->opp_ragger && riskfight_training_draw(training, training->config.same_class))
+        context->opp_class = ours;
 }
 
 /** A new opponent steps up to a freshly reset fight (riskfight_training_draw_opponent before the reset): his price, who plays him, and his randomized side.
@@ -288,9 +331,19 @@ static void riskfight_training_shuffle_bags(RiskfightTraining* training, Riskfig
 /** The first fight of a session: our kit (drawn once per session), full supplies on both sides, a new opponent. */
 static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* training,
     RiskfightState* state, RiskfightContext* context, int frozen_policy) {
-    if (context->kit_mix != RF_KIT_MIX_NONE) context->loadout[0] = riskfight_training_draw_kit(training, context->kit_mix);
-    if (context->self_play && frozen_policy == 0)
-        training->mirror_kit = context->kit_mix != RF_KIT_MIX_NONE ? riskfight_training_draw_kit(training, context->kit_mix) : context->loadout[0];
+    if (context->kit_mix != RF_KIT_MIX_NONE) {
+        RiskfightTrainingKit ours = riskfight_training_draw_ours(training, context->kit_mix);
+        context->loadout[0] = ours.loadout;
+        context->our_kit = ours.kit;
+        context->our_roll = xorshift32(&training->rng);
+    }
+    if (context->self_play && frozen_policy == 0) {
+        training->mirror_kit = (RiskfightTrainingKit){context->loadout[0], NULL};
+        if (context->kit_mix != RF_KIT_MIX_NONE)
+            training->mirror_kit = riskfight_training_draw(training, training->config.same_class) ?
+                riskfight_training_draw_ours_of(training, context->kit_mix, riskfight_loadout_class(context->loadout[0])) : riskfight_training_draw_ours(training, context->kit_mix);
+        training->mirror_roll = xorshift32(&training->rng);
+    }
     training->rep = riskfight_training_draw(training, training->config.rep_start_probability) ? RF_REP_START_MAX * (1.0f - encounter_rand_float(&training->rng)) : 0;
     training->his_rep = 0;
     riskfight_training_draw_opponent(training, context, frozen_policy);

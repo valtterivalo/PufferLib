@@ -36,6 +36,39 @@ static const RiskfightKit* riskfight_pool_pick_ranged(float roll) {
     return last;
 }
 
+/** Whether seat 0 can wear the kit (riskfight_training.h, learner_random_kit): no ranged weapon. Under deployable a net's prayers and style are not its own
+ * (riskfight_plugin_prayers keeps Piety up, the prayer and style heads are masked), so a net in seat 0 could not fight a ranged kit on Rigour and rapid. */
+static int riskfight_kit_learner_ok(const RiskfightKit* k) {
+    for (int i = 0; i < k->weapon_count; i++)
+        if (k->weapons[i] != ITEM_NONE && get_item_attack_style(k->weapons[i]) == ATTACK_STYLE_RANGED) return 0;
+    return 1;
+}
+
+/* riskfight_pool_pick_where's filter: a RiskfightKitClass, or the kits seat 0 can wear. */
+enum { RF_PICK_LEARNER = -1 };
+static int riskfight_pool_keeps(const RiskfightKit* k, int filter) { return filter == RF_PICK_LEARNER ? riskfight_kit_learner_ok(k) : k->kit_class == filter; }
+
+/** Draws a kit by weight among the pool's kits `filter` keeps (a class, or RF_PICK_LEARNER), from a uniform roll in [0, 1). */
+static const RiskfightKit* riskfight_pool_pick_where(float roll, int filter) {
+    float total = 0;
+    for (int i = 0; i < RISKFIGHT_POOL_COUNT; i++) if (riskfight_pool_keeps(&RISKFIGHT_POOL[i], filter)) total += RISKFIGHT_POOL[i].weight;
+    assert(total > 0 && roll >= 0 && roll < 1);
+    float at = roll * total, sum = 0;
+    const RiskfightKit* last = NULL;
+    for (int i = 0; i < RISKFIGHT_POOL_COUNT; i++) {
+        if (!riskfight_pool_keeps(&RISKFIGHT_POOL[i], filter)) continue;
+        last = &RISKFIGHT_POOL[i];
+        sum += last->weight;
+        if (at < sum) return last;
+    }
+    return last; /* roll * total rounded up to the total */
+}
+
+/** A new opponent's kit (riskfight_reset): by weight from the whole pool (RF_CLASS_ANY), or among the kits of one class. */
+static const RiskfightKit* riskfight_pool_pick_class(float roll, int kit_class) {
+    return kit_class == RF_CLASS_ANY ? riskfight_pool_pick(roll) : riskfight_pool_pick_where(roll, kit_class);
+}
+
 static RiskfightLoadout RISKFIGHT_POOL_LOADOUT[RF_POOL_MAX];
 static int RISKFIGHT_POOL_EXCLUDED_ROWS, RISKFIGHT_POOL_EXCLUDED_FIGHTS, RISKFIGHT_POOL_EXCLUDED_MAGIC_ROWS;
 
@@ -272,6 +305,23 @@ static void riskfight_loadout_add_orb(RiskfightLoadout* l) {
     abort();
 }
 
+/** The RiskfightKitClass of a loadout, ours or a pool kit's, read off its worn gear and the weapons it holds, worn or in the bag: Dharok's when the helm,
+ * platebody and platelegs are worn and the greataxe is held; else the Soulreaper axe when it is held; else ranged when a ranged weapon is; else melee. */
+static RiskfightKitClass riskfight_loadout_class(const RiskfightLoadout* l) {
+    int axe = l->equipment[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE, reaper = l->equipment[GEAR_SLOT_WEAPON] == ITEM_SOULREAPER_AXE;
+    int ranged = l->equipment[GEAR_SLOT_WEAPON] != ITEM_NONE && get_item_attack_style(l->equipment[GEAR_SLOT_WEAPON]) == ATTACK_STYLE_RANGED;
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        const OsrsItemContentMetadata* m = osrs_item_content_metadata(l->inventory[slot]);
+        if (m->gear_slot != GEAR_SLOT_WEAPON) continue;
+        axe |= m->item_idx == ITEM_DHAROKS_GREATAXE;
+        reaper |= m->item_idx == ITEM_SOULREAPER_AXE;
+        ranged |= get_item_attack_style(m->item_idx) == ATTACK_STYLE_RANGED;
+    }
+    if (axe && l->equipment[GEAR_SLOT_HEAD] == ITEM_DHAROKS_HELM && l->equipment[GEAR_SLOT_BODY] == ITEM_DHAROKS_PLATEBODY &&
+        l->equipment[GEAR_SLOT_LEGS] == ITEM_DHAROKS_PLATELEGS) return RF_CLASS_DHAROK;
+    return reaper ? RF_CLASS_SOULREAPER : ranged ? RF_CLASS_RANGED : RF_CLASS_MELEE;
+}
+
 __attribute__((constructor)) static void riskfight_build_pool(void) {
     static RiskfightKit group[3][RF_POOL_MAX];
     int count[3] = {0, 0, 0};
@@ -303,6 +353,7 @@ __attribute__((constructor)) static void riskfight_build_pool(void) {
             int orb = riskfight_kit_orb_ok(&k);
             k.weight = orb ? weight * (1000 - RF_KIT_ORB_PM) / 1000 : weight;
             riskfight_kit_loadout(&k, &RISKFIGHT_POOL_LOADOUT[RISKFIGHT_POOL_COUNT]);
+            k.kit_class = riskfight_loadout_class(&RISKFIGHT_POOL_LOADOUT[RISKFIGHT_POOL_COUNT]);
             riskfight_pool_add(&k);
             if (!orb) continue;
             k.weight = weight * RF_KIT_ORB_PM / 1000;
@@ -313,11 +364,11 @@ __attribute__((constructor)) static void riskfight_build_pool(void) {
     }
 }
 
-/** What a pool kit needs set on his side after the shared reset: where he stands, a ranger's boosted level, and a ring when the kit shows none (the client does
- * not show rings). `roll` is a uniform 32-bit draw. */
-static void riskfight_kit_apply(RiskfightState* s, const RiskfightKit* kit, uint32_t roll) {
-    Player* him = &s->env.players[1];
-    him->x += kit->start_offset - 1;
+/** What a pool kit needs set on the side of `seat` after the shared reset: where he stands (a ranger's start tile, away from the other seat), a ranger's
+ * boosted level, and a ring when the kit shows none (the client does not show rings). `roll` is a uniform 32-bit draw. */
+static void riskfight_kit_apply(RiskfightState* s, int seat, const RiskfightKit* kit, uint32_t roll) {
+    Player* him = &s->env.players[seat];
+    him->x += (seat == 1 ? 1 : -1) * (kit->start_offset - 1);
     him->dest_x = him->x;
     if (kit->ranged_level) him->current_ranged = kit->ranged_level;
     if (kit->equipment[GEAR_SLOT_RING] == ITEM_NONE) {

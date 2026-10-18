@@ -175,7 +175,7 @@ static void test_fight_and_inference(void) {
         riskfight_finalize_context((EncounterState*)&state, (EncounterContext*)&context);
         context.loadout[1] = &RISKFIGHT_POOL_LOADOUT[kit - RISKFIGHT_POOL];
         riskfight_reset((EncounterState*)&state, (EncounterContext*)&context, 500 + (uint32_t)e);
-        riskfight_kit_apply(&state, kit, 77u + (uint32_t)e);
+        riskfight_kit_apply(&state, 1, kit, 77u + (uint32_t)e);
         riskfight_observe_visible(&state, 0, 1);
         state.opponent_profile = &RISKFIGHT_HUMAN_PROFILES[e % RISKFIGHT_HUMAN_TRAIN_PROFILES];
         while (!state.env.episode_over) {

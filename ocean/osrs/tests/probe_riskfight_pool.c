@@ -24,7 +24,7 @@ int main(int argc, char** argv) {
             context.loadout[1] = &RISKFIGHT_POOL_LOADOUT[i];
             riskfight_reset((EncounterState*)&state, (EncounterContext*)&context, 1 + (uint32_t)(e * 7919 + i * 104729));
             context.opp_kit = k;
-            riskfight_kit_apply(&state, k, 0x9e3779b9u * (uint32_t)(e + 1));
+            riskfight_kit_apply(&state, 1, k, 0x9e3779b9u * (uint32_t)(e + 1));
             riskfight_observe_visible(&state, 0, 1);
             state.opponent_profile = &RISKFIGHT_HUMAN_PROFILES[e % RISKFIGHT_HUMAN_TRAIN_PROFILES];
             uint8_t seen[RF_KIT_WEAPONS + 2] = {0};

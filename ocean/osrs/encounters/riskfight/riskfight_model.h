@@ -270,10 +270,15 @@ typedef struct {
     const RiskfightLoadout* opp_default; /* his kit when he takes no pool kit, as live_loadout set it */
     int opponent_pool; /* a reset draws his kit from the opponent pool (riskfight_kits.h) unless opp_plain; the script, OppFit or a net may play him */
     int opp_ragger;    /* the next new opponent is a ragger: a ranged pool kit (needs opponent_pool) */
+    int opp_class;     /* RiskfightKitClass the next new opponent's pool kit is drawn from (RF_CLASS_ANY: the whole pool); training sets it (kit_same_class) */
     int opp_plain;     /* the next new opponent keeps loadout[1] as the caller set it instead of drawing a pool kit (a net-played seat 1 draws one of our kits) */
+    const RiskfightKit* opp_chosen; /* with opp_plain: the pool kit loadout[1] is, when the caller's draw was one (a net in a random kit), else NULL; the
+                                     * caller sets opp_roll with it */
     const RiskfightKit* opp_kit; /* the kit of this fight, NULL outside the pool */
     uint32_t opp_roll;           /* the draw of his unseen ring, kept with the kit across the rounds of a session */
     int keep_opp_kit;            /* the next reset is another round against the same opponent: his kit and ring stay */
+    const RiskfightKit* our_kit; /* the pool kit loadout[0] is (training: learner_random_kit), NULL for one of our kits; set with our_roll, its ring's draw */
+    uint32_t our_roll;
     int self_play;               /* seat 1 is a second agent; with opp_driven it is the script or OppFit, not that agent */
     int opp_driven;              /* self-play only: the script or the OppFit hook plays seat 1 this fight, the actions of the second agent are ignored */
     int opp_omit;                /* self-play only: this tick the driven opponent does nothing (scripted_omission, anneals to 0) */
@@ -705,15 +710,14 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
         ctx->motor[seat].pending_count = 0;
         ctx->motor[seat].rng = osrs_lowbias32(rng ^ (0x6d6f746fu + (uint32_t)seat)) | 1;
     }
-    if (!ctx->opponent_pool) ctx->opp_kit = NULL;
-    else {
-        if (!ctx->keep_opp_kit) {
-            float roll = (float)(osrs_lowbias32(rng ^ 0x6b697473u) >> 8) / 16777216.0f;
-            ctx->opp_kit = ctx->opp_plain ? NULL : ctx->opp_ragger ? riskfight_pool_pick_ranged(roll) : riskfight_pool_pick(roll);
-            ctx->opp_roll = osrs_lowbias32(rng ^ 0x72696e67u);
-        }
-        if (ctx->opp_kit) ctx->loadout[1] = &RISKFIGHT_POOL_LOADOUT[ctx->opp_kit - RISKFIGHT_POOL];
+    if (!ctx->keep_opp_kit && ctx->opp_plain) ctx->opp_kit = ctx->opp_chosen;
+    else if (!ctx->keep_opp_kit) {
+        float roll = (float)(osrs_lowbias32(rng ^ 0x6b697473u) >> 8) / 16777216.0f;
+        ctx->opp_kit = !ctx->opponent_pool ? NULL : ctx->opp_ragger ? riskfight_pool_pick_ranged(roll) : riskfight_pool_pick_class(roll, ctx->opp_class);
+        ctx->opp_roll = osrs_lowbias32(rng ^ 0x72696e67u);
     }
+    if (ctx->opp_kit) ctx->loadout[1] = &RISKFIGHT_POOL_LOADOUT[ctx->opp_kit - RISKFIGHT_POOL];
+    if (ctx->our_kit) assert(ctx->loadout[0] == &RISKFIGHT_POOL_LOADOUT[ctx->our_kit - RISKFIGHT_POOL]);
     memset(s, 0, sizeof(*s));
     s->env.rng_state = rng;
     s->death_price = 1;
@@ -750,7 +754,8 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
         osrs_actor_route_cache_clear(&ctx->routes[i]);
         s->script_seed[i] = osrs_lowbias32(s->env.rng_state + (uint32_t)(i + 1) * 0x9e3779b9U);
     }
-    if (ctx->opp_kit) riskfight_kit_apply(s, ctx->opp_kit, ctx->opp_roll);
+    if (ctx->opp_kit) riskfight_kit_apply(s, 1, ctx->opp_kit, ctx->opp_roll);
+    if (ctx->our_kit) riskfight_kit_apply(s, 0, ctx->our_kit, ctx->our_roll);
     s->opponent_profile = riskfight_pick_profile(ctx->opponent, osrs_lowbias32(s->env.rng_state + 3 * 0x9e3779b9U));
     /* A net in a Dharok kit (RF_DHAROK_KIT_PIECES pieces, worn or in the bag) leaves as the spectated Dharok fighters do, whatever base Defence it fights on. */
     const RiskfightLoadout* his_loadout = ctx->loadout[1] ? ctx->loadout[1] : &RISKFIGHT_DEFAULT_LOADOUT;
