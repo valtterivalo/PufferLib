@@ -703,6 +703,7 @@ Open, not bugs:
 
 Live candidate a1: anchor hyperparameters, 182.7M steps on 37d061a46. Greedy ladder 8.88; argmax probe 7.85 per hour in the Dharok kit, 8.65 in VW. No axe, orb or maul use. Body or legs come off on 0.55 steps per fight. Installed with the parity fixes; replays of 4 live sessions run clean.
 
+<<<<<<< HEAD
 ## 2026-10-19: armour strips stay allowed (the user's call)
 
 - **a1's strips don't pay.** a1 takes off Dharok body or legs on 0.55 steps per fight in the sim; live it unequipped the legs, worn slot 7, at ticks 179-182. A paired counterfactual (65a6d7335, reverted: clone at each strip, strip vs never strip for the rest of the fight) gave:
@@ -762,3 +763,40 @@ Live candidate a1: anchor hyperparameters, 182.7M steps on 37d061a46. Greedy lad
   - The spread moves toward real. Axe share sd over fighter-fights is .35 pooled, .40-.41 with personas, and .46 real.
   - The harness's crude unfed-at-next-hit reading (.38 sim against .064 real on current status) is not like for like, so the eat spread is not checked in the sim.
 - Tests pass: test_riskfight_dharok_script, _mix, _mechanics, _session. The goldens are not refreshed: the persona changes Dharok pool opponents' meal and axe rolls.
+=======
+## 2026-10-19: low-HP offence, and eating while we are below his range
+
+- **The policy side: in the sim, not eating when he is low pays.** Setup:
+  - a1, argmax, in the training env (pool opponent, Dharok kit half the time), 180 sessions.
+  - At every decision with our HP at or below his chance range and a meal allowed, the state is cloned. Branch A forces a meal, branch B forces none, then a1 plays the fight out.
+  - When he is below 40 HP, a1 eats on 0.07 (Dharok kit) to 0.12 (VW kit) of these decisions. From 40 up it eats on 0.37-0.38.
+  - Before the fix below, Dharok kit, he < 40: KO .362 and death .010 with the meal, against .429 and .014 without. VW kit: .428 / .014 against .485 / .017.
+- **Cause 1, the click rule.** In the game, an inventory action (eat, drink, equip, the orb) clears the attack interaction. An attack click after it on the same tick locks back on.
+  - The user confirmed this. Our live recordings agree: of 91 meals within 8 ticks of our swing, our interaction read NONE within 2 ticks in 72, and the 4 meals with no attack click after them had no swing.
+  - `riskfight_attack_click` used to re-click only when no interaction was active, so any meal or switch while attacking dropped the target. That held for the net, the scripts and live alike.
+  - It now re-clicks after any inventory action. The step and `gs_rl_server` queue the inventory clicks before the attack.
+  - The food's attack delay stays: +3 hard food, +2 fast food, 0 for drinks. `test_riskfight_mechanics`: on a ready tick, drink + attack swings that tick (a tick later without the re-click), and hard food + attack swings 3 ticks later.
+- **After the fix**, same probe:
+
+  | | Meal: KO / death | No meal: KO / death |
+  |---|---|---|
+  | Dharok kit, he < 40 | .362 / .015 | .435 / .032 |
+  | VW kit, he < 40 | .353 / .020 | .406 / .057 |
+
+  Low sim opponents now kill a non-eater 2-3 times as often, but skipping the meal still buys 0.05-0.07 KO.
+- **Cause 2, low attackers, real against sim** (`scripts/measure_dharok_low_attack.py`, both seats on the Dharok script, 6,000 fights). After a hitsplat read leaves him in a band, over the next 8 ticks, real / sim before / sim after:
+
+  | Band | P(swing) | Swing by +2 | Axe swings | Damage per tick |
+  |---|---|---|---|---|
+  | 0-19 | .50 / .50 / .50 | .23 / .10 / .11 | .38 / .16 / .18 | .68 / .50 / .50 |
+  | 20-39 | .60 / .64 / .64 | .31 / .13 / .13 | .34 / .19 / .19 | .74 / .64 / .65 |
+  | 40-59 | .73 / .81 / .81 | .30 / .21 / .20 | .33 / .18 / .18 | .99 / .90 / .90 |
+
+  - The earlier "2.22 against 1.26 damage per tick below 40" was a gap-estimate artefact. An eat animation never shows on the eater's swing tick, so a meal eaten with the swing leaves the swing in too low a band.
+  - The real gap is swing timing and axe share, not swing rate.
+  - Removing the script's STOP on meal ticks moved none of these (KO .198 to .186), so it stays.
+  - KO share: .198 before, .194 after (real .24).
+- **Open:**
+  - `RF_AXE_SWING_PM` is fitted on the stale bar at the swing, which doesn't count meals eaten since his last hitsplat. The script reads its band from true HP after its meals, so low fighters drop out of the <40 axe band.
+  - Reading the band from his HP at his last hitsplat is the next step. The `personas` branch also edits the `axe_pm` line.
+>>>>>>> lowhp-offence
