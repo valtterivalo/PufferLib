@@ -392,7 +392,8 @@ __attribute__((constructor)) static void riskfight_build_dharok_loadout(void) {
         maul = osrs_inventory_content_code_from_item(ITEM_GRANITE_MAUL_ORNATE), axe = osrs_inventory_content_code_from_item(ITEM_DHAROKS_GREATAXE);
     const uint16_t bag[] = {pie, pie, halibut, halibut, restore, marlin, halibut, halibut, restore, marlin, halibut, halibut, marlin, brew,
         marlin, brew, marlin, marlin, marlin, marlin, maul, axe, combat, marlin, orb, marlin, sack, tab};
-    _Static_assert(sizeof(bag) == sizeof(loadout.inventory), "the Dharok kit fills all 28 bag cells");
+    typedef char riskfight_dharok_kit_fills_28_cells[sizeof(bag) == sizeof(loadout.inventory) ? 1 : -1]; /* compiles as C and as CUDA C++ */
+    (void)sizeof(riskfight_dharok_kit_fills_28_cells);
     memcpy(loadout.inventory, bag, sizeof(bag));
     RISKFIGHT_DHAROK_LOADOUT = loadout;
 }
