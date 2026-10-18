@@ -1,3 +1,5 @@
+/* Food's attack delay on the signed attack clock (osrs_player_consumables.h). The continuous cases pin the data-confirmed rule, not the wiki's wording:
+ * a meal on the swing's due tick delays it the full 3 / 2 / 5 ticks (our 159 own tapes, 101 of 106 meals; FINDINGS 2026-10-19, food attack delay). */
 #include <stdio.h>
 #include <string.h>
 #include "ocean/osrs/encounters/encounter_colosseum.h"
