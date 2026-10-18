@@ -702,3 +702,14 @@ Open, not bugs:
 - The Vengeance spam seen in replays is a replay artefact: the replay can't carry out the net's clicks.
 
 Live candidate a1: anchor hyperparameters, 182.7M steps on 37d061a46. Greedy ladder 8.88; argmax probe 7.85 per hour in the Dharok kit, 8.65 in VW. No axe, orb or maul use. Body or legs come off on 0.55 steps per fight. Installed with the parity fixes; replays of 4 live sessions run clean.
+
+## 2026-10-19: a1's strips buy nothing; no strip without a spare
+
+a1 takes Dharok body or legs off 0.55 times per fight in the sim (live too: ticks 179-182 at HP 51, after a meal freed a cell). It never swings the axe, so the set effect never pays. `strip_probe` (new) copies env and net at each strip and plays the fight out twice from the same state and random draws: A strips as chosen, B neither strips now nor later in that fight. Argmax a1, live_loadout 4, fight starts, price table, 3 x 80 sessions per opponent:
+
+| Opponent | Strips | Return A − B to fight end | Damage taken, next 10 steps (A / B) | His swings | His meals | Our teleports (A / B) |
+|---|---|---|---|---|---|---|
+| Script | 499 | −0.009 ± 0.010 | 17.9 / 16.3 | 1.91 / 1.93 | 0.49 / 0.49 | 0.32 / 0.21 |
+| OppFit 1.0 (35% of strips under OppFit) | 458 | −0.022 ± 0.010 | 16.1 / 14.3 | 1.76 / 1.76 | 0.60 / 0.60 | 0.20 / 0.10 |
+
+No payoff, a small cost. He doesn't swing more, eat differently or stay longer: his teleports drop only because we leave first. The death price is drawn per fight, not from worn gear. One step later, only the mechanical observation floats differ: the bag cells, the worn slot, `stripped`, `can_wield_2h` and `hand_busy`. No threat, kosher or session float moves. The deployable mask now lets body or legs come off only for a replacement of that slot in the bag. No kit carries one, so the net never strips. A stripped piece (a recorded start) still goes back on. The script opponent's measured strips are unchanged. `test_riskfight_dharok_kit`; env_trace goldens change with the mask.

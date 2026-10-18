@@ -511,7 +511,7 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
         gear_masks[gear_slot] = heads[head];
         heads[head][RF_UNEQUIP] = p->equipped[gear_slot] != ITEM_NONE && has_empty;
     }
-    int has_teleport = 0, has_orb = 0, one_handed_switch = 0, has_shield = 0, two_handed_wieldable = 0;
+    int has_teleport = 0, has_orb = 0, one_handed_switch = 0, has_shield = 0, two_handed_wieldable = 0, spare[NUM_GEAR_SLOTS] = {0};
     const RiskfightSpecWeapon spec = riskfight_spec_weapon(p);
     const RiskfightThreatGates gates = riskfight_threat_gates(s, agent, spec);
     for (int entry = 0; entry < OSRS_INVENTORY_SIZE; entry++) {
@@ -524,6 +524,7 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
                 else two_handed_wieldable |= allowed;
             }
             if (m->gear_slot == GEAR_SLOT_SHIELD) has_shield = 1;
+            spare[m->gear_slot] = 1;
         }
         if (m->click_action == OSRS_CLICK_EAT) {
             int head = m->consumable_kind == OSRS_CONSUMABLE_HALIBUT || m->consumable_kind == OSRS_CONSUMABLE_KARAMBWAN ? RF_COMBO : RF_FOOD;
@@ -568,10 +569,13 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
         heads[RF_SHIELD][RF_UNEQUIP] &= two_handed_wieldable;
         heads[RF_WEAPON][RF_UNEQUIP] = 0;
         heads[RF_RING][RF_UNEQUIP] = 0;
-        /* Body and legs come off (the strip: he hits more often, into our Vengeance, and our hitpoints drop for a Dharok swing) and go back on from the bag: a bag
-         * piece is offered only while that slot is bare, so it puts back what came off and never swaps one worn piece for another. */
-        for (int head = RF_BODY; head <= RF_LEGS; head++)
-            if (p->equipped[RF_GEAR_SLOT_BY_HEAD[head]] != ITEM_NONE) memset(heads[head] + 1, 0, OSRS_INVENTORY_SIZE);
+        /* Body and legs come off only for a replacement of that slot in the bag. No kit carries one, so this is never: the strip only gives up Defence and a
+         * set effect (strip_probe: no payoff, see FINDINGS). A bag piece goes on only while that slot is bare, so it never swaps one worn piece for another. */
+        for (int head = RF_BODY; head <= RF_LEGS; head++) {
+            const int gear_slot = RF_GEAR_SLOT_BY_HEAD[head];
+            heads[head][RF_UNEQUIP] &= spare[gear_slot];
+            if (p->equipped[gear_slot] != ITEM_NONE) memset(heads[head] + 1, 0, OSRS_INVENTORY_SIZE);
+        }
     }
 }
 

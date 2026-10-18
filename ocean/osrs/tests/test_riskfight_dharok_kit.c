@@ -1,5 +1,5 @@
 /* The user's Dharok kit (riskfight_model.h RISKFIGHT_DHAROK_LOADOUT) end to end: its shape and set effect, the training draw that mixes it with the Voidwaker kits
- * (live_loadout 4), the deployable mask's body/legs strip and re-equip and its orb rule, and the live server's click records for them.
+ * (live_loadout 4), the deployable mask's body/legs rule (no strip without a spare, re-equip of a stripped piece) and its orb rule, and the live server's click records for them.
  *   cc -std=gnu11 -O2 -I. -Isrc -Wno-comment -o /tmp/t ocean/osrs/tests/test_riskfight_dharok_kit.c -lm -lpthread && /tmp/t   (cwd = repo root) */
 #define GS_RL_SERVER_NO_MAIN
 #include "gs_rl_server.c"
@@ -101,18 +101,36 @@ static void test_mixed_draw(void) {
 }
 
 static void test_strip_and_reequip(void) {
+    /* No kit of ours carries a spare body or legs, so the deployable mask never offers a strip: it gives up Defence and the set effect for nothing (strip_probe). */
+    const RiskfightLoadout* kits[4] = {&RISKFIGHT_DHAROK_LOADOUT, &RISKFIGHT_LIVE_LOADOUT, &RISKFIGHT_VW_LOADOUT, &RISKFIGHT_VW_PIES_LOADOUT};
+    for (int k = 0; k < 4; k++) {
+        reset_with(kits[k]);
+        const Player* kp = &state.env.players[0];
+        for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+            const int gear_slot = osrs_inventory_cell_metadata(&kp->inventory_cells[slot])->gear_slot;
+            assert(gear_slot != GEAR_SLOT_BODY && gear_slot != GEAR_SLOT_LEGS);
+        }
+    }
     reset_with(&RISKFIGHT_DHAROK_LOADOUT);
     Player* p = &state.env.players[0];
-    /* A full bag: nothing comes off. */
     unsigned char* mask = mask_of(&state, 1);
     assert(!mask[RF_HEAD_OFFSET[RF_BODY] + RF_UNEQUIP] && !mask[RF_HEAD_OFFSET[RF_LEGS] + RF_UNEQUIP]);
     int eaten = first_slot_of(p, OSRS_CONSUMABLE_HALIBUT, 0);
     p->inventory_cells[eaten] = osrs_inventory_cell_empty();
+    /* A free cell (after a meal) alone does not open the strip; the full mask still allows it. */
     mask = mask_of(&state, 1);
-    assert(mask[RF_HEAD_OFFSET[RF_BODY] + RF_UNEQUIP] && mask[RF_HEAD_OFFSET[RF_LEGS] + RF_UNEQUIP]);
+    assert(!mask[RF_HEAD_OFFSET[RF_BODY] + RF_UNEQUIP] && !mask[RF_HEAD_OFFSET[RF_LEGS] + RF_UNEQUIP]);
     /* The other armour heads stay masked; the weapon and the ring never come off. */
     assert(!mask[RF_HEAD_OFFSET[RF_HEAD] + RF_UNEQUIP] && !mask[RF_HEAD_OFFSET[RF_WEAPON] + RF_UNEQUIP] && !mask[RF_HEAD_OFFSET[RF_RING] + RF_UNEQUIP]);
+    assert(mask_of(&state, 0)[RF_HEAD_OFFSET[RF_BODY] + RF_UNEQUIP]);
+    /* A body in the bag (and a free cell) is a replacement: the body may come off for it, the legs still not. */
+    RiskfightState spare = state;
+    spare.env.players[0].inventory_cells[eaten] = osrs_inventory_cell_from_item(ITEM_FIGHTER_TORSO);
+    spare.env.players[0].inventory_cells[first_slot_of(p, OSRS_CONSUMABLE_MARLIN, 0)] = osrs_inventory_cell_empty();
+    mask = mask_of(&spare, 1);
+    assert(mask[RF_HEAD_OFFSET[RF_BODY] + RF_UNEQUIP] && !mask[RF_HEAD_OFFSET[RF_LEGS] + RF_UNEQUIP]);
 
+    /* Stripped (a recorded start, the full mask's play): the piece goes back on into the bare slot. */
     int actions[2 * RF_HEADS] = {0};
     actions[RF_BODY] = RF_UNEQUIP;
     riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
@@ -136,8 +154,8 @@ static void test_strip_and_reequip(void) {
     assert(p->equipped[GEAR_SLOT_BODY] == ITEM_DHAROKS_PLATEBODY && osrs_inventory_cell_is_empty(&p->inventory_cells[eaten]));
     assert(p->equipment_effect_profile.dharok_piece_count == 3);
     mask = mask_of(&state, 1);
-    assert(mask[RF_HEAD_OFFSET[RF_LEGS] + RF_UNEQUIP]);
-    puts("strip: body and legs come off into a free cell and go back on into a bare slot");
+    assert(!mask[RF_HEAD_OFFSET[RF_LEGS] + RF_UNEQUIP]);
+    puts("strip: never offered without a spare body or legs (no kit has one); a stripped piece goes back on into a bare slot");
 }
 
 static void test_orb_rule(void) {
@@ -217,7 +235,7 @@ static void test_server_records(void) {
 
     unsigned char mask[RF_MASK_SIZE];
     riskfight_write_action_mask(s, 0, mask);
-    assert(mask[RF_HEAD_OFFSET[RF_BODY] + RF_UNEQUIP] && mask[RF_HEAD_OFFSET[RF_ORB] + 1]);
+    assert(!mask[RF_HEAD_OFFSET[RF_BODY] + RF_UNEQUIP] && mask[RF_HEAD_OFFSET[RF_ORB] + 1]); /* no spare body: no strip; the wire still maps one */
     int actions[RF_HEADS] = {0};
     actions[RF_BODY] = RF_UNEQUIP;
     actions[RF_ORB] = 1;
