@@ -393,19 +393,6 @@ static void riskfight_actor_inputs(RiskfightState* s, RiskfightContext* ctx,
     }
 }
 
-/** The teleport tick of `escaper`: his attacks that have not landed are cancelled, but what the escaper's own hits reflect onto him this tick (the other side's ring
- * of recoil, his Vengeance) lands, whether it was queued before or after the escaper's turn. */
-static void riskfight_escape_hits(RiskfightState* s, int escaper) {
-    const int other = 1 - escaper;
-    Player* p = &s->env.players[other];
-    PendingHitMetadata* metadata = s->env.pending_hit_metadata[other];
-    while (p->num_pending_hits > 0) {
-        PendingHit* hit = &p->pending_hits[0];
-        if (hit->kind == OSRS_HIT_RECOIL || hit->kind == OSRS_HIT_VENGEANCE) apply_damage(&s->env, other, escaper, hit, &metadata[0]);
-        pvp_remove_pending_hit(p, metadata, 0);
-    }
-}
-
 static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
     const HumanCommandQueue* first, const HumanCommandQueue* second) {
     assert(!s->env.episode_over);
@@ -449,7 +436,10 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
     }
     for (int turn = 0; turn < 2; turn++) {
         int i = s->env.pid_holder ^ turn;
-        if (!s->escaped[i]) {
+        if (s->escaped[i]) {
+            s->env.players[1 - i].num_pending_hits = 0;
+            memset(s->env.pending_hit_metadata[1 - i], 0, sizeof(s->env.pending_hit_metadata[1 - i]));
+        } else {
             int active = s->env.players[i].veng_active;
             int poison_damage = osrs_poison_tick(&s->poison[i]);
             if (poison_damage > 0 && s->env.players[i].current_hitpoints > 0) {
@@ -489,8 +479,6 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         pvp_resolve_same_tile(&s->env, s->env.pid_holder, 1 - s->env.pid_holder,
             ctx->route_topology);
     }
-    for (int i = 0; i < 2; i++)
-        if (s->escaped[i]) riskfight_escape_hits(s, i);
     for (int i = 0; i < 2; i++) {
         Player* p = &s->env.players[i];
         if (p->food_timer > 0) p->food_timer--;
