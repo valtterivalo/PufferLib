@@ -113,12 +113,13 @@ enum {
      *   26 his_veng_up       his Vengeance counted up (riskfight_his_veng_up)
      *   27 orb               1 while we carry a locator orb, 28 1 while our hitpoints are above 1 (the orb can take one off)
      *   29 safe_window       his_ready_min minus the ticks until our own next swing (same convention: 1 when we can swing on the tick about to be played,
-     *                        0 when we could already before), / RF_OBSERVATION_ATTACK_AGE_SCALE in [-1, 1]: positive, our swing comes first */
+     *                        0 when we could already before), / RF_OBSERVATION_ATTACK_AGE_SCALE in [-1, 1]: positive, our swing comes first
+     *   30 hand_busy         1 while clicks of our previous decision are still unlanded (RiskfightState.hand_busy): this tick's mask is the no-op of every head */
     RF_TACTICS_START = RF_TIMING_START + RF_TIMING_SIZE,
     RF_TACTICS_AXE_MAX = 0, RF_TACTICS_STRIPPED = 3, RF_TACTICS_IDENTITY = 4, RF_TACTICS_KINDS = 4,
     RF_TACTICS_CAN_WIELD_2H = RF_TACTICS_IDENTITY + RF_THREAT_OURS_SLOTS * RF_TACTICS_KINDS,
     RF_TACTICS_KO = RF_TACTICS_CAN_WIELD_2H + 1, RF_TACTICS_KO_COUNT = 5,
-    RF_TACTICS_HIS_VENG = RF_TACTICS_KO + RF_TACTICS_KO_COUNT, RF_TACTICS_ORB, RF_TACTICS_HP_ABOVE_1, RF_TACTICS_SAFE_WINDOW,
+    RF_TACTICS_HIS_VENG = RF_TACTICS_KO + RF_TACTICS_KO_COUNT, RF_TACTICS_ORB, RF_TACTICS_HP_ABOVE_1, RF_TACTICS_SAFE_WINDOW, RF_TACTICS_HAND_BUSY,
     RF_TACTICS_SIZE,
     RF_OBS_SIZE = RF_TACTICS_START + RF_TACTICS_SIZE,
 };
@@ -231,6 +232,10 @@ typedef struct {
      * echo of his Vengeance, but not the bar it is judged against); and the opponent's reaction: annoyed (he has had enough) and the tick he teleports. */
     int overeats[2], tick_hitpoints[2], tick_range[2];
     int annoyed, annoyed_leave_tick;
+    /* Our hand is mid-run: clicks of the decision before are still unlanded, so this decision can click nothing (the mask allows only the no-op, the tactics block's
+     * hand_busy reads 1). Sim: riskfight_motor_filter, the motor's chain not finished (seat 0 only; 0 with the motor off). Live: gs_rl_server sets it on an `OBS`
+     * request, the tick the plugin does not decide (ENGINE_WIRE.md: committed run, unlanded clicks). */
+    int hand_busy[2];
 } RiskfightState;
 typedef struct {
     uint8_t equipment[NUM_GEAR_SLOTS];
@@ -240,8 +245,8 @@ typedef struct {
 } RiskfightLoadout;
 
 /* Our hand when motor modelling is on: clicks of one decision are pressed in a chain whose gaps are the measured motor clock; a click is processed on the first
- * tick after the decision when it is pressed before the 465 ms cutoff, later otherwise. While a chain is unfinished new clicks are dropped, as the plugin does
- * not ask while a run is committed. */
+ * tick after the decision when it is pressed before the 465 ms cutoff, later otherwise. While a chain is unfinished the next decision gets no clicks, as the plugin
+ * does not ask while a run is committed: RiskfightState.hand_busy masks that decision to the no-op and shows it in the observation. */
 typedef struct { HumanCommand cmd; int land; } RiskfightMotorClick;
 typedef struct { int enabled, pending_count; uint32_t rng; RiskfightMotorClick pending[24]; } RiskfightMotor;
 

@@ -141,7 +141,7 @@ static Totals replay(const char* path) {
         if (unavailable) { t.unavailable++; continue; }
         RtRecord records[GS_WIRE_MAX_RECORDS];
         int count;
-        rt_decide(&q, &seen, new_fight, fight_start, records, &count);
+        rt_decide(&q, &seen, new_fight, fight_start, obs_only, records, &count);
         t.requests++;
         RiskfightState* s = &g_base.state;
         int fresh = g_fight.start_tick != last_start;

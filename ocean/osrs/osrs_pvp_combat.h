@@ -885,11 +885,10 @@ static inline int get_attack_range(Player* p, AttackStyle style) {
 }
 
 static void pvp_observe_attack_chance(OsrsEnv* env, int source, int target,
-    int min_hit, int max_hit, float accuracy, int dharok_base_hp, AttackStyle style) {
+    int min_hit, int max_hit, float accuracy, AttackStyle style) {
     Player* defender = &env->players[target];
     OsrsPvpAttackChanceEvent event = {env->tick, source, target, defender->current_hitpoints,
-        osrs_direct_ko_probability(min_hit, max_hit, accuracy, defender->current_hitpoints,
-            dharok_base_hp, env->players[source].current_hitpoints, defender->prayer, style)};
+        osrs_direct_ko_probability(min_hit, max_hit, accuracy, defender->current_hitpoints, defender->prayer, style)};
     env->pvp_runtime.attack_chance_observer(env->pvp_runtime.attack_chance_observer_context, &event);
 }
 
@@ -985,7 +984,7 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             pvp_observe_attack_chance(env, attacker_idx, defender_idx,
                 voidwaker ? osrs_voidwaker_min_hit(max_hit) : 0,
                 voidwaker ? osrs_voidwaker_max_hit(max_hit) : max_hit,
-                voidwaker ? 1.0f : osrs_hit_chance(att_roll, def_roll), 0,
+                voidwaker ? 1.0f : osrs_hit_chance(att_roll, def_roll),
                 voidwaker ? ATTACK_STYLE_MAGIC : style);
         }
 
@@ -1077,11 +1076,11 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             if (magic_type == 1) magic_base_hit = get_ice_base_hit(attacker->current_magic);
             else if (magic_type == 2) magic_base_hit = get_blood_base_hit(attacker->current_magic);
         }
-        int max_hit = calculate_base_max_hit(attacker, style, str_mult, magic_base_hit);
+        /* The Dharok set multiplies the max hit, and the roll is uniform from 0 to that multiplied max (calculate_max_hit, as for the specials). */
+        int max_hit = calculate_max_hit(attacker, style, str_mult, magic_base_hit);
 
         if (env->pvp_runtime.attack_chance_observer) {
-            pvp_observe_attack_chance(env, attacker_idx, defender_idx, 0, max_hit, hit_chance,
-                attacker->equipment_effect_profile.dharok_piece_count >= 4 ? attacker->base_hitpoints : 0, style);
+            pvp_observe_attack_chance(env, attacker_idx, defender_idx, 0, max_hit, hit_chance, style);
         }
 
         int hit_delay;
@@ -1118,8 +1117,6 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             if (rand_float(env) < hit_chance) {
                 hit_success = 1;
                 damage = rand_int(env, max_hit + 1);
-                if (style == ATTACK_STYLE_MELEE && attacker->equipment_effect_profile.dharok_piece_count >= 4)
-                    damage = osrs_dharok_max_hit(damage, attacker->base_hitpoints, attacker->current_hitpoints);
             }
 
             if (is_crossbow_ranged) {

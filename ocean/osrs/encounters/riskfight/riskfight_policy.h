@@ -237,6 +237,7 @@ static void riskfight_write_tactics_observation(const RiskfightState* s, int age
     int ours = p->has_attack_timer ? max_int(0, p->attack_timer + 1) : 0;
     int window = riskfight_his_ready(v, s->env.tick, 0) - ours;
     out[RF_TACTICS_SAFE_WINDOW] = fmaxf(-1.0f, fminf(1.0f, (float)window / RF_OBSERVATION_ATTACK_AGE_SCALE));
+    out[RF_TACTICS_HAND_BUSY] = s->hand_busy[agent] != 0;
 }
 
 /** The observation up to the price, and the weapons of the agent's bag when `bag_weapons` is given (the threat block needs them). The bag rows follow `order`. */
@@ -456,8 +457,34 @@ static RiskfightThreatGates riskfight_threat_gates(const RiskfightState* s, int 
     return gates;
 }
 
-/** The net's mask: its bag actions index the canonical order of riskfight_bag.h. */
+/** The special toggles a decision clicks (`actions` on physical slots). The mask gates them on the weapon wielded when it is written (riskfight_spec_weapon), but
+ * when the same decision wields an instant-spec weapon (a granite maul) from the bag the toggles land after the wield and spend the maul's energy. They are dropped
+ * when that maul's own knockout gate is shut (riskfight_threat_gates' instant rule: k x its spec max plus our in-flight reach below the lower bound of his
+ * hitpoints). The sim's step and gs_rl_server's records both go through this. */
+static int riskfight_spec_clicks(const RiskfightState* s, int agent, const int* actions) {
+    int k = actions[RF_SPECIAL], wield = actions[RF_WEAPON];
+    if (!k || !wield || wield == RF_UNEQUIP) return k;
+    const Player* p = &s->env.players[agent];
+    uint8_t item = osrs_inventory_cell_metadata(&p->inventory_cells[wield - 1])->item_idx;
+    if (!pvp_is_maul(item)) return k;
+    const RiskfightVisibleOpponent* v = &s->visible[agent];
+    int spec_max = riskfight_threat_our_maxes(p, item, v->health_bar).spec_max;
+    return k * spec_max + riskfight_in_flight_max(s, agent) >= riskfight_threat_his_hp_lower(v->health_bar) ? k : 0;
+}
+
+/** The mask of a tick of waiting between fights, or of a decision our hand cannot click on (RiskfightState.hand_busy): the no-op of every head and nothing else
+ * (the tick is a step of no choice). */
+static void riskfight_write_wait_mask(unsigned char* mask) {
+    memset(mask, 0, RF_MASK_SIZE);
+    for (int head = 0; head < RF_HEADS; head++) mask[RF_HEAD_OFFSET[head]] = 1;
+}
+
+/** The net's mask: its bag actions index the canonical order of riskfight_bag.h. While our hand is busy, the wait mask. */
 static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsigned char* mask) {
+    if (s->hand_busy[agent]) {
+        riskfight_write_wait_mask(mask);
+        return;
+    }
     const Player* p = &s->env.players[agent];
     const RiskfightBagOrder order = riskfight_bag_order(p);
     memcpy(mask, RF_MASK_TEMPLATE, RF_MASK_SIZE);
@@ -535,12 +562,6 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
     }
 }
 
-/** The mask of a tick of waiting between fights: the no-op of every head and nothing else (the tick is a step of no choice). */
-static void riskfight_write_wait_mask(unsigned char* mask) {
-    memset(mask, 0, RF_MASK_SIZE);
-    for (int head = 0; head < RF_HEADS; head++) mask[RF_HEAD_OFFSET[head]] = 1;
-}
-
 /** Everything riskfight_write_action_mask reads, reduced to what its result depends on (hitpoints only through the comparisons it makes, the timers only
  * through "is zero", the veng cooldown only through "<= 1", the levels and the overheal lock only through each bag slot's riskfight_consumable_useful bit,
  * the threat block, his bar and our hits in flight only through riskfight_threat_gates).
@@ -551,7 +572,7 @@ typedef struct {
     uint16_t cells[OSRS_INVENTORY_SIZE];
     uint8_t equipped[NUM_GEAR_SLOTS];
     uint8_t below_full, above_divine, food_ready, karambwan_ready, potion_ready, prayer, magic_ok, veng_active, veng_cooled, has_sacks,
-        teleport_ok, orb_ok, deployable, valid;
+        teleport_ok, orb_ok, deployable, hand_busy, valid;
     RiskfightThreatGates gates;
     uint32_t useful; /* bit `slot`: riskfight_consumable_useful of that physical slot's eat or drink item */
     int special_energy;
@@ -583,6 +604,7 @@ static inline void riskfight_mask_key(const RiskfightState* s, int agent, const 
     key->veng_cooled = p->veng_cooldown <= 1;
     key->has_sacks = s->inventory_use[agent].vengeance_sacks > 0;
     key->teleport_ok = osrs_teleport_allowed(s->env.pvp_runtime.teleport[agent], s->env.tick);
+    key->hand_busy = s->hand_busy[agent] != 0;
     key->deployable = riskfight_deployable != 0;
     key->valid = 1;
     key->special_energy = p->special_energy;

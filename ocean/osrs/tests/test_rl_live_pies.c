@@ -51,7 +51,7 @@ int main(void) {
     assert(server_unavailable(&q) == NULL);
     RtRecord records[GS_WIRE_MAX_RECORDS];
     int count;
-    rt_decide(&q, &seen, 1, q.tick, records, &count);
+    rt_decide(&q, &seen, 1, q.tick, 0, records, &count);
     RiskfightState* s = &g_base.state;
     const Player* us = &s->env.players[0];
 

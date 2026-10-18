@@ -287,8 +287,9 @@ static int riskfight_is_click(const HumanCommand* c) {
     }
 }
 
-/** Replaces the commands of one decision by what our hand lands on the tick about to be processed. */
-static void riskfight_motor_filter(RiskfightContext* ctx, const RiskfightState* s, HumanInput* hi) {
+/** Replaces the commands of one decision by what our hand lands on the tick about to be processed, and marks the next decision busy (RiskfightState.hand_busy,
+ * its mask the no-op) while clicks of this chain are still unlanded: a busy decision's clicks would be dropped. */
+static void riskfight_motor_filter(RiskfightContext* ctx, RiskfightState* s, HumanInput* hi) {
     RiskfightMotor* m = &ctx->motor;
     if (!m->enabled) return;
     int decision = s->env.tick;
@@ -318,6 +319,7 @@ static void riskfight_motor_filter(RiskfightContext* ctx, const RiskfightState* 
         else m->pending[kept++] = m->pending[i];
     }
     m->pending_count = kept;
+    s->hand_busy[0] = kept > 0;
 }
 
 static void riskfight_finish(RiskfightState* s) {
@@ -586,9 +588,17 @@ static void riskfight_step(EncounterState* state, EncounterContext* context, con
             memcpy(opponent_actions, s->opp_ring[s->opp_lag], sizeof(opponent_actions));
         }
     }
-    riskfight_policy_commands(s, 0, actions, &ctx->policy_commands[0]);
+    /* The special toggles of a decision that wields a granite maul follow the maul's knockout gate (riskfight_spec_clicks), for the seats a net plays. */
+    int ours[RF_HEADS], his[RF_HEADS];
+    memcpy(ours, actions, sizeof(ours));
+    ours[RF_SPECIAL] = riskfight_spec_clicks(s, 0, ours);
+    if (seat_agent) {
+        memcpy(his, actions + RF_HEADS, sizeof(his));
+        his[RF_SPECIAL] = riskfight_spec_clicks(s, 1, his);
+    } else memcpy(his, opponent_actions, sizeof(his));
+    riskfight_policy_commands(s, 0, ours, &ctx->policy_commands[0]);
     riskfight_motor_filter(ctx, s, &ctx->policy_commands[0]);
-    riskfight_policy_commands(s, 1, seat_agent ? actions + RF_HEADS : opponent_actions, &ctx->policy_commands[1]);
+    riskfight_policy_commands(s, 1, his, &ctx->policy_commands[1]);
     riskfight_step_queues(s, ctx, &ctx->policy_commands[0].commands, &ctx->policy_commands[1].commands);
     if (ctx->opp_after) ctx->opp_after(ctx->opp_user, s);
 }

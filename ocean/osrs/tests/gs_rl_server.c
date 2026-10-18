@@ -219,8 +219,9 @@ static int rt_worn_index(int gear_slot) {
 }
 
 /* Head actions as the plugin's click records, in the order the sim queues them (riskfight_policy_commands): the gear heads in head order (weapon, shield, ring, body,
- * legs), the meals, the orb or the teleport (the sim clicks the tab when both are chosen), Vengeance, the special toggles, attack or stop. Bag actions name physical
- * slots (riskfight_bag_to_physical of the net's). Movement, prayer, style and the other armour heads are masked off by riskfight_deployable. */
+ * legs), the meals, the orb or the teleport (the sim clicks the tab when both are chosen), Vengeance, the special toggles (riskfight_spec_clicks: none when the
+ * decision wields a granite maul whose knockout gate is shut, as in the sim's step), attack or stop. Bag actions name physical slots (riskfight_bag_to_physical of
+ * the net's). Movement, prayer, style and the other armour heads are masked off by riskfight_deployable. */
 static int rt_records(const int* actions, const RiskfightState* s, RtRecord* out) {
     int n = 0;
     static const int gear_heads[] = {RF_WEAPON, RF_SHIELD, RF_RING, RF_BODY, RF_LEGS};
@@ -244,7 +245,8 @@ static int rt_records(const int* actions, const RiskfightState* s, RtRecord* out
         out[n++] = (RtRecord){GS_WIRE_CLICK_SLOT, slot};
     }
     if (actions[RF_VENGEANCE]) out[n++] = (RtRecord){GS_WIRE_CAST_VENGEANCE, 0};
-    for (int k = 0; k < actions[RF_SPECIAL]; k++) out[n++] = (RtRecord){GS_WIRE_SPEC_TOGGLE, 0};
+    const int specials = riskfight_spec_clicks(s, 0, actions);
+    for (int k = 0; k < specials; k++) out[n++] = (RtRecord){GS_WIRE_SPEC_TOGGLE, 0};
     int attacking = osrs_interaction_active(&s->env.players[0].interaction);
     if (actions[RF_PRIMARY] == RF_ATTACK && !attacking) out[n++] = (RtRecord){GS_WIRE_ATTACK, 0};
     if (actions[RF_PRIMARY] == RF_STOP && attacking) out[n++] = (RtRecord){GS_WIRE_STOP_ATTACK, 0};
@@ -324,8 +326,10 @@ static void rt_choose_copies(const Player* p, RtRecord* records, int count) {
     for (int c = 0; c < clicks; c++) records[click[c]].arg = best_slot[c];
 }
 
-/* One tick: snapshot, our exact state, the visible-opponent state this server owns, the net, the clicks. Returns micros. */
-static double rt_decide(Request* q, const RtSeen* seen, int new_fight, int fight_start, RtRecord* records, int* count) {
+/* One tick: snapshot, our exact state, the visible-opponent state this server owns, the net, the clicks. Returns micros. `obs_only`: an `OBS` request, a tick the
+ * plugin does not decide because its run is committed or clicks are unlanded; that is the sim's busy hand (RiskfightState.hand_busy), so the net sees the tactics
+ * block's hand_busy at 1 and a mask of no-ops, and its recurrent state steps as in training. */
+static double rt_decide(Request* q, const RtSeen* seen, int new_fight, int fight_start, int obs_only, RtRecord* records, int* count) {
     double started = la_seconds();
     RtFight* f = &g_fight;
     if (new_fight) rt_fight_reset(f, fight_start, seen);
@@ -362,6 +366,7 @@ static double rt_decide(Request* q, const RtSeen* seen, int new_fight, int fight
     s->session_ticks_left = RF_SESSION_OPEN;
     /* The wire does not carry our reputation (rude teleports of the session, decaying) and nothing on a client can measure it, so it reads as none: [4] is 0. */
     s->session_rep = 0;
+    s->hand_busy[0] = obs_only;
     float obs[RF_OBS_SIZE];
     unsigned char mask[RF_MASK_SIZE];
     int actions[RF_HEADS];
@@ -453,7 +458,7 @@ int main(int argc, char** argv) {
         RtSeen seen = {-1, 0, i % 5 == 0, (i % 5 == 0) * 17, 0, i % 7 == 0, 20, 30, 0};
         RtRecord records[GS_WIRE_MAX_RECORDS];
         int count;
-        double micros = rt_decide(&q, &seen, i == 0, q.tick, records, &count);
+        double micros = rt_decide(&q, &seen, i == 0, q.tick, 0, records, &count);
         if (i >= 2 && micros > worst) worst = micros;
         if (bench_target && bench_n < 100000) bench[bench_n++] = micros;
     }
@@ -480,7 +485,7 @@ int main(int argc, char** argv) {
         }
         RtRecord records[GS_WIRE_MAX_RECORDS];
         int count;
-        double micros = rt_decide(&q, &seen, new_fight, fight_start, records, &count);
+        double micros = rt_decide(&q, &seen, new_fight, fight_start, obs_only, records, &count);
         rt_respond(stdout, &q, micros, records, count, obs_only);
         fflush(stdout);
     }

@@ -30,7 +30,7 @@ int main(void) {
         assert(!server_unavailable(&q));
         RtRecord records[GS_WIRE_MAX_RECORDS];
         int count;
-        rt_decide(&q, &seen, new_fight, fight_start, records, &count);
+        rt_decide(&q, &seen, new_fight, fight_start, obs_only, records, &count);
         float obs[RF_OBS_SIZE];
         riskfight_write_observation(&g_base.state, 0, obs);
         const float* t = obs + RF_THREAT_START;

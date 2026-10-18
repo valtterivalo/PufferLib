@@ -221,6 +221,7 @@ static void swap_seats(RiskfightState* s) {
     SWAP(s->inventory_use[0], s->inventory_use[1]);
     SWAP(s->visible[0], s->visible[1]);
     SWAP(s->overeats[0], s->overeats[1]);
+    SWAP(s->hand_busy[0], s->hand_busy[1]);
     SWAP(s->env.pvp_runtime.maul[0], s->env.pvp_runtime.maul[1]);
     SWAP(s->env.pvp_runtime.teleport[0], s->env.pvp_runtime.teleport[1]);
 }

@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
         if (unavailable) { if (q.tick >= from && q.tick <= to) printf("%d UNAVAILABLE %s\n", q.tick, unavailable); continue; }
         RtRecord records[GS_WIRE_MAX_RECORDS];
         int count;
-        rt_decide(&q, &seen, new_fight, fight_start, records, &count);
+        rt_decide(&q, &seen, new_fight, fight_start, obs_only, records, &count);
         if (q.tick < from || q.tick > to) continue;
         if (!g_fight.net) {
             float obs[RF_OBS_SIZE];

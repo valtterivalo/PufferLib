@@ -203,7 +203,7 @@ static void test_server_records(void) {
     assert(server_unavailable(&q) == NULL);
     RtRecord records[GS_WIRE_MAX_RECORDS];
     int count;
-    rt_decide(&q, &seen, 1, q.tick, records, &count);
+    rt_decide(&q, &seen, 1, q.tick, 0, records, &count);
     RiskfightState* s = &g_base.state;
     const Player* us = &s->env.players[0];
     /* The kit reaches the sim: the Dharok rows worn, the orb, halibut and marlin as their own cells, not inert filler. */
@@ -237,7 +237,7 @@ static void test_server_records(void) {
     seen.servings = rt_bag_servings(bare.bag);
     request_declare_priors(&bare);
     assert(server_unavailable(&bare) == NULL);
-    rt_decide(&bare, &seen, 0, bare.tick, records, &count);
+    rt_decide(&bare, &seen, 0, bare.tick, 0, records, &count);
     assert(us->equipped[GEAR_SLOT_LEGS] == ITEM_NONE && osrs_inventory_cell_metadata(&us->inventory_cells[2])->item_idx == ITEM_DHAROKS_PLATELEGS);
     riskfight_write_action_mask(s, 0, mask);
     assert(bag_bit(mask, us, RF_LEGS, 2));

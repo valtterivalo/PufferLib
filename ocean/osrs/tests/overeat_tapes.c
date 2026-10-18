@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
             }
             RtRecord records[GS_WIRE_MAX_RECORDS];
             int count;
-            rt_decide(&q, &seen, new_fight, fight_start, records, &count);
+            rt_decide(&q, &seen, new_fight, fight_start, obs_only, records, &count);
             RiskfightState* s = &g_base.state;
             const RiskfightVisibleOpponent* v = &s->visible[0];
             int same_fight = g_fight.start_tick == last_start && q.tick == last_tick + 1;
