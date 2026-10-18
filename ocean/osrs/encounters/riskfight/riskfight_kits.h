@@ -123,21 +123,31 @@ static void riskfight_kit_finish(RiskfightKit* k) {
     k->oppfit_ok = fit_ok && !ranged;
 }
 
+/* A greataxe kit's bag carries RF_KIT_DHAROK_EXTRA_POTIONS more super combat (or ranging) potions and as many more super restores, in place of anglerfish. Spectated Dharok
+ * fighters keep their strength boosted: their greataxe hits are as large as the sim's boosted ones at the same bar (landed mean 29-35 by attacker bar 9-23,
+ * the sim's boosted 28-31 and unboosted 23-28), and they drink potions that heal nothing at 39 / 35 per 1,000 ticks at bar 12-23 / 24 up, against 21 / 17 for
+ * the sim on the live bag even when it repots at every need (scripts/measure_dharok_potions.py). On the live bag the sim fighter ran out of its 4 combat doses
+ * and swung 0.34 of his axe swings unboosted. The bag's heal drops to about 476, near the spectated ceiling (no window heals more than 479). */
+enum { RF_KIT_DHAROK_EXTRA_POTIONS = 1 };
+
 /** The loadout of a kit: its worn gear, its other weapons in the bag, and the supplies of its bag kind filling what is left (live kit: 12 anglerfish, 7 karambwan,
- * 2 brews, 2 restores, a super combat or ranging potion, a teleport tab and a Vengeance sack around the maul). One slot stays free when a two-handed weapon in the
- * bag must take the shield off. The orb copy of a greataxe kit then trades one anglerfish for the locator orb (RF_KIT_ORB_PM). */
+ * 2 brews, 2 restores, a super combat or ranging potion, a teleport tab and a Vengeance sack around the maul; a greataxe kit swaps anglerfish for more restores
+ * and combat potions, RF_KIT_DHAROK_EXTRA_POTIONS). One slot stays free when a two-handed weapon in the bag must take the shield off. The orb copy
+ * of a greataxe kit then trades one anglerfish for the locator orb (RF_KIT_ORB_PM). */
 static void riskfight_kit_loadout(const RiskfightKit* k, RiskfightLoadout* out) {
     memset(out, 0, sizeof(*out));
     memcpy(out->equipment, k->equipment, NUM_GEAR_SLOTS);
     out->hitpoints = k->hitpoints;
-    int bag_weapons = k->weapon_count - 1, two_handed_in_bag = 0;
+    int bag_weapons = k->weapon_count - 1, two_handed_in_bag = 0, greataxe = 0;
     for (int i = 1; i < k->weapon_count; i++) two_handed_in_bag |= k->weapons[i] != ITEM_NONE && item_is_two_handed(k->weapons[i]);
+    for (int i = 0; i < k->weapon_count; i++) greataxe |= k->weapons[i] == ITEM_DHAROKS_GREATAXE;
     int capacity = OSRS_INVENTORY_SIZE - (two_handed_in_bag && k->equipment[GEAR_SLOT_SHIELD] != ITEM_NONE);
     int slot = 0;
     if (k->bag != RF_BAG_BARE) {
         const OsrsConsumableKind potion = k->bag == RF_BAG_RANGED ? OSRS_CONSUMABLE_RANGING : OSRS_CONSUMABLE_SUPER_COMBAT;
+        const int swap = greataxe ? RF_KIT_DHAROK_EXTRA_POTIONS : 0;
         const struct { OsrsConsumableKind kind; int doses, count; } fixed[] = {
-            {OSRS_CONSUMABLE_KARAMBWAN, 0, 7}, {OSRS_CONSUMABLE_BREW, 4, 2}, {OSRS_CONSUMABLE_SUPER_RESTORE, 4, 2}, {potion, 4, 1},
+            {OSRS_CONSUMABLE_KARAMBWAN, 0, 7}, {OSRS_CONSUMABLE_BREW, 4, 2}, {OSRS_CONSUMABLE_SUPER_RESTORE, 4, 2 + swap}, {potion, 4, 1 + swap},
             {OSRS_CONSUMABLE_TELEPORT, 0, 1}, {OSRS_CONSUMABLE_VENGEANCE_SACK, 0, 1},
         };
         int fixed_count = 0;

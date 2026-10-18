@@ -713,7 +713,8 @@ static int riskfight_sample_event(uint32_t seed, uint32_t tick, uint32_t salt, i
     return (int)(riskfight_sample_hash(seed, tick, salt) % 1000u) < per_mille;
 }
 
-/** Heals below 73 HP (with `meals`: the profile's own eating), a restore when drained, a combat repot when the boost has faded. */
+/** Heals below 73 HP (with `meals`: the profile's own eating), a restore when drained, a combat repot when the boost has faded (from 65 HP with `meals`; at any HP
+ * without, a Dharok fighter, who stays low for the greataxe and repots there too: RF_DHAROK_REPOT_PM). */
 static void riskfight_script_consume(const RiskfightObservedSelf* self,
     const RiskfightObservedInventory* inventory, int meals, int* actions) {
     int hp = self->hitpoints;
@@ -736,7 +737,7 @@ static void riskfight_script_consume(const RiskfightObservedSelf* self,
     if (drained) {
         actions[RF_DRINK] = inventory->kind_slot[OSRS_CONSUMABLE_SANFEW];
         if (!actions[RF_DRINK]) actions[RF_DRINK] = inventory->kind_slot[OSRS_CONSUMABLE_SUPER_RESTORE];
-    } else if (hp >= 65 && (self->attack < 110 || self->strength < 110 || self->defence < self->base_defence + 11)) {
+    } else if ((!meals || hp >= 65) && (self->attack < 110 || self->strength < 110 || self->defence < self->base_defence + 11)) {
         actions[RF_DRINK] = inventory->kind_slot[OSRS_CONSUMABLE_SUPER_COMBAT];
     }
 }
@@ -772,6 +773,12 @@ static int riskfight_dharok_meal_band(int hp) {
 static const uint16_t RF_DHAROK_MEAL_SINGLE_PM[10] = {150, 130, 100, 170, 310, 790, 970, 970, 920, 1000};
 static const uint16_t RF_DHAROK_MEAL_DOUBLE_PM[10] = {40, 140, 280, 540, 650, 210, 20, 30, 80, 0};
 enum { RF_DHAROK_MEAL_BREW_PM = 400 };
+/* A Dharok pool opponent's repot (riskfight_script_consume without meals: a restore when drained, a combat potion when his boost has faded, at any hitpoints),
+ * per mille per tick at hitpoints under 40, 40-79, 80 up, in place of the training profiles' consume_pm. Spectated Dharok fighters show eat animations in gaps
+ * that heal nothing (potions) at 22 / 39 / 35 per 1,000 ticks by the same bands (scripts/measure_dharok_potions.py; under 40 only 19 animations). A sim fighter
+ * on the greataxe bag (RF_KIT_DHAROK_EXTRA_POTIONS) shows 19 / 30 / 21 at these rates; repotting at every need from 40 up still falls short, and 1000 under 40
+ * gives 32. On consume_pm and the live bag he showed 20 / 21 / 13 and swung 0.51 of his greataxe swings unboosted. */
+static const uint16_t RF_DHAROK_REPOT_PM[3] = {300, 1000, 1000};
 /* A Dharok pool opponent's teleport tab, on his own hitpoints rather than on supplies used (tab_pm), per 10,000 fighter-ticks at hitpoints 0-19, 20-39, 40-59,
  * 60 up (scripts/fit_dharok_tab.py, the 261 spectated Dharok v Dharok duels, the leaving side by his teleport animation). The spectated bar moves only with a
  * hitsplat, so his hitpoints between hits are the last hitsplat's bar plus the heal the next one shows, in step with his eat animations; the old fit on the
@@ -990,7 +997,8 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     int combo_specs = riskfight_script_combo(obs, &self, maul_item, seed, tick);
     /* The combo's tick is all clicks of the switch and the specials: no meal on it. */
     int consume_band = (hp >= 40) + (hp >= 65) + (hp >= 73) + (hp >= 90);
-    if (!combo_specs && riskfight_sample_event(seed, tick, 11, profile->consume_pm[consume_band]))
+    int consume_pm = profile->dharok_eating ? RF_DHAROK_REPOT_PM[(hp >= 40) + (hp >= 80)] : profile->consume_pm[consume_band];
+    if (!combo_specs && riskfight_sample_event(seed, tick, 11, consume_pm))
         riskfight_script_consume(&self, &inventory, !profile->dharok_eating, actions);
     const uint16_t* persona = profile->dharok_eating && profile->dharok_persona ? RF_DHAROK_PERSONA[profile->dharok_persona - 1] : NULL;
     if (!combo_specs && profile->dharok_eating) riskfight_script_dharok_meal(obs, &self, &inventory, persona, seed, tick, actions);

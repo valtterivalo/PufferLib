@@ -1006,3 +1006,46 @@ Harness: `dh` (both seats on the Dharok script, personas on, starts drawn, 6,000
   - Knockouts from 40 HP up: 2-4 times rarer in the sim.
   - The rest of the 80+ time: at bar 27+ the closing hit is 0-9 in .71 of sim gaps against .64 real.
 - Tests pass: test_riskfight_dharok_script, _mix, _mechanics, _session and _scripts. The env_trace goldens are not refreshed.
+
+## 2026-10-19: KOs from 40 HP up; sim Dharok fighters lost their strength boost (branch ko-high)
+
+Harness: `dh`, both seats on the Dharok script with personas, starts drawn, 6,000 fights, 3 seeds. The sim is written in `spectator.duels` format with weapon swing animations, specials, Vengeance procs and hitsplat counts, so the same readers score real and sim. Scripts are in /tmp/eg (`big.py`, `atbar.py`, `axesz.py`, `kodump.py`, `strsz2.py`, `sim2duels2.py`).
+
+- **Real KOs of victims read at 40+:**
+  - The rate is 6.0 per 10,000 victim-ticks, against 3.1 in the sim.
+  - By the attacker's swing: greataxe 2.7, VW spec 2.3 (0.99 of it with a second splat, often his Vengeance echo), the rest under 0.3 each.
+  - The killing tick is often 70-112 damage in 1-3 splats:
+    - a VW spec, AGS or axe together with the attacker's Vengeance echo;
+    - an axe from an attacker taken down to 1-36 HP by the victim's own big hit or by orb 10s just before.
+  - The victim had eaten since his last read in 8 of 72.
+  - The sim already has every one of these patterns, though VW spec plus maul spec is rare: 3.5 big ticks per 10,000 real against 0.04 sim, but only 0.08 KO.
+- **Big hits come as often; they kill less.**
+  - Ticks of 40+ damage per 10,000: 116 real, 92 sim.
+  - P(KO) per swing at a victim bar of 19-26 is 2-7 times lower in the sim for the axe and the VW spec.
+- **The sim's greataxe hits are smaller,** 3-9 lower in landed mean at the same attacker bar (real 29-35 at bars 6-23).
+  - Direct hits are uniform up to the swing's max, so the roll is fine.
+  - 0.51 of sim axe swings came at strength below 112: on consume_pm the script repotted rarely, never under 65 HP, and its single combat potion ran out (0.68 of unboosted swings had none left).
+  - Read the same way, boosted sim swings land about real sizes; unboosted ones are 4-5 lower.
+  - Real fighters drink potions that heal nothing at 22 / 39 / 35 per 1,000 ticks (under 40 / 40-79 / 80 up), against 20 / 21 / 13 in the sim (`scripts/measure_dharok_potions.py`).
+- **Change** (data: the hit sizes, the potion rate, and the heal ceiling of the escape-gap entry):
+  - **The greataxe bag** carries one more combat potion and one more restore in place of two anglerfish (`RF_KIT_DHAROK_EXTRA_POTIONS`). Its heal drops to about 476, against a real ceiling of 479.
+  - **The repot:** a Dharok fighter repots at any HP, at `RF_DHAROK_REPOT_PM` = 300 / 1000 / 1000. The sim now shows 19 / 30 / 21 potions per 1,000 ticks, and unboosted axe swings fall to 0.18.
+  - **Also affected:** the learner's pool kits with an axe carry the new bag.
+- **Re-measured,** real / before / after (3 seeds; same readers on both):
+
+  | Measure | Real | Before | After |
+  |---|---|---|---|
+  | KO share | .251 (.271 uncensored) | .221 | .283 |
+  | Escape share | .580 (.642-.695 uncensored) | .777 | .716 |
+  | KO per 10,000 fighter-ticks, all | 9.9 | 6.2 | 9.7 |
+  | ... by victim HP 0-19 / 20-39 / 40-59 / 60-79 / 80+ | 117 / 47 / 32 / 4.6 / 2.1 | 87 / 49 / 17 / 2.4 / 0.4 | 99 / 59 / 23 / 4.6 / 0.9 |
+  | KO at victim read 40+, per 10,000 | 6.0 | 3.1 | 5.3 |
+  | Tabs per 10,000 fighter-ticks | 22.8 | 22.3 | 24.9 |
+  | Opponent's median HP, low fighter 1-20 ready | 59 | 66 | 63 |
+  | Time at 80+ after both below 80 (gap estimate) | .21 | .37 | .34 |
+- **Open:**
+  - KOs at 40-59 and 80+ HP are still short.
+  - VW-plus-maul spec combos.
+  - The repot table is a sim-side calibration to the spectated potion animations, not a direct fit.
+  - Prayer potions, if real fighters run Smite, are not modelled.
+- Tests pass: test_riskfight_dharok_script, _mix, _mechanics, _session and _scripts. The env_trace goldens are not refreshed: the pool bags changed.
