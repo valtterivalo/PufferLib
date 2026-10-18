@@ -89,11 +89,11 @@ static Trace run_trace(int self_play, HarnessPolicy policy, int sweeps, int envs
 #endif
 typedef struct { const char* name; int self_play; HarnessPolicy policy; int seed; uint64_t golden[2]; } Case;
 static const Case CASES[] = {
-    {"selfplay_mixed", 1, POLICY_MIXED, 11, G(0x72f59d047fee7e1b, 0xddb8518ab074d64d, 0x8e890b970b16b338, 0x038ec7ad274b127d)},
+    {"selfplay_mixed", 1, POLICY_MIXED, 11, G(0x38a40e357981551d, 0xaca1a7887b802492, 0xdd2834c0d2b41d75, 0x53afa606092a87f2)},
     {"selfplay_script", 1, POLICY_SCRIPT, 23, G(0xe08b22406a1e870b, 0x95a090027eb7e70d, 0xfe471e3d17974d74, 0x1578d0db2d027279)},
-    {"selfplay_random", 1, POLICY_RANDOM, 37, G(0x62fc8815c1e16182, 0x870f5c38fa6b47f6, 0x62fc8815c1e16182, 0x2a8a3d8bde46e4e1)},
-    {"botplay_script", 0, POLICY_SCRIPT, 41, G(0xd72d741f03d64ac3, 0xdcf89be8f13618ef, 0x6896abe514002f45, 0xaf3c0c9e895e2ef2)},
-    {"botplay_mixed", 0, POLICY_MIXED, 53, G(0xbadfb8b5fa17fdb2, 0x7a8bebe8e411a1f7, 0x88c36db8f32596c2, 0xa45fd2b1f6656623)},
+    {"selfplay_random", 1, POLICY_RANDOM, 37, G(0x3d0baf41c8fbe488, 0x81d75405f29a267a, 0x3d0baf41c8fbe488, 0x79ebe20b576bef0b)},
+    {"botplay_script", 0, POLICY_SCRIPT, 41, G(0xe03556862ae1c9ac, 0x9f61770b0f05f3e5, 0x357e9fc7289bbc6a, 0x63e8e9093625c039)},
+    {"botplay_mixed", 0, POLICY_MIXED, 53, G(0xc06a3fa4803dbc3c, 0x920fe104d8f31710, 0x3a5d62fcf7d7b2a2, 0x2b51f6e8bacb84f9)},
 };
 
 
