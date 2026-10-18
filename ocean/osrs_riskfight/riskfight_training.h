@@ -30,6 +30,7 @@ typedef struct {
     int start_tick;
     int omissions;
     float rep; /* our reputation in this session (riskfight_session.h): rude teleports, decaying; read at every new opponent and by the observation */
+    float his_rep; /* seat 1's, kept the same way from its own rude teleports while a net plays it (self-play): it lengthens the waits as ours does */
 } RiskfightTraining;
 
 static RiskfightTrainingConfig riskfight_training_config(Dict* kwargs) {
@@ -276,6 +277,7 @@ static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* traini
     RiskfightState* state, RiskfightContext* context, int frozen_policy) {
     if (context->kit_mix != RF_KIT_MIX_NONE) context->loadout[0] = riskfight_training_draw_kit(training, context->kit_mix);
     training->rep = riskfight_training_draw(training, training->config.rep_start_probability) ? RF_REP_START_MAX * (1.0f - encounter_rand_float(&training->rng)) : 0;
+    training->his_rep = 0;
     riskfight_training_draw_opponent(training, context, frozen_policy);
     riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
     riskfight_training_shuffle_bags(training, state);

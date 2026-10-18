@@ -45,6 +45,7 @@ struct Log {
     float oppfit_episodes;
     float wait_ticks; /* steps spent waiting between fights */
     float fights_pool, fights_selfplay, fights_frozen, fights_script; /* fights by who played seat 1 (the rest with oppfit_episodes) and by pool kit */
+    float sp_teleports[2], sp_kills[2], sp_return[2]; /* the fights of pure self-play (both seats the learning policy, tag 0), per seat: teleports, kills, stake */
     float stops, ready_idle, vengs, eats, stop_spec, veng_spec, stop_veng_spec, spec_delay, norm_delay, hard_eats, hard_eats_zero;
 };
 struct Env {
@@ -165,7 +166,8 @@ static inline void riskfight_obs_store(obs_t* out, const float* obs) {
 static void riskfight_native_observe(Env* env) {
     env->state.session_ticks_left = env->training.config.session_ticks - env->session_elapsed;
     env->state.session_wait_left = env->wait_left;
-    env->state.session_rep = env->training.rep;
+    env->state.session_rep[0] = env->training.rep;
+    env->state.session_rep[1] = env->training.his_rep;
     for (int i = 0; i < env->num_agents; i++) {
         float obs[RF_OBS_SIZE];
         riskfight_write_observation(&env->state, i, obs);
@@ -182,10 +184,11 @@ static void riskfight_native_observe(Env* env) {
 static void riskfight_native_observe_wait_tick(Env* env) {
     env->state.session_ticks_left = env->training.config.session_ticks - env->session_elapsed;
     env->state.session_wait_left = env->wait_left;
-    env->state.session_rep = env->training.rep;
-    float clock[3];
-    riskfight_session_clock(&env->state, clock);
+    env->state.session_rep[0] = env->training.rep;
+    env->state.session_rep[1] = env->training.his_rep;
     for (int i = 0; i < env->num_agents; i++) {
+        float clock[3];
+        riskfight_session_clock(&env->state, i, clock);
         obs_t* out = env->agents[i].observations + RF_SESSION_START;
         riskfight_obs_put(out, clock[0]);
         riskfight_obs_put(out + 3, clock[1]);
@@ -242,6 +245,12 @@ void puf_reset(Env* env) {
 static void riskfight_native_log_round(Env* env) {
     const RiskfightState* s = &env->state;
     env->log.self_teleports += s->escaped[0];
+    if (env->context.self_play && !env->context.opp_driven && env->tag == 0)
+        for (int i = 0; i < 2; i++) {
+            env->log.sp_teleports[i] += s->escaped[i];
+            env->log.sp_kills[i] += s->outcome[i] == RISKFIGHT_KILL;
+            env->log.sp_return[i] += s->episode_returns[i];
+        }
     env->log.opponent_teleports += s->escaped[1];
     env->log.both_teleports += s->escaped[0] && s->escaped[1];
     env->log.opponent_rude_teleports += riskfight_rude_teleport_of(s, 1);
@@ -329,6 +338,7 @@ static void riskfight_native_next_fight(Env* env) {
 /** The end of a step of either kind: the terminals, the state resets, and the session's totals and a fresh session when its budget is spent. */
 static void riskfight_native_finish_step(Env* env, int wait_step) {
     env->training.rep = riskfight_rep_decay(&env->training.config.rep, env->training.rep);
+    env->training.his_rep = riskfight_rep_decay(&env->training.config.rep, env->training.his_rep);
     const int budget = env->training.config.session_ticks;
     int session_over = env->session_elapsed >= budget;
     for (int i = 0; i < env->num_agents; i++) env->agents[i].terminals[0] = session_over;
@@ -409,7 +419,10 @@ void puf_step(Env* env) {
         env->session_fights++;
         if (env->session_elapsed < budget) {
             env->training.rep += riskfight_rude_teleport(&env->state) + riskfight_annoyed_exit(&env->state); /* each rude teleport of ours, and each exit of his over our overeating, is remembered */
-            env->wait_transition = riskfight_session_transition(&env->state, &env->training.rng, env->training.rep, &env->training.config.rep);
+            /* A net in seat 1 (the learning policy or a frozen one) pays for its rude teleports as we do: one policy plays both seats, and a seat that leaves for
+             * free learns to leave. The search for the next opponent waits on both reputations. */
+            if (env->context.self_play && !env->context.opp_driven) env->training.his_rep += riskfight_rude_teleport_of(&env->state, 1);
+            env->wait_transition = riskfight_session_transition(&env->state, &env->training.rng, env->training.rep + env->training.his_rep, &env->training.config.rep);
             env->wait_left = env->wait_transition.delay;
             if (env->wait_left == 0) riskfight_native_next_fight(env);
         }
@@ -477,6 +490,12 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "spec_maul", log->spec_maul);
     dict_set(out, "self_teleports", log->self_teleports);
     dict_set(out, "opponent_teleports", log->opponent_teleports);
+    dict_set(out, "sp_teleports_seat0", log->sp_teleports[0]);
+    dict_set(out, "sp_teleports_seat1", log->sp_teleports[1]);
+    dict_set(out, "sp_kills_seat0", log->sp_kills[0]);
+    dict_set(out, "sp_kills_seat1", log->sp_kills[1]);
+    dict_set(out, "sp_return_seat0", log->sp_return[0]);
+    dict_set(out, "sp_return_seat1", log->sp_return[1]);
     dict_set(out, "rounds", log->rounds);
     dict_set(out, "episode_return", log->episode_return);
     dict_set(out, "policy_0_score", log->policy_0_score);

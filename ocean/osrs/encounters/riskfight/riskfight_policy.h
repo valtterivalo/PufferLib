@@ -89,11 +89,11 @@ static int riskfight_chance_range(const RiskfightState* s, int agent) {
     return riskfight_chance_range_of(threat, v->spec_est, riskfight_his_veng_up(v));
 }
 
-/** The three floats of the session block that move while the session waits between fights (the sim is not stepped then): ticks left, wait left, reputation. */
-static inline void riskfight_session_clock(const RiskfightState* s, float out[3]) {
+/** The three floats of `agent`'s session block that move while the session waits between fights (the sim is not stepped then): ticks left, wait left, its reputation. */
+static inline void riskfight_session_clock(const RiskfightState* s, int agent, float out[3]) {
     out[0] = s->session_ticks_left >= RF_SESSION_HORIZON_TICKS ? 1.0f : fmaxf(0.0f, (float)s->session_ticks_left / RF_SESSION_HORIZON_TICKS);
     out[1] = s->session_wait_left >= RF_WAIT_SCALE_TICKS ? 1.0f : (float)s->session_wait_left / RF_WAIT_SCALE_TICKS;
-    out[2] = fminf(1.0f, s->session_rep / RF_REP_OBS_SCALE);
+    out[2] = fminf(1.0f, s->session_rep[agent] / RF_REP_OBS_SCALE);
 }
 
 /** The session block (RF_SESSION_START). [2] and [3] mark a wait between fights and how much of it is left. [0] session ticks left over RF_SESSION_HORIZON_TICKS, capped at 1: what a fight is worth depends on the time left only
@@ -105,7 +105,7 @@ static inline void riskfight_session_clock(const RiskfightState* s, float out[3]
 static void riskfight_write_session_observation(const RiskfightState* s, int agent, float* obs) {
     float* out = obs + RF_SESSION_START;
     float clock[3];
-    riskfight_session_clock(s, clock);
+    riskfight_session_clock(s, agent, clock);
     out[0] = clock[0];
     out[1] = s->visible[agent].spec_est / 100.0f;
     out[2] = s->session_wait_left > 0;

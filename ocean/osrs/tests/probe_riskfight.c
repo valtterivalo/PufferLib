@@ -91,7 +91,7 @@ int main(int argc, char** argv) {
     sim_init(&g_sim);
     if (getenv("PROBE_LIVE")) for (int i = 0; i < 2; i++) g_sim.context.loadout[i] = &RISKFIGHT_LIVE_LOADOUT;
     riskfight_deployable = getenv("PROBE_DEPLOY") != NULL;
-    g_sim.context.motor.enabled = getenv("PROBE_MOTOR") != NULL;
+    g_sim.context.motor[0].enabled = getenv("PROBE_MOTOR") != NULL;
     g_step_hook = probe_hook;
     g_trace_episodes = getenv("PROBE_TRACE") ? atoi(getenv("PROBE_TRACE")) : 0;
     g_attack_first = getenv("PROBE_ATTACK_FIRST") != NULL;

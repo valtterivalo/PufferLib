@@ -365,7 +365,7 @@ static double rt_decide(Request* q, const RtSeen* seen, int new_fight, int fight
     /* A live session has no budget: the end of the session is never near (the session block reads 1 for "plenty of time left"). */
     s->session_ticks_left = RF_SESSION_OPEN;
     /* The wire does not carry our reputation (rude teleports of the session, decaying) and nothing on a client can measure it, so it reads as none: [4] is 0. */
-    s->session_rep = 0;
+    s->session_rep[0] = s->session_rep[1] = 0;
     s->hand_busy[0] = obs_only;
     float obs[RF_OBS_SIZE];
     unsigned char mask[RF_MASK_SIZE];

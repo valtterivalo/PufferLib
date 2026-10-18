@@ -247,6 +247,7 @@ static void swap_seats(RiskfightState* s) {
     SWAP(s->visible[0], s->visible[1]);
     SWAP(s->overeats[0], s->overeats[1]);
     SWAP(s->hand_busy[0], s->hand_busy[1]);
+    SWAP(s->session_rep[0], s->session_rep[1]);
     SWAP(s->env.pvp_runtime.maul[0], s->env.pvp_runtime.maul[1]);
     SWAP(s->env.pvp_runtime.teleport[0], s->env.pvp_runtime.teleport[1]);
     s->death_price = riskfight_seat_price(s, 1);

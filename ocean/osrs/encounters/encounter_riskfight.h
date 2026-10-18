@@ -48,7 +48,7 @@ static void riskfight_put_int(EncounterState* state, EncounterContext* context, 
     } else if (strcmp(key, "self_play") == 0) {
         assert(value == 0 || value == 1); ctx->self_play = value;
     } else if (strcmp(key, "motor") == 0) {
-        assert(value == 0 || value == 1); ctx->motor.enabled = value;
+        assert(value == 0 || value == 1); ctx->motor[0].enabled = ctx->motor[1].enabled = value;
     } else if (strcmp(key, "deployable") == 0) {
         assert(value == 0 || value == 1); riskfight_deployable = value;
     } else if (strcmp(key, "live_loadout") == 0) {

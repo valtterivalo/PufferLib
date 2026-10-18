@@ -188,7 +188,7 @@ static void queue_ours(Sim* sim, const Tape* tape, const OursPolicy* policy, int
         g_policy_hook(&sim->state, actions);
         riskfight_bag_to_physical(&sim->state.env.players[0], actions); /* the hook's net indexes the canonical bag */
         riskfight_policy_commands(&sim->state, 0, actions, hi);
-        riskfight_motor_filter(&sim->context, &sim->state, hi);
+        riskfight_motor_filter(&sim->context, &sim->state, 0, hi);
     } else if (policy->kind == OURS_SCRIPT) {
         float obs[RF_OBS_SIZE];
         int actions[RF_HEADS];

@@ -287,10 +287,10 @@ static int riskfight_is_click(const HumanCommand* c) {
     }
 }
 
-/** Replaces the commands of one decision by what our hand lands on the tick about to be processed, and marks the next decision busy (RiskfightState.hand_busy,
+/** Replaces the commands of one decision of `seat` by what its hand lands on the tick about to be processed, and marks its next decision busy (RiskfightState.hand_busy,
  * its mask the no-op) while clicks of this chain are still unlanded: a busy decision's clicks would be dropped. */
-static void riskfight_motor_filter(RiskfightContext* ctx, RiskfightState* s, HumanInput* hi) {
-    RiskfightMotor* m = &ctx->motor;
+static void riskfight_motor_filter(RiskfightContext* ctx, RiskfightState* s, int seat, HumanInput* hi) {
+    RiskfightMotor* m = &ctx->motor[seat];
     if (!m->enabled) return;
     int decision = s->env.tick;
     HumanCommand fresh[48], instant[48];
@@ -319,7 +319,7 @@ static void riskfight_motor_filter(RiskfightContext* ctx, RiskfightState* s, Hum
         else m->pending[kept++] = m->pending[i];
     }
     m->pending_count = kept;
-    s->hand_busy[0] = kept > 0;
+    s->hand_busy[seat] = kept > 0;
 }
 
 static void riskfight_finish(RiskfightState* s) {
@@ -597,8 +597,10 @@ static void riskfight_step(EncounterState* state, EncounterContext* context, con
         his[RF_SPECIAL] = riskfight_spec_clicks(s, 1, his);
     } else memcpy(his, opponent_actions, sizeof(his));
     riskfight_policy_commands(s, 0, ours, &ctx->policy_commands[0]);
-    riskfight_motor_filter(ctx, s, &ctx->policy_commands[0]);
+    riskfight_motor_filter(ctx, s, 0, &ctx->policy_commands[0]);
     riskfight_policy_commands(s, 1, his, &ctx->policy_commands[1]);
+    /* A net in seat 1 clicks through the same hand as in seat 0: one policy plays both seats, so both must see the same game. */
+    if (seat_agent) riskfight_motor_filter(ctx, s, 1, &ctx->policy_commands[1]);
     riskfight_step_queues(s, ctx, &ctx->policy_commands[0].commands, &ctx->policy_commands[1].commands);
     if (ctx->opp_after) ctx->opp_after(ctx->opp_user, s);
 }

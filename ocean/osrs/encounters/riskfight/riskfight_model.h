@@ -225,7 +225,8 @@ typedef struct {
     int specs_used[2];
     int session_ticks_left;
     int session_wait_left; /* ticks of the wait between two fights still to pass (0 in a fight); the state is the one the last fight ended in */
-    float session_rep;     /* our reputation as the session holds it (riskfight_session.h); 0 where the session is not modelled (the live server) */
+    float session_rep[2];  /* each seat's reputation as the session holds it (riskfight_session.h): seat 1's counts its own rude teleports while a net plays it;
+                            * 0 where the session is not modelled (the live server) */
     /* A ragger (riskfight_session.h): the pool's ranged kit in seat 1 that swings ragger_limit times and teleports away. */
     int ragger, ragger_limit, ragger_swings;
     /* Over-eating (riskfight_session.h): meals of each side eaten while its hitpoints at the start of the tick were above his chance range, this fight; the hitpoints
@@ -233,9 +234,9 @@ typedef struct {
      * echo of his Vengeance, but not the bar it is judged against); and the opponent's reaction: annoyed (he has had enough) and the tick he teleports. */
     int overeats[2], tick_hitpoints[2], tick_range[2];
     int annoyed, annoyed_leave_tick;
-    /* Our hand is mid-run: clicks of the decision before are still unlanded, so this decision can click nothing (the mask allows only the no-op, the tactics block's
-     * hand_busy reads 1). Sim: riskfight_motor_filter, the motor's chain not finished (seat 0 only; 0 with the motor off). Live: gs_rl_server sets it on an `OBS`
-     * request, the tick the plugin does not decide (ENGINE_WIRE.md: committed run, unlanded clicks). */
+    /* A seat's hand is mid-run: clicks of the decision before are still unlanded, so this decision can click nothing (the mask allows only the no-op, the tactics
+     * block's hand_busy reads 1). Sim: riskfight_motor_filter, the motor's chain not finished (every seat a net plays; 0 with the motor off). Live: gs_rl_server
+     * sets it on an `OBS` request, the tick the plugin does not decide (ENGINE_WIRE.md: committed run, unlanded clicks). */
     int hand_busy[2];
 } RiskfightState;
 typedef struct {
@@ -271,7 +272,7 @@ typedef struct {
     int human_player;
     float damage_reward_coeff;
     float chance_reward_coeff;
-    RiskfightMotor motor;
+    RiskfightMotor motor[2]; /* the hand of each seat a net plays (seat 1 in self-play), so both seats of one net click alike */
     /* His actions from a fitted policy instead of the script: opp_hook fills them for the tick about to be processed, opp_after sees the tick that ran. */
     void* opp_user;
     void (*opp_hook)(void* user, const void* state, int* actions);
@@ -688,8 +689,10 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
     RiskfightState* s = (RiskfightState*)state;
     RiskfightContext* ctx = (RiskfightContext*)context;
     uint32_t rng = seed ? seed : s->env.rng_state;
-    ctx->motor.pending_count = 0;
-    ctx->motor.rng = osrs_lowbias32(rng ^ 0x6d6f746fu) | 1;
+    for (int seat = 0; seat < 2; seat++) {
+        ctx->motor[seat].pending_count = 0;
+        ctx->motor[seat].rng = osrs_lowbias32(rng ^ (0x6d6f746fu + (uint32_t)seat)) | 1;
+    }
     if (!ctx->opponent_pool) ctx->opp_kit = NULL;
     else {
         if (!ctx->keep_opp_kit) {

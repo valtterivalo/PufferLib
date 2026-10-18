@@ -18,7 +18,7 @@ static Player* us(void) { return &state.env.players[0]; }
 
 static void reset(uint32_t seed, int motor) {
     context.self_play = 1;
-    context.motor.enabled = motor;
+    context.motor[0].enabled = motor; /* our hand; seat 1 idles here, without one */
     context.loadout[0] = &RISKFIGHT_DHAROK_LOADOUT;
     riskfight_reset((EncounterState*)&state, (EncounterContext*)&context, seed);
     context.loadout[0] = NULL;
