@@ -453,3 +453,26 @@ Live, s6t0 drank super restores at full prayer with nothing drained (prayer 87-9
 - **Measured** (test_riskfight_mix, 100k draws each, live_loadout 4, s 0.8, r 0.25): seat 0 is Dharok's in 0.465. Against the script, P(his class | ours) matches s[c = d] + (1 - s) mass(d) within 0.005: Dharok's v Dharok's 0.865 (0.861), melee v melee 0.889 (0.888). **Dharok v Dharok is 0.40 of all fights** (0.15 before). In pure self-play the seats' class laws agree (Dharok's 0.464 / 0.464), same class 0.894 (0.895), Dharok v Dharok 0.41.
 - **Seat balance** (`probe_riskfight_seats`, script policy, teleports masked on both, 20k fights): kills seat 0 / seat 1 9563 / 9655 (-0.7 sigma), Dharok's fights 0.423 / 0.423; with both knobs 0, 9709 / 9610 (+0.7 sigma). The probe now counts a Dharok's fight by class, not by our kit's pointer.
 - **Not changed:** the threat block's spec-weapon prior still reads the unconditioned pool. [bot_eval] pins both knobs to 0, so the ladder score stays comparable with earlier sweeps.
+
+## 2026-10-18 evening: argmax against sampling, the three-arm rerun, kit mix
+
+- **Argmax and sampling score differently, early in training.** Deployment takes the argmax (`gs_rl_server`, hard). The sweep score sampled. The three 50M-step arms below, `session_probe`, 400 sessions, net_stake per hour, Dharok / VW:
+
+  | Arm | Argmax | Sampled | Ladder (sampled) |
+  |---|---|---|---|
+  | A: no self-play | 6.64 / 6.23 | 7.89 / 7.60 | 7.97 |
+  | B: frozen + scripts | 6.01 / 5.28 | 7.01 / 5.02 | 6.29 |
+  | C: half self-play | 6.25 / 4.37 | 5.52 / 2.26 | 4.10 |
+
+  - For arm A, argmax dies far more often than sampling: 0.98 deaths per session against 0.13 (greedy ladder 6.26 against 7.97 sampled). A mixed escape (teleport at p 0.2-0.4 for a few ticks) fires when sampled and never under argmax.
+  - A converged net doesn't have this gap: s15t85 argmax 10.75 / 12.15, sampled 10.91 / 11.30.
+  - The ladder now scores the argmax (`[selfplay] eval_greedy = 1`, 176f0b747), the policy we deploy. Scores aren't comparable with earlier sweeps.
+  - (A first read of these arms ranked C best. That came from probe outputs that ran in parallel and printed in completion order, so the blocks were mislabelled. Retracted.)
+- **Self-play at 50M steps** does not beat the plain arm on any measure. Whether opponents that improve help over longer training is untested.
+- **Seat asymmetries in the mirror** (c2ce25292), measured with teleport masked on both seats over 20k fights:
+  - domain randomization weakened seat 1 only;
+  - seat 1's kit was redrawn per opponent while ours was per session (Dharok 51% against 54%).
+
+  Kills seat 0 / seat 1 went from 10877 / 8484 to 9724 / 9626 (script policy on both seats).
+- **Data escapes** (`data_escapes`): a net in seat 1 can't choose teleport; it leaves when the scripts' fitted rule fires (`RF_DHAROK_TAB_PM` for Dharok kits). The escape rate per HP band matches the script (28.2 / 14.3 / 3.9 / 1.0 per 1,000 ticks against 29.5 / 13.9 / 3.9 / 1.0). Reason: in a symmetric zero-sum mirror a fight is worth the same as an escape (0), so fleeing is a free equilibrium. Escape behaviour belongs to the measured population; fighting skill comes from the net.
+- **Kit mix (the user's call, d30c7b536).** The opponent's kit class matches ours with p 0.8 (`kit_same_class`), and the learner wears a pool kit in 25% of sessions (`learner_random_kit`; ranged kits are left out, since deployable keeps Piety). The pool already holds 216 Dharok kits (106 distinct gear and weapon setups), so no synthetic variants were needed. Dharok vs Dharok is now 0.40 of the fights against scripts, from 0.15. The ladder keeps both knobs at 0 for comparability.
