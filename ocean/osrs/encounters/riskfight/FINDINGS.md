@@ -656,3 +656,19 @@ Harness: `dh_eat` with both seats on the Dharok script (6,000 fights per arm, st
   | HP p10 before the opponent's next hit (bands 1-20 / 20-35 / 35-50) | 48 / 56 / 66 | 52 / 54 / 61 |
 
 - **Still open:** up-crossings over 80 are 67 per mille in the sim against 27 real, 45 of them from meals at 60-79. A constant rate per band, fitted on ticks right after a hit, still feeds a fighter who climbed into 60-69 by eating. The eat-animation rates split by "hit since his last meal" differ only 1.2-1.5x by band, so that alone won't close it. The real crossing count rests on the gap estimate, which spreads a gap's heal over its eat animations.
+
+## 2026-10-19: is low-HP Dharok play worth it in a calibrated sim?
+
+- **Calibration so far** (meal-joint, 2392bd4d0), both seats on the Dharok script against 261 real Dharok v Dharok duels:
+  - Damage per tick matches like for like: 1.87 sim against 1.96 real. The earlier 1.53 left out orb 10s and kept seat 0 at Defence 99.
+  - Swings per tick: 0.195 sim, 0.175 real.
+  - Accuracy: .25 sim, .27-.31 real.
+  - Hit sizes match per weapon.
+  - Meal rates come in six HP bands, fitted on "healed before his next hit". 80+ eat animations are 95% potions.
+  - Teleports per 10,000 fighter-ticks: 465 / 180 / 46 / 4, fitted on HP between hitsplats.
+- **Still open:**
+  - The sim opponent's median HP when the low fighter is ready: 74-77, against 66-69 real.
+  - Time at 80+: .47 sim, .20 real.
+  - Escapes: .81 sim, .59 real. Another .17 of real windows end unseen.
+- **Oracle at ed5a2c4f2** (two seeds, 6,000 sessions per arm): no axe rule beats never swinging. Arms that swing 0.7-1.2 times per fight lose 0.03-0.35 per hour. One swing KOs at P 0.05-0.06 from our HP below 50, against his median 66-68. The real opponent sits at about the same HP when the low fighter is ready (66-69), and the real victim's 50 just before a KO is selection on the KO.
+- **Conclusion:** in a sim calibrated this closely, low-HP greataxe play is not worth it, and the nets' zero axe use is correct. Real fighters' axe KOs come from low-HP exchanges where both sides are low. Real data doesn't show that getting low pays.
