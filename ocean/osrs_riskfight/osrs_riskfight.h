@@ -87,6 +87,8 @@ void puf_init(Env* env, Dict* kwargs) {
     env->oppfit = env->oppfit_probability > 0 ? oppfit_create() : NULL;
     DictItem* motor = dict_find(kwargs, "motor");
     if (motor) riskfight_put_int((EncounterState*)&env->state, (EncounterContext*)&env->context, "motor", (int)motor->value);
+    DictItem* data_escapes = dict_find(kwargs, "data_escapes");
+    if (data_escapes) riskfight_put_int((EncounterState*)&env->state, (EncounterContext*)&env->context, "data_escapes", (int)data_escapes->value);
     DictItem* deployable = dict_find(kwargs, "deployable");
     if (deployable) riskfight_put_int((EncounterState*)&env->state, (EncounterContext*)&env->context, "deployable", (int)deployable->value);
     DictItem* live = dict_find(kwargs, "live_loadout");

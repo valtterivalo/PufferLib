@@ -486,9 +486,13 @@ static void riskfight_write_wait_mask(unsigned char* mask) {
     for (int head = 0; head < RF_HEADS; head++) mask[RF_HEAD_OFFSET[head]] = 1;
 }
 
-/** The net's mask: its bag actions index the canonical order of riskfight_bag.h. While our hand is busy, the wait mask. */
+static int riskfight_data_escape(const RiskfightState* s);
+
+/** The net's mask: its bag actions index the canonical order of riskfight_bag.h. While our hand is busy, the wait mask. A seat 1 under data_escapes never
+ * teleports by its own choice, and on the tick its data-fitted escape fires (riskfight_data_escape) it gets the wait mask: the step teleports it, so the
+ * row is a step of no choice and teaches the net nothing about leaving. */
 static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsigned char* mask) {
-    if (s->hand_busy[agent]) {
+    if (s->hand_busy[agent] || (agent == 1 && riskfight_data_escape(s))) {
         riskfight_write_wait_mask(mask);
         return;
     }
@@ -544,7 +548,7 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
         p->current_magic >= OSRS_VENGEANCE_MAGIC_LEVEL && s->inventory_use[agent].vengeance_sacks > 0;
     for (int action = 1; action < RF_ACTION_DIMS[RF_SPECIAL]; action++)
         heads[RF_SPECIAL][action] = p->special_energy >= action * spec.cost && ((gates.spec_ko >> action) & 1);
-    heads[RF_PRIMARY][RF_TELEPORT] = has_teleport &&
+    heads[RF_PRIMARY][RF_TELEPORT] = has_teleport && !(agent == 1 && s->data_escapes) &&
         osrs_teleport_allowed(s->env.pvp_runtime.teleport[agent], s->env.tick);
     for (int action = 1; action < RF_ACTION_DIMS[RF_PRAYER]; action++)
         heads[RF_PRAYER][action] = p->current_prayer > 0;
@@ -579,7 +583,7 @@ typedef struct {
     uint16_t cells[OSRS_INVENTORY_SIZE];
     uint8_t equipped[NUM_GEAR_SLOTS];
     uint8_t below_full, above_divine, food_ready, karambwan_ready, potion_ready, prayer, magic_ok, veng_active, veng_cooled, has_sacks,
-        teleport_ok, orb_ok, deployable, hand_busy, valid;
+        teleport_ok, orb_ok, deployable, hand_busy, data_escape, valid;
     RiskfightThreatGates gates;
     uint32_t useful; /* bit `slot`: riskfight_consumable_useful of that physical slot's eat or drink item */
     int special_energy;
@@ -612,6 +616,7 @@ static inline void riskfight_mask_key(const RiskfightState* s, int agent, const 
     key->has_sacks = s->inventory_use[agent].vengeance_sacks > 0;
     key->teleport_ok = osrs_teleport_allowed(s->env.pvp_runtime.teleport[agent], s->env.tick);
     key->hand_busy = s->hand_busy[agent] != 0;
+    key->data_escape = agent == 1 && s->data_escapes ? 1 + riskfight_data_escape(s) : 0;
     key->deployable = riskfight_deployable != 0;
     key->valid = 1;
     key->special_energy = p->special_energy;
@@ -739,6 +744,14 @@ enum { RF_DHAROK_MEAL_BREW_PM = 400 };
  * leaving, at hitpoints 0-19, 20-39, 40-59, 60 up: 28.5, 13.5, 3.5, 0.8; the human profiles' tab_pm gave him 6.8, 7.2, 3.1, 2.2. Low, he tabbed too rarely,
  * stayed in and plain hits finished him: 20% of sim knockouts against 1 of 63 spectated. */
 static const uint16_t RF_DHAROK_TAB_PM[4] = {29, 14, 4, 1};
+
+/** The scripts' teleport, for a fighter whose tab is not locked: out of heals below 30 hitpoints, else a roll per tick, RF_DHAROK_TAB_PM on his own hitpoints
+ * in a Dharok kit (`dharok`), the profile's tab_pm on the supplies he used this round (consume_ticks) and hitpoints below 40 otherwise. */
+static int riskfight_script_escape(const RiskfightProfile* profile, int dharok, int hp, int out_of_heals, int consume_ticks, uint32_t seed, uint32_t tick) {
+    int supply_band = min_int(consume_ticks / RISKFIGHT_TAB_SUPPLY_TICKS, RISKFIGHT_TAB_SUPPLY_BANDS - 1);
+    int tab_pm = dharok ? RF_DHAROK_TAB_PM[min_int(3, hp / 20)] : profile->tab_pm[supply_band][hp < 40];
+    return (hp < 30 && out_of_heals) || riskfight_sample_event(seed, tick, 31, tab_pm);
+}
 
 /* A Dharok pool opponent's orb (Feel, 10 off himself), per tick on his own hitpoints and the axe in hand, on every tick of the other side's attack clock. An orb is
  * a lone 10 with no swing of the other side on the ticks around it and no Vengeance proc of his, so it can't be told from his hit the tick after his swing nor next
@@ -969,13 +982,29 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     actions[RF_ORB] = orb_pm && riskfight_sample_event(seed, profile->dharok_eating ? tick : attack_tick, 24, orb_pm);
     actions[RF_RING] = inventory.item_slot[obs[7] > 0.1f ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING];
     if (obs[RF_SELF_TELEPORT_LOCK] > 0) return;
-    int supply_band = min_int(consume_ticks / RISKFIGHT_TAB_SUPPLY_TICKS, RISKFIGHT_TAB_SUPPLY_BANDS - 1);
     int out_of_heals = !inventory.kind_slot[OSRS_CONSUMABLE_ANGLERFISH] && !inventory.kind_slot[OSRS_CONSUMABLE_KARAMBWAN] &&
         !inventory.kind_slot[OSRS_CONSUMABLE_MARLIN] &&
         !inventory.kind_slot[OSRS_CONSUMABLE_SUMMER_PIE] &&
         !inventory.kind_slot[OSRS_CONSUMABLE_HALIBUT] && !inventory.kind_slot[OSRS_CONSUMABLE_BREW];
-    int tab_pm = profile->dharok_eating ? RF_DHAROK_TAB_PM[min_int(3, hp / 20)] : profile->tab_pm[supply_band][hp < 40];
-    if ((hp < 30 && out_of_heals) || riskfight_sample_event(seed, tick, 31, tab_pm))
+    if (riskfight_script_escape(profile, profile->dharok_eating, hp, out_of_heals, consume_ticks, seed, tick))
         actions[RF_PRIMARY] = RF_TELEPORT;
+}
+
+/** Whether seat 1, a net under RiskfightState.data_escapes, teleports on the tick about to be stepped: the escape rule its script would follow
+ * (riskfight_script_escape on the opponent's profile, RF_DHAROK_TAB_PM in a Dharok kit), with the script's own rolls, while it holds a tab it may use now.
+ * A pure function of the state: the mask (the no-op on that tick) and the step (the teleport) read the same decision. */
+static int riskfight_data_escape(const RiskfightState* s) {
+    if (!s->data_escapes) return 0;
+    const Player* p = &s->env.players[1];
+    if (!osrs_teleport_allowed(s->env.pvp_runtime.teleport[1], s->env.tick)) return 0;
+    int has_tab = 0, heals = 0;
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        OsrsConsumableKind kind = (OsrsConsumableKind)osrs_inventory_cell_metadata(&p->inventory_cells[slot])->consumable_kind;
+        has_tab |= kind == OSRS_CONSUMABLE_TELEPORT;
+        heals |= kind == OSRS_CONSUMABLE_ANGLERFISH || kind == OSRS_CONSUMABLE_KARAMBWAN || kind == OSRS_CONSUMABLE_MARLIN ||
+            kind == OSRS_CONSUMABLE_SUMMER_PIE || kind == OSRS_CONSUMABLE_HALIBUT || kind == OSRS_CONSUMABLE_BREW;
+    }
+    return has_tab && riskfight_script_escape(s->opponent_profile, s->data_escapes == RF_DATA_ESCAPES_DHAROK, p->current_hitpoints, !heals,
+        s->consume_ticks[1], s->script_seed[1], (uint32_t)s->env.tick);
 }
 #endif

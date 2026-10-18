@@ -324,25 +324,34 @@ static void test_rude_teleports_build_reputation(void) {
     }
     assert(near_share(started, sessions, RF_REP_START_PROBABILITY) && most > 2.5f);
     destroy();
-    /* A kosher teleport leaves it as it is, a rude one (nobody has specced) adds 1. */
-    for (int rude = 0; rude < 2; rude++) {
-        env = make_env(6000, 1, 82);
-        env->state.env.players[0].special_energy = rude ? 100 : 0; /* rude: nobody has specced; polite: both have */
-        env->state.env.players[1].special_energy = rude ? 100 : 0;
-        actions[0][RF_PRIMARY] = RF_TELEPORT;
-        puf_step(env);
-        assert(env->log.rude_teleports == rude);
-        assert(fabsf(env->training.rep - (float)rude) < 2e-3f);
-        assert(fabsf(observations[0][RF_SESSION_START + 4] - rude / RF_REP_OBS_SCALE) < 1e-3f);
-        destroy();
-    }
+    /* A kosher teleport leaves it as it is, a rude one (nobody has specced) adds 1, to the reputation of the seat that left: each seat sees its own. */
+    for (int seat = 0; seat < 2; seat++)
+        for (int rude = 0; rude < 2; rude++) {
+            env = make_env(6000, 1, 82);
+            assert(env->context.self_play && !env->context.opp_driven); /* a net in seat 1 keeps its own reputation */
+            env->state.env.players[0].special_energy = rude ? 100 : 0; /* rude: nobody has specced; polite: both have */
+            env->state.env.players[1].special_energy = rude ? 100 : 0;
+            memset(actions, 0, sizeof(actions));
+            actions[seat][RF_PRIMARY] = RF_TELEPORT;
+            puf_step(env);
+            const float own = seat ? env->training.his_rep : env->training.rep, other = seat ? env->training.rep : env->training.his_rep;
+            assert(seat || env->log.rude_teleports == rude);
+            assert(fabsf(own - (float)rude) < 2e-3f && other == 0);
+            assert(fabsf(observations[seat][RF_SESSION_START + 4] - rude / RF_REP_OBS_SCALE) < 1e-3f);
+            assert(observations[1 - seat][RF_SESSION_START + 4] == 0);
+            destroy();
+        }
     float rep = 2;
     const RiskfightRepRules rules = default_rules();
     for (int tick = 0; tick < RF_REP_HALF_LIFE_TICKS; tick++) rep = riskfight_rep_decay(&rules, rep);
     assert(fabsf(rep - 1) < 2e-3f);
-    /* The observation saturates at RF_REP_OBS_SCALE. */
+    /* The observation saturates at RF_REP_OBS_SCALE, each seat on its own reputation. */
     env = make_env(6000, 1, 83);
     env->training.rep = 10;
+    env->training.his_rep = 0;
+    riskfight_native_observe(env);
+    assert(observations[0][RF_SESSION_START + 4] == 1 && observations[1][RF_SESSION_START + 4] == 0);
+    env->training.his_rep = 10;
     riskfight_native_observe(env);
     assert(observations[0][RF_SESSION_START + 4] == 1 && observations[1][RF_SESSION_START + 4] == 1);
     destroy();

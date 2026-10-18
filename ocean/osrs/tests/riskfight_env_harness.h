@@ -40,7 +40,7 @@ static void harness_vec_create_variant(HarnessVec* v, int count, int rng_base, i
         {.key = "oppfit_probability", .value = 0.5}, {.key = "domain_randomization", .value = 1}, {.key = "damage_reward_coeff", .value = 0},
         {.key = "chance_reward_coeff", .value = 0}, {.key = "scripted_probability", .value = 0.5}, {.key = "scripted_omission_initial", .value = 0.8},
         {.key = "scripted_omission_decay_ticks", .value = 150000}, {.key = "midfight_probability", .value = 0}, {.key = "midfight_max_ticks", .value = 128},
-        {.key = "session_ticks", .value = 3000}, {.key = "curveball_probability", .value = 0.1}};
+        {.key = "session_ticks", .value = 3000}, {.key = "curveball_probability", .value = 0.1}, {.key = "data_escapes", .value = 1}};
     Dict kwargs = {.items = items, .size = sizeof(items) / sizeof(*items)};
     v->count = count;
     v->envs = calloc(count, sizeof(Env));

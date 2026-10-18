@@ -165,6 +165,68 @@ static void test_new_opponents_and_rematch(void) {
         (double)t.net_pool / t.net);
 }
 
+/* The mirror treats the seats alike: seat 1's kit is drawn with ours at the session's start and kept for its new opponents, as ours is kept, and domain randomization,
+ * which weakens the side of an opponent, leaves the learning policy's seat 1 alone. */
+static void test_mirror_keeps_kits_and_levels(void) {
+    DictItem knobs[] = {{.key = "live_loadout", .value = 4}, {.key = "scripted_probability", .value = 0}, {.key = "selfplay_pool_probability", .value = 0}};
+    Env* env = make_env(knobs, 3, 0, 515);
+    for (int session = 0; session < 50; session++) {
+        puf_reset(env);
+        const RiskfightLoadout* kit = env->context.loadout[1];
+        for (int i = 0; i < 20; i++) {
+            RiskfightTransition fresh = {.delay = 100};
+            riskfight_training_next_fight(&env->training, &env->state, &env->context, &fresh, env->tag);
+            assert(env->training.mirror && env->context.loadout[1] == kit);
+            const Player* us = &env->state.env.players[0];
+            const Player* him = &env->state.env.players[1];
+            assert(him->current_attack == us->current_attack && him->current_strength == us->current_strength && env->state.opp_lag == 0);
+        }
+    }
+    destroy(env);
+    printf("mirror: seat 1 keeps its kit for the session and its levels\n");
+}
+
+/* data_escapes: a net in seat 1 never may teleport by its own choice; when the scripts' escape rule fires its mask is the no-op and the step teleports it. A net in
+ * a Dharok kit follows RF_DHAROK_TAB_PM; seat 0 and a driven seat 1 are untouched. */
+static void test_data_escapes(void) {
+    DictItem knobs[] = {{.key = "data_escapes", .value = 1}, {.key = "live_loadout", .value = 4}, {.key = "scripted_probability", .value = 0},
+        {.key = "selfplay_pool_probability", .value = 0}};
+    Env* env = make_env(knobs, 4, 0, 616);
+    int dharok = 0, other = 0;
+    for (int i = 0; i < 200; i++) {
+        puf_reset(env);
+        const int kit_dharok = riskfight_loadout_dharok_pieces(env->context.loadout[1]) >= RF_DHAROK_KIT_PIECES;
+        assert(env->state.data_escapes == (kit_dharok ? RF_DATA_ESCAPES_DHAROK : RF_DATA_ESCAPES_PROFILE));
+        dharok += kit_dharok;
+        other += !kit_dharok;
+        if (riskfight_data_escape(&env->state)) continue;
+        assert(masks[0][RF_HEAD_OFFSET[RF_PRIMARY] + RF_TELEPORT] && !masks[1][RF_HEAD_OFFSET[RF_PRIMARY] + RF_TELEPORT]);
+    }
+    assert(dharok > 0 && other > 0);
+    /* Below 30 hitpoints out of heals the rule leaves at once: the mask is the no-op, and a no-op step ends the fight by his teleport. */
+    puf_reset(env);
+    Player* him = &env->state.env.players[1];
+    him->current_hitpoints = 20;
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        OsrsConsumableKind k = (OsrsConsumableKind)osrs_inventory_cell_metadata(&him->inventory_cells[slot])->consumable_kind;
+        if (k != OSRS_CONSUMABLE_TELEPORT) him->inventory_cells[slot] = osrs_inventory_cell_from_content_code(0);
+    }
+    riskfight_native_observe(env);
+    unsigned char wait[RF_MASK_SIZE];
+    riskfight_write_wait_mask(wait);
+    assert(riskfight_data_escape(&env->state) && !memcmp(masks[1], wait, RF_MASK_SIZE));
+    memset(actions, 0, sizeof(actions));
+    puf_step(env);
+    assert(env->log.sp_teleports[1] == 1 && env->log.sp_teleports[0] == 0);
+    destroy(env);
+    /* A frozen-tagged env whose seat 1 is the script: the script leaves by its own rule. */
+    DictItem driven_knobs[] = {{.key = "data_escapes", .value = 1}, {.key = "scripted_probability", .value = 1}};
+    env = make_env(driven_knobs, 2, 1, 617);
+    assert(env->context.opp_driven && env->state.data_escapes == RF_DATA_ESCAPES_OFF);
+    destroy(env);
+    printf("data escapes: seat 1's own teleport masked, %d Dharok-kit and %d other sessions, the escape tick a step of no choice\n", dharok, other);
+}
+
 /* A ragger is the script, so he only steps into a seat 1 no learning policy plays: a self_play 0 env and a frozen (tag > 0) env draw him with the reputation's
  * probability, a pure self-play env (tag 0) never does, nor any other driven opponent: seat 1's rows there train the learning policy, which must play them. */
 static void test_raggers_only_where_no_net_learns(void) {
@@ -448,6 +510,8 @@ int main(void) {
     test_new_opponents_and_rematch();
     test_oppfit_in_self_play();
     test_omission_only_for_the_driven();
+    test_mirror_keeps_kits_and_levels();
+    test_data_escapes();
     test_swapped_seats_see_mirrored_observations();
     test_start_views_mirror();
     test_session_rules_are_symmetric();

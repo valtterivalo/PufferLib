@@ -32,6 +32,10 @@ typedef struct {
     float rep; /* our reputation in this session (riskfight_session.h): rude teleports, decaying; read at every new opponent and by the observation */
     float his_rep; /* seat 1's, kept the same way from its own rude teleports while a net plays it (self-play): it lengthens the waits as ours does */
     int mirror; /* this opponent is the learning policy itself (pure self-play): the even mirror of riskfight_training_draw_opponent */
+    /* Seat 1's kit in the mirror, drawn with ours at the session's start and kept for all its opponents, as ours is kept. A kit drawn per opponent while ours
+     * is drawn per session gave the seats different kit shares per fight (a kit that ends fights sooner fills more of ours: 54% Dharok fights for seat 0 against
+     * 51% for seat 1 under a policy that orbs at random), and one policy then won more kills from one seat. */
+    const RiskfightLoadout* mirror_kit;
 } RiskfightTraining;
 
 static RiskfightTrainingConfig riskfight_training_config(Dict* kwargs) {
@@ -157,9 +161,11 @@ static uint16_t riskfight_dr_scale(RiskfightTraining* training, uint16_t rate) {
 }
 
 /** Domain randomization of his side after a reset: levels, defender, legs, body, amulet, food count, reaction lag and the
- * per-mille rates of his profile. Gear is varied only for the live loadout, whose slots all have fitted alternatives. */
+ * per-mille rates of his profile. Gear is varied only for the live loadout, whose slots all have fitted alternatives. Never in the mirror: seat 1 is then
+ * the learning policy in our kits, and weakening it alone (levels down to 100, a third of the anglerfish and karambwans gone) made seat 0 win 56% of the
+ * kills of one policy against itself. */
 static void riskfight_training_randomize(RiskfightTraining* training, RiskfightState* state, const RiskfightContext* context) {
-    if (!training->config.randomize) return;
+    if (!training->config.randomize || training->mirror) return;
     Player* p = &state->env.players[1];
     p->current_attack = 100 + riskfight_dr_pick(training, 19);
     p->current_strength = 100 + riskfight_dr_pick(training, 19);
@@ -222,7 +228,7 @@ static void riskfight_training_draw_opponent(RiskfightTraining* training, Riskfi
     context->opp_plain = 0;
     if (training->mirror) {
         context->opp_plain = 1;
-        context->loadout[1] = context->kit_mix != RF_KIT_MIX_NONE ? riskfight_training_draw_kit(training, context->kit_mix) : context->loadout[0];
+        context->loadout[1] = training->mirror_kit;
     } else if (!driven) {
         context->opp_plain = !riskfight_training_draw(training, training->config.pool_probability);
         if (context->kit_mix != RF_KIT_MIX_NONE) context->loadout[1] = riskfight_training_draw_kit(training, context->kit_mix);
@@ -283,6 +289,8 @@ static void riskfight_training_shuffle_bags(RiskfightTraining* training, Riskfig
 static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* training,
     RiskfightState* state, RiskfightContext* context, int frozen_policy) {
     if (context->kit_mix != RF_KIT_MIX_NONE) context->loadout[0] = riskfight_training_draw_kit(training, context->kit_mix);
+    if (context->self_play && frozen_policy == 0)
+        training->mirror_kit = context->kit_mix != RF_KIT_MIX_NONE ? riskfight_training_draw_kit(training, context->kit_mix) : context->loadout[0];
     training->rep = riskfight_training_draw(training, training->config.rep_start_probability) ? RF_REP_START_MAX * (1.0f - encounter_rand_float(&training->rng)) : 0;
     training->his_rep = 0;
     riskfight_training_draw_opponent(training, context, frozen_policy);

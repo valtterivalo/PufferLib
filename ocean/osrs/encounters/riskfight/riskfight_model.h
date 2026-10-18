@@ -177,6 +177,10 @@ typedef struct {
     int last_swing_item, last_swing_tick;
 } RiskfightVisibleOpponent;
 
+/* How seat 1 leaves (RiskfightState.data_escapes): by its own actions (the script's rule, OppFit's or a net's own teleport), or, a net, by the scripts' escape
+ * rule: the opponent profile's tab_pm, or RF_DHAROK_TAB_PM in a Dharok kit. */
+typedef enum { RF_DATA_ESCAPES_OFF, RF_DATA_ESCAPES_PROFILE, RF_DATA_ESCAPES_DHAROK } RiskfightDataEscapes;
+
 typedef struct {
     OsrsEnv env;
     int pending_pid_active;
@@ -238,6 +242,10 @@ typedef struct {
      * block's hand_busy reads 1). Sim: riskfight_motor_filter, the motor's chain not finished (every seat a net plays; 0 with the motor off). Live: gs_rl_server
      * sets it on an `OBS` request, the tick the plugin does not decide (ENGINE_WIRE.md: committed run, unlanded clicks). */
     int hand_busy[2];
+    /* Seat 1 is a net whose teleports are the scripts' data-fitted escape (riskfight_data_escape), RiskfightDataEscapes: set at the reset from
+     * RiskfightContext.data_escapes and the kit it wears. Its own teleport is masked, and on the tick the escape fires its mask is the no-op (the tick is a step
+     * of no choice) and the step teleports it. */
+    int data_escapes;
 } RiskfightState;
 typedef struct {
     uint8_t equipment[NUM_GEAR_SLOTS];
@@ -273,6 +281,10 @@ typedef struct {
     float damage_reward_coeff;
     float chance_reward_coeff;
     RiskfightMotor motor[2]; /* the hand of each seat a net plays (seat 1 in self-play), so both seats of one net click alike */
+    /* A net in seat 1 (self-play, the learning policy or a frozen one) leaves when the scripts' escape rule says so (RF_DHAROK_TAB_PM for a Dharok kit,
+     * else the profile's tab_pm and the out-of-heals rule), never by its own choice: env key data_escapes. Fighting skill is the net's, leaving is the
+     * players'. Without it a mirror of one policy finds leaving as good as fighting (both are worth 0 in a zero-sum mirror) and both seats learn to leave. */
+    int data_escapes;
     /* His actions from a fitted policy instead of the script: opp_hook fills them for the tick about to be processed, opp_after sees the tick that ran. */
     void* opp_user;
     void (*opp_hook)(void* user, const void* state, int* actions);
@@ -740,6 +752,10 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
     }
     if (ctx->opp_kit) riskfight_kit_apply(s, ctx->opp_kit, ctx->opp_roll);
     s->opponent_profile = riskfight_pick_profile(ctx->opponent, osrs_lowbias32(s->env.rng_state + 3 * 0x9e3779b9U));
+    /* A net in a Dharok kit (RF_DHAROK_KIT_PIECES pieces, worn or in the bag) leaves as the spectated Dharok fighters do, whatever base Defence it fights on. */
+    const RiskfightLoadout* his_loadout = ctx->loadout[1] ? ctx->loadout[1] : &RISKFIGHT_DEFAULT_LOADOUT;
+    s->data_escapes = !(ctx->data_escapes && ctx->self_play && !ctx->opp_driven) ? RF_DATA_ESCAPES_OFF :
+        riskfight_loadout_dharok_pieces(his_loadout) >= RF_DHAROK_KIT_PIECES ? RF_DATA_ESCAPES_DHAROK : RF_DATA_ESCAPES_PROFILE;
     riskfight_observe_visible(s, 0, 1);
     riskfight_observe_visible(s, 1, 1);
 }

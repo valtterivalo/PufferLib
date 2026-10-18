@@ -49,6 +49,9 @@ static void riskfight_put_int(EncounterState* state, EncounterContext* context, 
         assert(value == 0 || value == 1); ctx->self_play = value;
     } else if (strcmp(key, "motor") == 0) {
         assert(value == 0 || value == 1); ctx->motor[0].enabled = ctx->motor[1].enabled = value;
+    } else if (strcmp(key, "data_escapes") == 0) {
+        /* 1: a net in seat 1 leaves by the scripts' data-fitted escape rule, its own teleport masked (RiskfightContext.data_escapes). */
+        assert(value == 0 || value == 1); ctx->data_escapes = value;
     } else if (strcmp(key, "deployable") == 0) {
         assert(value == 0 || value == 1); riskfight_deployable = value;
     } else if (strcmp(key, "live_loadout") == 0) {
