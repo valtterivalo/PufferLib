@@ -382,3 +382,23 @@ Live, s6t0 drank super restores at full prayer with nothing drained (prayer 87-9
     "Other" KOs (plain hits on low victims) are still 26% against 1.6%.
   - **Training zeroes the recurrent state at each fight start** without a terminal: an env `resets` flag, and `zero_reset_state` in the rollout and the BPTT replay. GAE still runs across fights. Live always started fights from zero state; training had carried it across the ~7 fights of a session.
 - **Sweep 16** trains on all of this. Sweep 15 (461 observations) reached 11.65 (run 85).
+- **Chronology of the suppression** (the s13t04 run's checkpoints; median logit gap to the chosen action on Dharok offer steps, 60 sessions each):
+
+  | Steps | Axe | Maul | Orb | Double spec | Weapon-head entropy |
+  |---|---|---|---|---|---|
+  | 4.2M | 4.7 | 5.0 | 5.5 | 1.9 | 0.11 |
+  | 8.4-12.6M (closest) | 2.8 | 3.1-3.3 | 3.8-4.4 | 0 | 0.41-0.42 |
+  | 21-29M | 5.5-7.1 | | 6.2-6.6 | | 0.02-0.06 |
+  | 88.8M (= s13t04) | 8.1 | 8.9 | 8.3 | 9.6 | 0.01 |
+
+  The suppression is settled in the first ~20M steps and deepens as the weapon head's entropy collapses. A correction to an earlier claim: the Dharok roll-then-multiply bug gave the right max and mean; it coarsened the damage grid near KO thresholds and did not make the axe weaker.
+- **Brews only when they heal (861be5137):** s15t85 sipped brews at 120 HP to lift defence 118 to 120, draining attack and strength; the useful-consumable rule now offers a brew only below its heal cap.
+- **s15t85 installed** (sweep 15 run 85, 512x2, 461 inputs; C 21fe13b99 = live-s15 + the brew rule). In sweep 15's env (300 sessions):
+  - Dharok 10.75 / VW 12.15 net per hour, deaths 0.05 / 0.07 per session, against s13t04's 10.77 / 10.92;
+  - it never uses the axe, orb or maul either.
+
+  On the live VW traces, with the brew rule: 2 meals at 90+ HP in run 1437 (18 without it), teleports only kosher.
+- **The orb → axe → teleport play** (the user's account):
+  - **Spectator data:** 34 sequences in 34 duels (6.3% of fights, 25 of the 105 axe fighters), median swinger HP about 26, 1-4 orb clicks, both specs spent in 21-30 of 34. **0 KOs:** 18 zeros, 9 no hitsplat (the opponent teleported first in all 9), 7 hits of 9-44. The opponent teleported too in 33 of 34. It reads as an end-of-fight parting shot.
+  - **Sim (hand rule after both specs, orb to T, axe, teleport the next tick; ~12,000 fights per arm):** stake per fight 0.589 baseline, 0.586 at T=1, 0.561 at T=10, 0.549 at T=20. It turns later VW wins into escapes. The axe max at 1 HP is 96, as the user said.
+  - **Sim mismatch found:** the teleport tick wipes his recoil/Vengeance damage from our own axe hit, so 1-HP swings looked safer than in OSRS (being fixed).
