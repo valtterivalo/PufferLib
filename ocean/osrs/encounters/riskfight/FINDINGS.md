@@ -631,3 +631,28 @@ Harness: `dh_eat` with both seats on the Dharok script (6,000 fights per arm, st
   | Fight length, median ticks | 146 (spectated window) | 200 |
 
   The opponent-HP and time-in-band gaps remain. With damage and heal intake matched per tick, the next suspect is the HP the fight starts at: the spectated window starts mid-fight, while the sim starts at the drawn start HP.
+
+## 2026-10-18 night, last: the opponent-HP gap is real; the 60-79 meal band split
+
+- **Not a phase artefact.** On ticks after both fighters have been below 80 once (real: a hitsplat read below 80; sim: true HP), with real HP from the gap estimate (`/tmp/mj/phase.py`):
+
+  | | Real | Sim before |
+  |---|---|---|
+  | Time at HP < 40 / 40-79 / 80+ | .08 / .72 / .20 | .03 / .42 / .55 |
+  | Opponent median HP when the low fighter (1-20 / 20-35 / 35-50) is ready | 66 / 69 / 69 | 76 / 78 / 79 |
+
+- **How the sim opponent stays high.** Not damage: per tick at 60-79 and 80+ the sim takes 1.61-1.67 plus 0.25 orb, against real 1.83-2.11 with its orb included. He eats back over 80. Up-crossings over 80 per tick spent below 80 were 84 per mille sim against 27 real. Stays above 80 lasted a median 10 ticks against 6.
+  - The cause is the 60-79 meal band. On current status (`scripts/fit_dharok_meals.py`), a fighter hit into 59-69 eats at 241 per mille (0.70 fed by a 4-tick swing, n 265). Hit into 69-79 he eats at 36 (0.13, n 264), and from 79 up at 10. The single 60-79 band at 115 fed him from 70-79 past 80.
+  - From 80 up, 0.95 of single-animation gaps show no heal, so those animations are potions.
+- **Change:** `RF_DHAROK_MEAL_PM` now has 6 bands (bar 0-5, 6-11, 12-17, 18-20, 21-23, 24 up; `riskfight_dharok_meal_band`). All are fitted on current status: 589, 572, 468, 241, 36, 10.
+- **Re-measured** (6,000 fights, both seats on the Dharok script, seat 0 base Defence 80, `RF_DHAROK_TAB_P10K`), after both have been below 80:
+
+  | | Real | Sim |
+  |---|---|---|
+  | Time at HP < 40 / 40-79 / 80+ | .08 / .72 / .20 | .03 / .50 / .47 |
+  | Opponent median HP (low fighter 1-20 / 20-35 / 35-50) | 66 / 69 / 69 | 74 / 75 / 77 |
+  | KO share | .24 | .19 |
+  | Escape share | .59 | .81 |
+  | HP p10 before the opponent's next hit (bands 1-20 / 20-35 / 35-50) | 48 / 56 / 66 | 52 / 54 / 61 |
+
+- **Still open:** up-crossings over 80 are 67 per mille in the sim against 27 real, 45 of them from meals at 60-79. A constant rate per band, fitted on ticks right after a hit, still feeds a fighter who climbed into 60-69 by eating. The eat-animation rates split by "hit since his last meal" differ only 1.2-1.5x by band, so that alone won't close it. The real crossing count rests on the gap estimate, which spreads a gap's heal over its eat animations.

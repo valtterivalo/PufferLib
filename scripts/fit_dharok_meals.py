@@ -18,19 +18,22 @@ and his hitpoints between hits are the last read plus meals not yet shown. This 
 - His clock phase on tick t (RiskfightMealPhase): ticks since the other side's last swing animation before t (instant maul specials, 1667, leave it running),
   as the script reads it from the observation: 1, 2, 3, 4 up while his weapon is not ready (LATE), READY from his weapon's speed on (SWING_SPEED by animation,
   4 for shared animations), NONE before his first swing.
-- Bands: bar 0-5, 6-11, 12-17, 18-23, 24-29 of 30 on the estimated hitpoints (the script's band, hitpoints * 30 / 99 / 6).
+- Bands: bar 0-5, 6-11, 12-17, 18-20, 21-23, 24 up of 30 on the estimated hitpoints (riskfight_dharok_meal_band). 60-79 is split: on current status a fighter
+  hit into 59-69 eats at 241 per mille, into 69-79 at 36; one 20-hitpoint band gave 115 on both, so the script ate from 70-79 past 80 three times as often
+  per tick as spectated fighters (up-crossings over 80: 84 against 27 per mille) and sat at 80 up 0.55 of the time against 0.20.
 
 - Calibration: the eat animation (829) is a potion's too, so animations alone overcount meals that heal (restores and boosts drink on the same animation). The
   rates from the animations give the shape over the phases; each band is scaled so its meals carry the heal the gaps show: a gap's heal H counts H / size meals,
   size the mean of the script's meal sizes at that hitpoints (RF_DHAROK_MEAL_SINGLE_PM / _DOUBLE_PM: single 22, double 40, triple 56), split over the gap's
   ticks in proportion to their animation rates. NONE cells under NONE_MIN ticks take the band's READY rate.
 
-The rates of bands 0-3 (below 79 hitpoints) come from the heal the next hitsplat shows instead, a current-status fit that needs no visibility model: after a hit
-of the other side leaves him in a band (a fresh read, the swing animation of the other side on that tick or the one before), his next hit lands L ticks of
-the other side's clock later (swing to swing); he was healed by then when bar + damage on that hit is 8 or more over the read. With a meal per tick at rate h,
-P(healed by L) = 1 - (1 - h)^L; h is the maximum likelihood fit per band (a grid of 1/1000), the same on every phase. The animation rates put too few meals
-in the first ticks after his hit (by his next 4-tick swing 0.65 healed in the sim against 0.92-0.98 spectated), and the constant hazard fits the spectated
-P(healed by L) within its noise (printed). Band 4 keeps the animation rates: from 80 up a meal mostly lifts him past 99, which the bar (30 at 99 and up) hides.
+The table's rates come from the heal the next hitsplat shows instead (the animation rates above are printed for the phase shape only), a current-status fit
+that needs no visibility model: after a hit of the other side leaves him in a band (a fresh read, the swing animation of the other side on that tick or the one
+before), his next hit lands L ticks of the other side's clock later (swing to swing); he was healed by then when bar + damage on that hit is 8 or more over the
+read. With a meal per tick at rate h, P(healed by L) = 1 - (1 - h)^L; h is the maximum likelihood fit per band (a grid of 1/1000), the same on every phase. The
+animation rates put too few meals in the first ticks after his hit (by his next 4-tick swing 0.65 healed in the sim against 0.92-0.98 spectated), and the
+constant hazard fits the spectated P(healed by L) within its noise (printed). From 80 up the eat animations are nearly all potions: of the gaps between his
+hitsplats with one animation, 0.95 show no heal.
 """
 import argparse
 import collections
@@ -47,15 +50,24 @@ EAT = 2
 SWING_SPEED = {1658: 4, 11275: 4, 7045: 6, 426: 4, 10172: 5, 10173: 5, 440: 7, 2066: 7, 2067: 7, 7514: 4, 7644: 6, 376: 4, 1062: 4, 4230: 4, 5865: 4, 5866: 4, 386: 4}
 INSTANT_ANIMS = {1667}
 PHASES = ("1", "2", "3", "late", "ready", "none")
-BANDS = 5
-STATUS_BANDS, STATUS_L, HEALED_MIN = 4, 11, 8  # bands fitted on current status; L cap; heal that counts as a meal
+BANDS = 6
+BAND_BARS = (0, 6, 12, 18, 21, 24)  # the bar each band starts at
+
+
+def band_of(hp):
+    bar = int(hp * 30 / 99)
+    return max(b for b in range(BANDS) if bar >= BAND_BARS[b])
+
+
+STATUS_BANDS, STATUS_L, HEALED_MIN = 6, 11, 8  # bands fitted on current status; L cap; heal that counts as a meal
 NONE_MIN = 100  # ticks under which the NONE cell takes the band's READY rate
 VISIBLE_SWING, VISIBLE_HIT, VISIBLE_CARRY, VISIBLE_QUIET = 0.0, 0.49, 0.45, 0.89
 SINGLE_PM = [150, 130, 100, 170, 310, 790, 970, 970, 920, 1000]  # riskfight_policy.h RF_DHAROK_MEAL_SINGLE_PM / _DOUBLE_PM, by hitpoints / 10
 DOUBLE_PM = [40, 140, 280, 540, 650, 210, 20, 30, 80, 0]
 SIZE_BY_BAND = []
-for _b in range(5):  # a band's mean meal: the deciles it covers (bar 6 = hitpoints 19.8)
-    _d = [x for x in range(10) if _b * 19.8 <= x * 10 + 5 < (_b + 1) * 19.8]
+for _b in range(6):  # a band's mean meal: the deciles it covers
+    _lo, _hi = (0, 6, 12, 18, 21, 24)[_b] * 99 / 30, ((6, 12, 18, 21, 24)[_b] * 99 / 30 if _b < 5 else 100)
+    _d = [x for x in range(10) if _lo <= x * 10 + 5 < _hi] or [min(9, int(_lo // 10))]
     SIZE_BY_BAND.append(sum((22 * SINGLE_PM[x] + 40 * DOUBLE_PM[x] + 56 * (1000 - SINGLE_PM[x] - DOUBLE_PM[x])) / 1000 for x in _d) / len(_d))
 
 
@@ -97,7 +109,7 @@ def fighter_ticks(duels):
                     p = VISIBLE_SWING if any(x in SWING_ANIMS for x in own) else VISIBLE_HIT if int(rows[t][NHIT]) > 0 else \
                         VISIBLE_CARRY if anims(rows[t - 1][ANIMS]) or rows[t - 1][EAT] == "1" else VISIBLE_QUIET
                     if hp >= 99: continue
-                    gap.append((min(BANDS - 1, int(hp * 30 / 99) // 6), ph[t], p, rows[t][EAT] == "1"))
+                    gap.append((band_of(hp), ph[t], p, rows[t][EAT] == "1"))
                 ticks += gap
                 gaps.append((gap, heal))
             yield ticks, gaps
@@ -164,8 +176,7 @@ def current_status(duels):
                 sb = b if swing[b] else b - 1 if swing[b - 1] else None
                 hp = int(mine[a][BAR]) * 99 / 30
                 if sa is None or sb is None or sb <= sa or hp <= 0: continue
-                band = min(BANDS - 1, int(hp * 30 / 99) // 6)
-                if band >= STATUS_BANDS: continue
+                band = band_of(hp)
                 cell = out[(band, min(sb - sa, STATUS_L))]
                 cell[0] += int(mine[b][BAR]) * 99 / 30 + int(mine[b][DMG]) - hp >= HEALED_MIN
                 cell[1] += 1

@@ -731,18 +731,26 @@ static void riskfight_script_consume(const RiskfightObservedSelf* self,
  * brew dose (+4 and +5, 260; +6, 259, is either): RF_DHAROK_MEAL_BREW_PM of them a brew dose.
  * When he eats: scripts/fit_dharok_meals.py, not bar rises. The spectated bar moves only with a hitsplat (of the eat animations below 60 hitpoints none shows the
  * bar rising before his next hitsplat), so a bar rise times a meal at the next hit: the old fit's "meal the tick after his swing" (225-424 per mille) was the
- * tick his hit lands. Below 79 hitpoints (bands 0-3) the rate is fitted on current status, which needs no visibility model: after the other side's hit leaves him
- * in the band, was he healed (bar + damage 8 or more over the read) by the other side's next hit, L ticks of that side's clock later? A constant per-tick rate h
- * fits P(healed by L) = 1 - (1 - h)^L within its noise at every L (by his next 4-tick swing 0.97 / 0.98 / 0.94 / 0.41 by band, n 38 / 192 / 534 / 529), so
- * there is no clock shape to keep and no longer memory to add: a fighter low after a hit is all but surely fed before the next one, and the earlier tables
- * (eat animations weighted by their visibility, 154-301 per mille below 60) left 0.35 of them unfed by a 4-tick swing. That gave the next hit 0.08-0.15 kills
- * in the sim against 0.03-0.04 spectated. Band 4 (79 up) keeps the animation rates: from there a meal mostly lifts him past 99, which the bar (30 at 99 and up)
- * hides. By ticks since the other side's swing, 1, 2, 3, 4 up while his weapon is not ready, from its speed on, and before his first swing. RF_DHAROK_MEAL_PM[bar / 6][phase]
- * (RiskfightMealPhase) are the per-tick tries. */
+ * tick his hit lands. The rate is fitted on current status, which needs no visibility model: after the other side's hit leaves him in the band, was he healed
+ * (bar + damage 8 or more over the read) by the other side's next hit, L ticks of that side's clock later? A constant per-tick rate h fits P(healed by L) =
+ * 1 - (1 - h)^L within its noise at every L (by his next 4-tick swing 0.97 / 0.98 / 0.94 below 60 by band, n 38 / 192 / 534), so there is no clock shape to
+ * keep: a fighter low after a hit is all but surely fed before the next one. The earlier tables (eat animations weighted by their visibility, 154-301 per mille
+ * below 60) left 0.35 of them unfed by a 4-tick swing. 60-79 is split at bar 21 (69 hitpoints): hit into 59-69 he eats at 241 per mille (0.70 fed by a 4-tick
+ * swing, n 265), into 69-79 at 36 (0.13, n 264), from 79 up at 10. One 20-hitpoint band at 115 fed him from 70-79 past 80 three times as often per tick as
+ * spectated fighters (up-crossings 84 against 27 per mille), and he sat at 80 up 0.55 of the time against 0.20 once both had been below 80. From 80 up the eat
+ * animations are nearly all potions (0.95 of single-animation gaps show no heal). By ticks since the other side's swing, 1, 2, 3, 4 up while his weapon is not
+ * ready, from its speed on, and before his first swing. RF_DHAROK_MEAL_PM[riskfight_dharok_meal_band][phase] (RiskfightMealPhase) are the per-tick tries. */
 typedef enum { RF_MEAL_SINCE_1, RF_MEAL_SINCE_2, RF_MEAL_SINCE_3, RF_MEAL_LATE, RF_MEAL_READY, RF_MEAL_NONE, RF_MEAL_PHASES } RiskfightMealPhase;
-static const uint16_t RF_DHAROK_MEAL_PM[5][RF_MEAL_PHASES] = {
-    {589, 589, 589, 589, 589, 589}, {572, 572, 572, 572, 572, 572}, {468, 468, 468, 468, 468, 468}, {115, 115, 115, 115, 115, 115}, {22, 20, 25, 37, 10, 10},
+enum { RF_DHAROK_MEAL_BANDS = 6 };
+static const uint16_t RF_DHAROK_MEAL_PM[RF_DHAROK_MEAL_BANDS][RF_MEAL_PHASES] = {
+    {589, 589, 589, 589, 589, 589}, {572, 572, 572, 572, 572, 572}, {468, 468, 468, 468, 468, 468}, {241, 241, 241, 241, 241, 241}, {36, 36, 36, 36, 36, 36},
+    {10, 10, 10, 10, 10, 10},
 };
+/** His band in RF_DHAROK_MEAL_PM: bar (of 30) 0-5, 6-11, 12-17, 18-20, 21-23, 24 up (scripts/fit_dharok_meals.py band_of). */
+static int riskfight_dharok_meal_band(int hp) {
+    int bar = hp * OSRS_PLAYER_HEALTH_BAR_SCALE / 99;
+    return bar < 18 ? bar / 6 : bar < 21 ? 3 : bar < 24 ? 4 : 5;
+}
 static const uint16_t RF_DHAROK_MEAL_SINGLE_PM[10] = {150, 130, 100, 170, 310, 790, 970, 970, 920, 1000};
 static const uint16_t RF_DHAROK_MEAL_DOUBLE_PM[10] = {40, 140, 280, 540, 650, 210, 20, 30, 80, 0};
 enum { RF_DHAROK_MEAL_BREW_PM = 400 };
@@ -785,8 +793,7 @@ static void riskfight_script_dharok_meal(const float* obs, const RiskfightObserv
     int hp = self->hitpoints;
     if (hp >= 99) return;
     const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
-    int band = min_int(4, hp * OSRS_PLAYER_HEALTH_BAR_SCALE / 99 / 6);
-    if (!riskfight_sample_event(seed, tick, 32, RF_DHAROK_MEAL_PM[band][riskfight_meal_phase(obs, opponent)])) return;
+    if (!riskfight_sample_event(seed, tick, 32, RF_DHAROK_MEAL_PM[riskfight_dharok_meal_band(hp)][riskfight_meal_phase(obs, opponent)])) return;
     int size = (int)(riskfight_sample_hash(seed, tick, 33) % 1000u);
     int pieces = size < RF_DHAROK_MEAL_SINGLE_PM[hp / 10] ? 1 : size < RF_DHAROK_MEAL_SINGLE_PM[hp / 10] + RF_DHAROK_MEAL_DOUBLE_PM[hp / 10] ? 2 : 3;
     int brew = self->potion_timer == 0 ? inventory->kind_slot[OSRS_CONSUMABLE_BREW] : 0;
