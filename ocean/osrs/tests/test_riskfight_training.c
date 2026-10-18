@@ -2,7 +2,7 @@
 
 typedef struct {
     Env env;
-    float observations[2][RF_OBS_SIZE], actions[2][RF_HEADS], rewards[2], terminals[2];
+    float observations[2][RF_OBS_SIZE], actions[2][RF_HEADS], rewards[2], terminals[2], resets[2];
     unsigned char masks[2][RF_MASK_SIZE];
 } Fixture;
 
@@ -13,7 +13,7 @@ static Fixture* fixture(Dict* config, int frozen) {
     f->env.tag = frozen;
     for (int i = 0; i < 2; i++) f->env.agents[i] = (Agent){
         .observations = f->observations[i], .actions = f->actions[i],
-        .rewards = &f->rewards[i], .terminals = &f->terminals[i],
+        .rewards = &f->rewards[i], .terminals = &f->terminals[i], .resets = &f->resets[i],
         .action_mask = f->masks[i], .policy = i};
     puf_reset(&f->env);
     return f;

@@ -205,15 +205,18 @@ __global__ void cast(unsigned char* dst,
     }
 }
 
-// Fused rew+term cast
+// Fused rew+term cast. reset_dst = terminal or env reset: the step's state reset.
 __global__ void cast_rew_term(
         precision_t* __restrict__ rew_dst, const float* __restrict__ rew_src,
         precision_t* __restrict__ term_dst, const float* __restrict__ term_src,
+        precision_t* __restrict__ reset_dst, const float* __restrict__ reset_src,
         int n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
         rew_dst[idx] = from_float(rew_src[idx]);
         term_dst[idx] = from_float(term_src[idx]);
+        reset_dst[idx] = from_float(
+            term_src[idx] != 0.0f || reset_src[idx] != 0.0f ? 1.0f : 0.0f);
     }
 }
 
@@ -355,6 +358,7 @@ struct RolloutBuf {
     Prec logprobs;      // ...
     Prec rewards;
     Prec terminals;
+    Prec resets;        // terminal or env reset: zero RNN state before obs[t]
     Prec action_mask;   // (horizon, agents, mask_size)
 };
 
@@ -370,10 +374,11 @@ void register_rollout_buffers(RolloutBuf* bufs, Allocator* alloc,
     bufs->logprobs     = {.shape = {T, B}};
     bufs->rewards      = {.shape = {T, B}};
     bufs->terminals    = {.shape = {T, B}};
+    bufs->resets       = {.shape = {T, B}};
     bufs->action_mask  = {.shape = {T, B, mask_size}};
     Prec* prec_fields[] = {
         &bufs->observations, &bufs->values, &bufs->logprobs,
-        &bufs->rewards, &bufs->terminals, &bufs->action_mask,
+        &bufs->rewards, &bufs->terminals, &bufs->resets, &bufs->action_mask,
     };
     for (int i = 0; i < (int)(sizeof(prec_fields) / sizeof(prec_fields[0])); i++) {
         alloc_register(alloc, prec_fields[i]);
@@ -411,6 +416,7 @@ RolloutBuf rollout_time_view(RolloutBuf* base, int start_t, int T) {
     view.logprobs     = puf_time_view(base->logprobs,     start_t, T);
     view.rewards      = puf_time_view(base->rewards,      start_t, T);
     view.terminals    = puf_time_view(base->terminals,    start_t, T);
+    view.resets       = puf_time_view(base->resets,       start_t, T);
     view.action_mask  = puf_time_view(base->action_mask,  start_t, T);
     return view;
 }
@@ -433,6 +439,7 @@ struct VecEnv {
     float* actions;
     float* rewards;
     float* terminals;
+    float* resets;
     unsigned char* action_mask;
     int* worker_state;
     int shutdown;
@@ -448,6 +455,7 @@ struct EnvBuf {
     Float actions;    // (total_agents, num_atns)
     Float rewards;    // (total_agents,)
     Float terminals;  // (total_agents,)
+    Float resets;     // (total_agents,); GPU envs never write it (stays 0)
     Byte action_mask; // (total_agents, mask_size); always allocated
 };
 
@@ -739,10 +747,9 @@ static Prec init_slot(Prec full, int slot) {
     return {.data = full.data + (long)slot * stride, .shape = {L, A, H}};
 }
 
-// Zero RNN state for agents that just terminated. Same grid as snapshot
-// (L*count*H); non-terminal threads return after one terminal load.
-__global__ void zero_term_state(Prec state, Float terminals,
-        int state_start, int terminal_start, int count) {
+// Zero RNN state for agents whose step reset it (terminal or env reset). Same
+// grid as snapshot (L*count*H); other threads return after one reset load.
+__global__ void zero_reset_state(Prec state, Prec resets, int count) {
     int L = state.shape[0];
     int H = state.shape[2];
     int total = L * count * H;
@@ -753,10 +760,10 @@ __global__ void zero_term_state(Prec state, Float terminals,
     int h = idx % H;
     int rel = (idx / H) % count;
     int layer = idx / (count * H);
-    if (terminals.data[terminal_start + rel] == 0.0f) {
+    if (to_float(resets.data[rel]) == 0.0f) {
         return;
     }
-    long i = state_elem_idx(layer, (int)state.shape[1], state_start + rel, h, H);
+    long i = state_elem_idx(layer, (int)state.shape[1], rel, h, H);
     state.data[i] = from_float(0.0f);
 }
 
@@ -797,7 +804,7 @@ static void pufferl_forward_step(PuffeRL* pufferl, int buf, int t,
     int start = buf * block_size;
     int* layout = vec->policy_layout;
 
-    // Copy observations, rewards, terminals from GPU env buffers to rollout buffer
+    // Copy observations, rewards, terminals, resets from GPU env buffers to rollout buffer
     ObsTensor* obs_env = &env->obs;
     int n = block_size * obs_env->shape[1];
     Prec obs_dst = puf_slice(rollouts.observations, t, start, block_size);
@@ -813,9 +820,11 @@ static void pufferl_forward_step(PuffeRL* pufferl, int buf, int t,
 
     Prec rew_dst = puf_slice(rollouts.rewards, t, start, block_size);
     Prec term_dst = puf_slice(rollouts.terminals, t, start, block_size);
+    Prec reset_dst = puf_slice(rollouts.resets, t, start, block_size);
     cast_rew_term<<<grid_size(block_size), BLOCK_SIZE, 0, stream>>>(
         rew_dst.data, env->rewards.data + start,
-        term_dst.data, env->terminals.data + start, block_size);
+        term_dst.data, env->terminals.data + start,
+        reset_dst.data, env->resets.data + start, block_size);
 
     // Mask always allocated (env-written or synthetic all-ones). Continuous ignores it in sample.
     int mask_size = rollouts.action_mask.shape[2];
@@ -847,11 +856,12 @@ static void pufferl_forward_step(PuffeRL* pufferl, int buf, int t,
         Prec lp_b   = puf_slice(rollouts.logprobs,     t, sub, n);
         Prec val_b  = puf_slice(rollouts.values,       t, sub, n);
         Prec mask_b = puf_slice(rollouts.action_mask,  t, sub, n);
+        Prec reset_b = puf_slice(rollouts.resets,      t, sub, n);
 
         // Per-policy state is compact (n agents); local index 0..n-1.
         int state_n = (int)st->shape[0] * n * (int)st->shape[2];
-        zero_term_state<<<grid_size(state_n), BLOCK_SIZE, 0, stream>>>(
-            *st, env->terminals, 0, sub, n);
+        zero_reset_state<<<grid_size(state_n), BLOCK_SIZE, 0, stream>>>(
+            *st, reset_b, n);
 
         // Carry path: snapshot trainable policy state into per-slot initial_states.
         if (!pol->frozen && t == 0 && rollouts.initial_states.data != NULL) {
@@ -1030,6 +1040,9 @@ static void env_setup(PuffeRL* p, VecEnv* vec, Dict* vk, Dict* ek) {
         cudaHostAllocPortable);
     cudaHostAlloc((void**)&vec->terminals, total_agents * sizeof(float),
         cudaHostAllocPortable);
+    cudaHostAlloc((void**)&vec->resets, total_agents * sizeof(float),
+        cudaHostAllocPortable);
+    memset(vec->resets, 0, total_agents * sizeof(float));
     cudaHostAlloc((void**)&vec->action_mask, mask_bytes, cudaHostAllocPortable);
     memset(vec->action_mask, 1, mask_bytes);
 
@@ -1081,6 +1094,7 @@ static void env_setup(PuffeRL* p, VecEnv* vec, Dict* vk, Dict* ek) {
                 a->actions = vec->actions + (size_t)phys * NUM_ATNS;
                 a->rewards = vec->rewards + phys;
                 a->terminals = vec->terminals + phys;
+                a->resets = vec->resets + phys;
                 a->action_mask = vec->action_mask + (size_t)phys * vec->mask_size;
             }
             eptr->tag = tag;
@@ -1101,6 +1115,8 @@ static void cpu_upload(PuffeRL* p, int start, int n, cudaStream_t stream) {
     cudaMemcpyAsync(e->rewards.data + start, v->rewards + start,
         n * sizeof(float), cudaMemcpyHostToDevice, stream);
     cudaMemcpyAsync(e->terminals.data + start, v->terminals + start,
+        n * sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(e->resets.data + start, v->resets + start,
         n * sizeof(float), cudaMemcpyHostToDevice, stream);
     cudaMemcpyAsync(e->action_mask.data + (size_t)start * mask,
         v->action_mask + (size_t)start * mask,
@@ -1180,6 +1196,7 @@ static void* vec_thread_main(void* arg) {
             }
             memset(&vec->rewards[agent_start], 0, apb * sizeof(float));
             memset(&vec->terminals[agent_start], 0, apb * sizeof(float));
+            memset(&vec->resets[agent_start], 0, apb * sizeof(float));
             clock_gettime(CLOCK_MONOTONIC, &t0);
             #pragma omp parallel for schedule(static) num_threads(vec->num_workers)
             for (int i = env_start; i < env_start + env_count; i++) {
@@ -1481,6 +1498,8 @@ static void train_epoch_gpu(PuffeRL* pufferl, RolloutBuf src, int slot,
     transpose_102<<<grid_size(T * B), BLOCK_SIZE, 0, stream>>>(
         rollouts->terminals.data, src.terminals.data, T, B, 1);
     transpose_102<<<grid_size(T * B), BLOCK_SIZE, 0, stream>>>(
+        rollouts->resets.data, src.resets.data, T, B, 1);
+    transpose_102<<<grid_size(T * B), BLOCK_SIZE, 0, stream>>>(
         rollouts->values.data, src.values.data, T, B, 1);
     transpose_102<<<grid_size(T * B * mask_c), BLOCK_SIZE, 0, stream>>>(
         rollouts->action_mask.data, src.action_mask.data, T, B, mask_c);
@@ -1525,9 +1544,11 @@ static void train_epoch_gpu(PuffeRL* pufferl, RolloutBuf src, int slot,
         if (dw_train->continuous) {
             p_logstd = dw_train->logstd;
         }
+        // The scan resets state on terminals and env resets; GAE below sees terminals only.
+        Prec mb_resets = slice_rows(rollouts->resets, dest_off, Nmb);
         Prec dec = arch_forward_train(&primary->arch, primary->weights,
             pufferl->train_activs, graph.mb_obs, graph.mb_state,
-            graph.mb_terminals, dest_off, graph, p_logstd,
+            mb_resets, dest_off, graph, p_logstd,
             pufferl->act_sizes, pufferl->ppo_bufs.grad_logits.data,
             pufferl->ppo_bufs.grad_values.data, stream);
         puff_advantage<<<adv_grid, ADV_THREADS, 0, stream>>>(
@@ -1878,6 +1899,7 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
         .actions =     {.shape = {total_agents, NUM_ATNS}},
         .rewards =     {.shape = {total_agents}},
         .terminals =   {.shape = {total_agents}},
+        .resets =      {.shape = {total_agents}},
         .action_mask = {.shape = {total_agents, act_n}},
     };
     EnvBuf* env = &pufferl->env;
@@ -1886,11 +1908,13 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
     cudaMalloc((void**)&env->actions.data, total_agents * NUM_ATNS * sizeof(float));
     cudaMalloc((void**)&env->rewards.data, total_agents * sizeof(float));
     cudaMalloc((void**)&env->terminals.data, total_agents * sizeof(float));
+    cudaMalloc((void**)&env->resets.data, total_agents * sizeof(float));
     cudaMalloc((void**)&env->action_mask.data, mask_bytes);
     cudaMemset(env->obs.data, 0, total_agents * OBS_SIZE * sizeof(obs_t));
     cudaMemset(env->actions.data, 0, total_agents * NUM_ATNS * sizeof(float));
     cudaMemset(env->rewards.data, 0, total_agents * sizeof(float));
     cudaMemset(env->terminals.data, 0, total_agents * sizeof(float));
+    cudaMemset(env->resets.data, 0, total_agents * sizeof(float));
     cudaMemset(env->action_mask.data, 1, mask_bytes);
 
     env_setup(pufferl, vec, &vec_kwargs, env_kwargs);

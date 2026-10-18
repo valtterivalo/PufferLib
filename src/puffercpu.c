@@ -513,7 +513,7 @@ void free_mingru(MinGRU* layer) {
     free(layer);
 }
 
-// Trainer zero_term_state: clear carry before encoding a post-terminal obs.
+// Trainer zero_reset_state: clear carry before encoding a post-terminal (or reset) obs.
 void mingru_zero_term(MinGRU* layer, const float* terminals) {
     int B = layer->batch_size;
     int H = layer->hidden_size;
@@ -582,8 +582,9 @@ void _gaussian_mean(float* input, float* output, int batch_size, int num_actions
 }
 
 void forward_puffernet(PufferNet* net, float* observations, float* actions,
-        const unsigned char* mask, const float* terminals) {
+        const unsigned char* mask, const float* terminals, const float* resets) {
     mingru_zero_term(net->mingru, terminals);
+    mingru_zero_term(net->mingru, resets);
     linear(net->encoder, observations);
     mingru(net->mingru, net->encoder->output);
     linear(net->decoder, net->mingru->output);
@@ -796,6 +797,7 @@ int main(int argc, char** argv) {
     float* actions = calloc(n_atn, sizeof(float));
     float* rewards = calloc(n_agt, sizeof(float));
     float* terminals = calloc(n_agt, sizeof(float));
+    float* resets = calloc(n_agt, sizeof(float));
     int act_n = 0;
     for (int i = 0; i < num_actions; i++) {
         act_n += act_sizes[i];
@@ -808,6 +810,7 @@ int main(int argc, char** argv) {
         env.agents[i].actions = actions + i * NUM_ATNS;
         env.agents[i].rewards = rewards + i;
         env.agents[i].terminals = terminals + i;
+        env.agents[i].resets = resets + i;
         env.agents[i].action_mask = masks + i * act_n;
         env.agents[i].policy = 0;
     }
@@ -922,7 +925,7 @@ int main(int argc, char** argv) {
                     }
                     fwd = obs_f;
                 }
-                forward_puffernet(net, fwd, actions, masks, terminals);
+                forward_puffernet(net, fwd, actions, masks, terminals, resets);
 #endif
             }
             puf_step(&env);
