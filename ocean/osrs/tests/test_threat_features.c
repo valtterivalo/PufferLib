@@ -229,11 +229,37 @@ static void test_observation_block(void) {
     printf("observation block: %d floats at %d\n", RF_THREAT_SIZE, RF_THREAT_START);
 }
 
+/* A fighter who swung five weapons and wields a sixth (a kit like ours, met in self-play) fills the RF_THREAT_HIS_SLOTS slots with the wielded one and the four most
+ * recent swings, in the order he showed them: the oldest swing drops out. The slots used to overflow into the block after them (the stack of the observer). */
+static void test_more_weapons_than_slots(void) {
+    riskfight_reset((EncounterState*)&state, (EncounterContext*)&context, 4243);
+    RiskfightThreat* t = &state.visible[0].threat;
+    const uint8_t swung[5] = {ITEM_DHAROKS_GREATAXE, ITEM_VOIDWAKER, ITEM_GRANITE_MAUL, ITEM_DRAGON_CLAWS, ITEM_ELDER_MAUL};
+    for (int i = 0; i < 5; i++) riskfight_threat_note_swing(t, swung[i], state.env.tick, 0);
+    state.visible[0].equipment[GEAR_SLOT_WEAPON] = ITEM_ABYSSAL_TENTACLE;
+    riskfight_threat_refresh(t, state.visible[0].equipment, state.env.tick);
+    assert(t->shown_count == 5 && t->count == RF_THREAT_HIS_SLOTS);
+    assert(t->slots[0].item == ITEM_ABYSSAL_TENTACLE && t->slots[0].shown == 0);
+    for (int i = 1; i < RF_THREAT_HIS_SLOTS; i++) assert(t->slots[i].item == swung[i] && t->slots[i].shown == 1 && t->slots[i].p == 1);
+    /* Wielding one he swung: that one is slot 0, shown, and the other four follow. */
+    state.visible[0].equipment[GEAR_SLOT_WEAPON] = ITEM_VOIDWAKER;
+    riskfight_threat_refresh(t, state.visible[0].equipment, state.env.tick);
+    const uint8_t rest[4] = {ITEM_DHAROKS_GREATAXE, ITEM_GRANITE_MAUL, ITEM_DRAGON_CLAWS, ITEM_ELDER_MAUL};
+    assert(t->count == RF_THREAT_HIS_SLOTS && t->slots[0].item == ITEM_VOIDWAKER && t->slots[0].shown == 1);
+    for (int i = 1; i < RF_THREAT_HIS_SLOTS; i++) assert(t->slots[i].item == rest[i - 1] && t->slots[i].shown == 1);
+    float obs[RF_OBS_SIZE + 64];
+    for (int i = 0; i < RF_OBS_SIZE + 64; i++) obs[i] = -7;
+    riskfight_write_observation(&state, 0, obs);
+    for (int i = RF_OBS_SIZE; i < RF_OBS_SIZE + 64; i++) assert(obs[i] == -7);
+    puts("more weapons than slots: the wielded one and the four most recent swings");
+}
+
 int main(void) {
     test_hand_numbers();
     test_equals_sim();
     test_spec_accuracy_matches_resolver();
     test_observation_block();
+    test_more_weapons_than_slots();
     printf("threat features: passed\n");
     return 0;
 }

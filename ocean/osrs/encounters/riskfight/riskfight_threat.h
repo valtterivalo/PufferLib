@@ -107,14 +107,19 @@ static void riskfight_threat_refresh(RiskfightThreat* t, const uint8_t equipment
     int n = 0;
     uint8_t wielded = equipment[GEAR_SLOT_WEAPON];
     items[n] = wielded; p[n] = 1; shown[n] = 0; n++;
-    for (int i = 0; i < t->shown_count; i++) {
+    /* The swung weapons besides the wielded one take the RF_THREAT_HIS_SLOTS - 1 slots after it, the most recent ones when more were swung (a kit like ours
+     * carries five weapons or more: a fighter who swung five and wields a sixth has six), in the order he showed them. */
+    uint8_t recent[RF_THREAT_HIS_SLOTS];
+    int taken = 0;
+    for (int i = t->shown_count - 1; i >= 0; i--) {
         int index = osrs_item_index_from_raw_id(t->shown_raw[i]);
         if (index < 0) { fprintf(stderr, "[threat] swung weapon raw %d has no item row: no threat slot\n", t->shown_raw[i]); continue; }
-        int at = -1;
-        for (int j = 0; j < n; j++) if (items[j] == index) at = j;
-        if (at < 0) { items[n] = (uint8_t)index; p[n] = 1; shown[n++] = 1; at = n - 1; }
-        else shown[at] = 1;
+        if (index == wielded) { shown[0] = 1; continue; }
+        int known = 0;
+        for (int j = 0; j < taken; j++) known |= recent[j] == index;
+        if (!known && n + taken < RF_THREAT_HIS_SLOTS) recent[taken++] = (uint8_t)index;
     }
+    for (int j = taken - 1; j >= 0; j--) { items[n] = recent[j]; p[n] = 1; shown[n++] = 1; }
     uint8_t prior_items[RF_THREAT_HIS_SLOTS];
     float prior_p[RF_THREAT_HIS_SLOTS];
     int prior_n = riskfight_pool_prior_memo(equipment, prior_items, prior_p, RF_THREAT_HIS_SLOTS);
