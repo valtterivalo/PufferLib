@@ -750,15 +750,17 @@ static void riskfight_script_consume(const RiskfightObservedSelf* self,
  * (bar + damage 8 or more over the read) by the other side's next hit, L ticks of that side's clock later? A constant per-tick rate h fits P(healed by L) =
  * 1 - (1 - h)^L within its noise at every L (by his next 4-tick swing 0.97 / 0.98 / 0.94 below 60 by band, n 38 / 192 / 534), so there is no clock shape to
  * keep: a fighter low after a hit is all but surely fed before the next one. The earlier tables (eat animations weighted by their visibility, 154-301 per mille
- * below 60) left 0.35 of them unfed by a 4-tick swing. 60-79 is split at bar 21 (69 hitpoints): hit into 59-69 he eats at 241 per mille (0.70 fed by a 4-tick
- * swing, n 265), into 69-79 at 36 (0.13, n 264), from 79 up at 10. One 20-hitpoint band at 115 fed him from 70-79 past 80 three times as often per tick as
- * spectated fighters (up-crossings 84 against 27 per mille), and he sat at 80 up 0.55 of the time against 0.20 once both had been below 80. From 80 up the eat
- * animations are nearly all potions (0.95 of single-animation gaps show no heal). By ticks since the other side's swing, 1, 2, 3, 4 up while his weapon is not
- * ready, from its speed on, and before his first swing. RF_DHAROK_MEAL_PM[riskfight_dharok_meal_band][phase] (RiskfightMealPhase) are the per-tick tries. */
+ * below 60) left 0.35 of them unfed by a 4-tick swing. 60-79 is split at bar 21 (69 hitpoints): hit into 59-69 he eats at 205 per mille (refit on the 510
+ * Dharok v Dharok duels of 2026-10-18, n 881; 241 on 261 duels, 4 standard errors off; the other bands moved within their noise and are kept, so the
+ * meal clock's base hazard stays), into 69-79 at 36 (0.13, n 264), from 79 up at 10. One 20-hitpoint band at 115 fed him from 70-79 past 80 three times as
+ * often per tick as spectated fighters (up-crossings 84 against 27 per mille), and he sat at 80 up 0.55 of the time against 0.20 once both had been below 80.
+ * From 80 up the eat animations are nearly all potions (0.95 of single-animation gaps show no heal). By ticks since the other side's swing, 1, 2, 3, 4 up
+ * while his weapon is not ready, from its speed on, and before his first swing. RF_DHAROK_MEAL_PM[riskfight_dharok_meal_band][phase] (RiskfightMealPhase)
+ * are the per-tick tries. */
 typedef enum { RF_MEAL_SINCE_1, RF_MEAL_SINCE_2, RF_MEAL_SINCE_3, RF_MEAL_LATE, RF_MEAL_READY, RF_MEAL_NONE, RF_MEAL_PHASES } RiskfightMealPhase;
 enum { RF_DHAROK_MEAL_BANDS = 6 };
 static const uint16_t RF_DHAROK_MEAL_PM[RF_DHAROK_MEAL_BANDS][RF_MEAL_PHASES] = {
-    {589, 589, 589, 589, 589, 589}, {572, 572, 572, 572, 572, 572}, {468, 468, 468, 468, 468, 468}, {241, 241, 241, 241, 241, 241}, {36, 36, 36, 36, 36, 36},
+    {589, 589, 589, 589, 589, 589}, {572, 572, 572, 572, 572, 572}, {468, 468, 468, 468, 468, 468}, {205, 205, 205, 205, 205, 205}, {36, 36, 36, 36, 36, 36},
     {10, 10, 10, 10, 10, 10},
 };
 /** His band in RF_DHAROK_MEAL_PM: bar (of 30) 0-5, 6-11, 12-17, 18-20, 21-23, 24 up (scripts/fit_dharok_meals.py band_of). */

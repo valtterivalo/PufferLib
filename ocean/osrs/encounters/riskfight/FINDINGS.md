@@ -873,3 +873,51 @@ Live candidate a1: anchor hyperparameters, 182.7M steps on 37d061a46. Greedy lad
   - The axe share is still short of real at every clock (.39-.43 against .54-.62 per first swing). It comes from `RF_AXE_SWING_PM`'s other inputs: the opponent's bar, and the profiles' axe propensity.
   - The clock mix at the hit (.18 against .32 ready) reflects the script swinging on nearly every ready tick at 60 up (.91 against .39 real).
 - Tests: test_riskfight_dharok_script, _mix, _mechanics, _session, _scripts, test_riskfight, _humanlike and _training pass. The env_trace goldens are not refreshed.
+
+## 2026-10-19: Dharok refit on 1,093 duels (branch refit-1093)
+
+- **Data:** 1,093 duels, 510 Dharok v Dharok (261 → 310 → 510), third-party rows 0.033. 172 DvD fighters, 131 with 2+ fights, 80 with 5+.
+- **Noise test:** duel-bootstrap SE of every fit on the new file (60 reps, `/tmp/personas/boot.py`). The old file is a byte prefix of the new one, so SE(new − old) = SE_new × sqrt(n_new / n_old − 1). The duel bootstrap ignores fighter clustering, so it understates the SE slightly.
+
+  | Table | Old → new | Outside noise? |
+  |---|---|---|
+  | `RF_DHAROK_MEAL_PM` | 589 / 572 / 468 / **241** / 36 / 10 → 568 / 560 / 464 / **205** / 37 / 10 | band 3 only (59-69 HP, z −4.1, n 881); the rest \|z\| ≤ 0.5 |
+  | `RF_DHAROK_MEAL_CLOCK` | 632 / 200 / 316 / 2852 → 647 / 169 / 310 / 2874 | no (\|z\| ≤ 1.0) |
+  | `RF_DHAROK_TAB_P10K` | 465 / 180 / 46 / 4 → 485 / 174 / 49 / 5 | no (\|z\| ≤ 1.3) |
+  | `RF_AXE_SWING_PM` (18 cells) | e.g. 484 / 316 / 97 → 514 / 332 / 101 at 40-79 HP, no Vengeance | no: \|z\| ≤ 1.9, Σz² ≈ 18 on about 14 free cells. The drift is upward at 40+ HP. |
+  | `RF_DHAROK_ORB_PM` | {74, 109, 102, 30, 62}, {32, 59, 78, 55, 45} → {69, 103, 88, 31, 54}, {37, 59, 68, 53, 40} | no: two cells at z −2.4 / −2.1, Σz² ≈ 13 on 10 |
+  | `riskfight_personas.h` | 131 → 169 fighters | regenerated: the rows are the spectated population, and 38 fighters were missing. Axe sigma 0.52 → 0.68 and big-meal sigma 0.40 → 0.48 are within their CIs. |
+
+  - **Committed:** only band 3 moves to 205. The other bands are kept, so the meal clock's base hazard (bands 0-1) stays valid.
+  - `fit_dharok_personas.py` `MEAL_H` follows.
+- **Heterogeneity at the new n** (994 fighter-duels, 169 fighters):
+
+  | Behaviour | X² / null (p) | sd [90%] | Persistent share |
+  |---|---|---|---|
+  | Unfed by the next hit, < 60 HP | 1.65 (0.01) | 0.37 [0.22, 0.49] | 1.7 |
+  | Healed by the next hit, 60-79 HP | 1.95 (0.005) | 0.23 | 0.58 |
+  | Eat (all) | 2.15 (0.005) | 0.07 | 0.45 |
+  | Swing on a ready tick | 2.62 (0.005) | 0.07 | 0.53 |
+  | VW spec | 1.25 (0.06) | 0.29 | — |
+  | Axe share | 5.82 (0.005) | 0.39 [0.28, 0.54] | 0.84 |
+  | Orb | 11.0 (0.005) | 0.94 | 0.73 |
+  | Tab | 1.31 (0.065) | 0.37 | — |
+  | Big meal | 2.19 (0.005) | 0.15 | 0.90 |
+
+  - Spec and tab are now borderline (p ≈ 0.06) but still not modelled.
+  - Correlations hold: eat ~ big meal +0.51, eat ~ uptime −0.42.
+  - VW spec rate goes with KOs dealt (+0.37 [0.25, 0.48]).
+- **Re-measured** (`dh` harness, both seats on the Dharok script with personas, starts drawn, 6,000 fights; c-main 727192ed2 → refit):
+  - KO .198 → .193 (real .251).
+  - Escapes .799 → .806 (real .580).
+  - Opponent HP p25/med/p75 when the low fighter is ready at 1-20 HP: 59/74/85 → 61/74/84 (real 43/59/69).
+  - Low attackers (`measure_dharok_low_attack.py`, 8 ticks after a hit, bands 0-19 / 20-39 / 40-59):
+
+    | | Swing by +2 | Axe swings | Damage per tick |
+    |---|---|---|---|
+    | Real | .23 / .28 / .30 | .36 / .32 / .31 | .68 / .71 / .93 |
+    | Before | .20 / .20 / .19 | .29 / .28 / .19 | .57 / .74 / .92 |
+    | After | .19 / .20 / .19 | .27 / .28 / .19 | .61 / .70 / .91 |
+
+  The band-3 refit moves none of the sim targets beyond seed noise.
+- Tests pass: test_riskfight_dharok_script, _mix, _mechanics, _session. The goldens are not refreshed.

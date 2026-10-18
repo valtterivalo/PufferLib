@@ -146,7 +146,7 @@ class Data:
         return out
 
 
-MEAL_H = (0.589, 0.572, 0.468, 0.241, 0.036)  # riskfight_policy.h RF_DHAROK_MEAL_PM bands 0-4 (fit_dharok_meals.py)
+MEAL_H = (0.589, 0.572, 0.468, 0.205, 0.036)  # riskfight_policy.h RF_DHAROK_MEAL_PM bands 0-4 (fit_dharok_meals.py)
 PERSONA_TRAITS = ("eat", "big_meal", "axe")  # riskfight_personas.h columns, in this order
 THETA = [i / 50 - 4 for i in range(401)]     # the log-scale grid a fighter's loglik is tabulated on
 NODES = [i / 4 - 4 for i in range(33)]
