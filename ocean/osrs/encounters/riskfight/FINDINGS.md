@@ -564,3 +564,25 @@ Measured on the 261 spectated Dharok v Dharok duels against 6000 sim fights (`ri
 - **Self-play is off for now.** Sweeps pin `selfplay.enabled` to 0 (fast4). The machinery stays in place.
 - **Neither arm uses the Dharok tools:** no orb; axe swings only at about 96 HP or not at all.
 - **Scores fell across the board** compared with fast3 (run 0 10.31): after the meal refit, sim Dharok opponents heal before the next swing as real fighters do, so they are harder to KO. Scores aren't comparable across that change.
+
+## 2026-10-18 night: no joint meal fit; low damage intake makes the sim's Dharok fights long
+
+Harness: `dh_eat` with both seats on the Dharok script (6,000 fights per arm, starts drawn), against the 261 spectated Dharok v Dharok duels. Scripts are in /tmp/mj (`ends.py`, `split.py`, `msize.py`, `tab.py`, `dmg.py`, `tib.py`).
+
+| Measure | Real | Sim, meals before tick-eat | Sim, 702cfae21 | Sim, c-main 0af2941c3 |
+|---|---|---|---|---|
+| Opponent HP p25/med/p75 when the other is ready at 1-20 | 43/59/69 (170) | 53/70/84 | 53/70/84 | 63/79/89 (633) |
+| ... at 20-35 | 46/66/73 (312) | 54/70/84 | 57/71/84 | 65/78/89 |
+| ... at 35-50 | 53/66/76 (684) | 58/72/85 | 60/73/86 | 67/80/89 |
+| Ends: KO / teleport by lower / by leader / other | .24 / .43 / .14 / .17 | .50 / .37 / .12 / 0 | .46 / .39 / .14 / 0 | .17 / .61 / .22 / 0 |
+| Time at HP < 40 / 40-79 / 80+ | .05 / .63 / .32 (gap estimate) | .08 / .46 / .46 | .07 / .46 / .47 | .03 / .38 / .60 |
+| Damage taken per tick | 1.90 | 1.87 | - | 1.53 |
+
+- **The escape share came in with the meal refits:** .50 before tick-eat, .54 after the first refit, .83 after the current-status refit. Fighters fed before every hit stay high, so the greataxe hits less (Dharok's set scales with missing HP). Fights run longer (median 187 ticks against 146 real). 45% of sim escapers leave on the scripts' out-of-heals rule (below 30 HP with no food left).
+- **The meal data leaves no room for a joint fit.**
+  - Opponent HP doesn't matter. P(healed by his next hit) by the opponent's HP < 50 / 50-79 / 80+ is 34/35 / 43/46 / 15/16 in the lowest band and 111/123 / 562/608 / 166/174 at 40-60.
+  - Meal sizes check out. Gaps with one visible eat animation give single/double/triple .10/.14/.69 at 0-20, .12/.46/.39 at 20-40, .55/.38/.02 at 40-60 and .51/.01/0 at 60-79, which is what `RF_DHAROK_MEAL_SINGLE_PM` / `_DOUBLE_PM` give.
+  - The 60-79 band matches at a 4-tick swing: 0.45 healed sim against 0.41 real.
+  - Lowering the 60-79 rate to 60 per mille, or the 80+ rates to half or zero, moves KO share by at most 0.015 (.166 to .180) and opponent HP by 5. Making seat 0 base Defence 80 like a Dharok kit moves nothing (KO .169).
+- **What differs is damage intake:** 1.53-1.62 per tick in the sim against 1.90 real, at every HP band. So sim fighters sit at 80+ 0.60 of the time against 0.32. That is not a meal parameter. The next suspects are swing timing and hit sizes against Dharok-armoured defenders at given HP.
+- **The teleport table has the same stale-bar bias.** Re-read on the gap HP estimate, tabs per 1,000 ticks at HP 0-19 / 20-39 / 40-59 / 60+ are 46.5 / 18.0 / 4.6 / 0.4, against the carried-bar fit's 25.2 / 11.5 / 3.4 / 0.5 (`RF_DHAROK_TAB_PM` = 29, 14, 4, 1). Swapping it in (per 10,000) moves the sim's escape share from .83 to .82 and KO share from .17 to .18. It is not committed: the low bands are rarely visited, and 60+ goes from 1 to 0.4 per 1,000, which the per-mille table can't hold.
