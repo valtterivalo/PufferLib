@@ -198,6 +198,7 @@ static void test_axe_then_teleport_two_ticks_later(void) {
     }
 }
 
+/* Our hit lands on the teleport tick; what it reflects onto us (his Vengeance) lands too. His attacks that have not landed are dropped. */
 static void test_tab_after_attack_lands_outgoing_and_drops_incoming(void) {
     int damaged = 0;
     for (uint32_t seed = 1; seed <= 64; seed++) {
@@ -216,8 +217,11 @@ static void test_tab_after_attack_lands_outgoing_and_drops_incoming(void) {
         actions[RF_PRIMARY] = RF_TELEPORT;
         riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
         assert(state.escaped[0] && state.env.players[1].hit_landed_this_tick);
-        assert(state.env.players[0].current_hitpoints == own_hp);
-        damaged += state.env.players[1].current_hitpoints < opponent_hp;
+        int dealt = opponent_hp - state.env.players[1].current_hitpoints;
+        if (dealt >= 2) assert(state.env.players[0].current_hitpoints < own_hp);
+        else assert(state.env.players[0].current_hitpoints <= own_hp);
+        assert(state.env.players[1].num_pending_hits == 0);
+        damaged += dealt > 0;
     }
     assert(damaged > 0);
 
@@ -233,6 +237,44 @@ static void test_tab_after_attack_lands_outgoing_and_drops_incoming(void) {
     riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
     assert(state.escaped[0] && !state.env.players[0].hit_landed_this_tick);
     assert(state.env.players[0].current_hitpoints == own_hp);
+}
+
+/* At 1 hitpoint against his ring of recoil, an axe hit that lands kills us although we teleport the tick after the swing: the recoil of our own hit is not cancelled. */
+static void test_axe_into_recoil_then_teleport_kills(void) {
+    for (int pid = 0; pid < 2; pid++) {
+        int landed = 0, missed = 0;
+        for (uint32_t seed = 1; seed <= 64; seed++) {
+            riskfight_reset((EncounterState*)&state, (EncounterContext*)&context, seed);
+            context.self_play = 1;
+            hold_pid(pid);
+            Player* us = &state.env.players[0];
+            Player* him = &state.env.players[1];
+            us->veng_active = him->veng_active = 0;
+            him->equipped[GEAR_SLOT_RING] = ITEM_RING_OF_RECOIL;
+            him->slot_gear_dirty = 1;
+            osrs_ensure_player_equipment(him);
+            assert(him->equipment_effect_profile.recoil_source == OSRS_RECOIL_SOURCE_RING_OF_RECOIL);
+            equip(22);
+            assert(us->equipped[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE);
+            us->current_hitpoints = 1;
+            int opponent_hp = him->current_hitpoints;
+            int actions[2 * RF_HEADS] = {0};
+            actions[RF_PRIMARY] = RF_ATTACK;
+            riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
+            assert(us->just_attacked && us->current_hitpoints == 1);
+            actions[RF_PRIMARY] = RF_TELEPORT;
+            riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
+            assert(state.escaped[0]);
+            if (him->current_hitpoints < opponent_hp) {
+                assert(us->current_hitpoints == 0 && state.outcome[0] == RISKFIGHT_DEATH);
+                landed++;
+            } else {
+                assert(us->current_hitpoints == 1 && state.outcome[0] == RISKFIGHT_ESCAPE);
+                missed++;
+            }
+        }
+        assert(landed > 0 && missed > 0);
+    }
 }
 
 static void test_policy_and_human_blocked_teleport(void) {
@@ -263,6 +305,7 @@ int main(void) {
     test_non_triggering_actions();
     test_axe_then_teleport_two_ticks_later();
     test_tab_after_attack_lands_outgoing_and_drops_incoming();
+    test_axe_into_recoil_then_teleport_kills();
     test_policy_and_human_blocked_teleport();
     riskfight_destroy_context((EncounterContext*)&context);
     puts("Riskfight teleport contracts passed");
