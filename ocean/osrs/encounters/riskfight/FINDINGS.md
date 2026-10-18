@@ -1081,3 +1081,6 @@ Harness: `dh`, both seats on the Dharok script with personas, starts drawn, 6,00
   - Normal swings into victims back at bar 27+ hit at .39 real against .31 sim (n 721). This is the one mismatch found. Strips are 2% in every band, so they don't explain it.
 - **Gap list after** (3 seeds; c-main before is in brackets): KO share .288 (.283); escape .712 (.716); KO per 10,000 by victim HP 98 / 61 / 24 / 4.7 / 0.9 (real 117 / 47 / 32 / 4.6 / 2.1); time at 80+ .33 (real .21); opponent's median HP when the low fighter (1-20) is ready 63 (real 59).
 - Tests pass: test_riskfight_dharok_script, _mix, _mechanics, _session and _scripts. The env_trace goldens are not refreshed: script overheads changed.
+- **Restarted again as night3 on 2df8c8261:** the scripts now keep Smite up, as 91% of real Dharok fighter-ticks show (fa4ab04d6). That drains our prayer as it does live.
+  - night2 had reached its anchor at 9.38 (on dcc97daa0 opponents) before the restart.
+  - The morning check also uses `probe_lowhp_meals` (1d3764077).
