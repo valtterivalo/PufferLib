@@ -11,7 +11,8 @@
 # (0.5) for the opponents the script plays, 8 env threads.
 # Trial 0 is the anchor below: trial 34 of the third live sweep (20261017-riskfight-live-sweep3, 11.0 per hour, best on the probe too), run under the stronger
 # reputation cost of 2026-10-17 (rep_search 2.0, rep_rag 0.3, rep_half_life 6000, the ini defaults); the rest are Protein's. Scores are not comparable with sweep 3's.
-# max_runs and max_suggestion_cost come from the ini. A killed sweep resumes from RUN_DIR through --sweep.resume_dir (see src/sweep_resume.h).
+# max_runs and max_suggestion_cost come from the ini. A killed sweep resumes from RUN_DIR through --sweep.resume_dir (see src/sweep_resume.h). Arguments after RUN_DIR
+# are passed on to ./puffer sweep (scripts/sweep_riskfight_fast.sh narrows the search with them).
 set -euo pipefail
 RUN=${1:?usage: sweep_riskfight_live.sh RUN_DIR}
 : "${RF_OPPFIT_MODEL:?RF_OPPFIT_MODEL}" "${RF_OPPFIT_EAT:?RF_OPPFIT_EAT}"
@@ -25,4 +26,4 @@ exec ./puffer sweep \
   --policy.hidden_size=512 --policy.num_layers=1 --train.total_timesteps=182724576 --train.horizon=32 --train.minibatch_size=2048 \
   --train.learning_rate=0.000703111524 --train.ent_coef=1.73160424e-05 --train.gamma=0.999118865 --train.gae_lambda=0.907420635 \
   --train.clip_coef=0.899999976 --train.vf_coef=2.16847849 --train.vf_clip_coef=0.0500000007 \
-  --env.scripted_probability=0.0657308102 --env.selfplay_pool_probability=1 --vec.hist_policy_percent=0.5
+  --env.scripted_probability=0.0657308102 --env.selfplay_pool_probability=1 --vec.hist_policy_percent=0.5 "${@:2}"
