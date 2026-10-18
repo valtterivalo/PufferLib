@@ -592,19 +592,20 @@ static void riskfight_step(EncounterState* state, EncounterContext* context, con
     int ours[RF_HEADS], his[RF_HEADS];
     memcpy(ours, actions, sizeof(ours));
     ours[RF_SPECIAL] = riskfight_spec_clicks(s, 0, ours);
-    /* A net in seat 1 under data_escapes leaves when the scripts' rule says so: its mask was the no-op this tick, and the tab is clicked as a script clicks it. */
-    const int data_escape = seat_agent && riskfight_data_escape(s);
+    /* A seat under data_escapes leaves when the scripts' rule says so: its mask was the no-op this tick, and the tab is clicked as a script clicks it. */
+    const int our_escape = riskfight_data_escape(s, 0), his_escape = seat_agent && riskfight_data_escape(s, 1);
+    if (our_escape) ours[RF_PRIMARY] = RF_TELEPORT;
     if (seat_agent) {
         memcpy(his, actions + RF_HEADS, sizeof(his));
         his[RF_SPECIAL] = riskfight_spec_clicks(s, 1, his);
-        if (data_escape) his[RF_PRIMARY] = RF_TELEPORT;
+        if (his_escape) his[RF_PRIMARY] = RF_TELEPORT;
     } else memcpy(his, opponent_actions, sizeof(his));
     riskfight_policy_commands(s, 0, ours, &ctx->policy_commands[0]);
-    riskfight_motor_filter(ctx, s, 0, &ctx->policy_commands[0]);
-    riskfight_policy_commands(s, 1, his, &ctx->policy_commands[1]);
     /* A net in seat 1 clicks through the same hand as in seat 0: one policy plays both seats, so both must see the same game. The scripts' escape lands
      * as theirs do. */
-    if (seat_agent && !data_escape) riskfight_motor_filter(ctx, s, 1, &ctx->policy_commands[1]);
+    if (!our_escape) riskfight_motor_filter(ctx, s, 0, &ctx->policy_commands[0]);
+    riskfight_policy_commands(s, 1, his, &ctx->policy_commands[1]);
+    if (seat_agent && !his_escape) riskfight_motor_filter(ctx, s, 1, &ctx->policy_commands[1]);
     riskfight_step_queues(s, ctx, &ctx->policy_commands[0].commands, &ctx->policy_commands[1].commands);
     if (ctx->opp_after) ctx->opp_after(ctx->opp_user, s);
 }

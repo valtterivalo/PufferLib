@@ -188,45 +188,59 @@ static void test_mirror_keeps_kits_and_levels(void) {
     printf("mirror: seat 1 keeps its kit for the session and its levels\n");
 }
 
-/* data_escapes: a net in seat 1 never may teleport by its own choice; when the scripts' escape rule fires its mask is the no-op and the step teleports it. A net in
- * a Dharok kit follows RF_DHAROK_TAB_PM; seat 0 and a driven seat 1 are untouched. */
+/* data_escapes: where both seats are nets (pure self-play, tag 0, and a frozen checkpoint, tag 1) neither may teleport by its own choice; when the scripts' escape
+ * rule fires for a seat its mask is the no-op and the step teleports it. A seat in a Dharok kit follows RF_DHAROK_TAB_PM. Where seat 1 is the script (or in a
+ * self_play 0 env) our teleport is free and the script leaves by its own rule. */
 static void test_data_escapes(void) {
-    DictItem knobs[] = {{.key = "data_escapes", .value = 1}, {.key = "live_loadout", .value = 4}, {.key = "scripted_probability", .value = 0},
-        {.key = "selfplay_pool_probability", .value = 0}};
-    Env* env = make_env(knobs, 4, 0, 616);
     int dharok = 0, other = 0;
-    for (int i = 0; i < 200; i++) {
-        puf_reset(env);
-        const int kit_dharok = riskfight_loadout_dharok_pieces(env->context.loadout[1]) >= RF_DHAROK_KIT_PIECES;
-        assert(env->state.data_escapes == (kit_dharok ? RF_DATA_ESCAPES_DHAROK : RF_DATA_ESCAPES_PROFILE));
-        dharok += kit_dharok;
-        other += !kit_dharok;
-        if (riskfight_data_escape(&env->state)) continue;
-        assert(masks[0][RF_HEAD_OFFSET[RF_PRIMARY] + RF_TELEPORT] && !masks[1][RF_HEAD_OFFSET[RF_PRIMARY] + RF_TELEPORT]);
+    for (int tag = 0; tag < 2; tag++) {
+        DictItem knobs[] = {{.key = "data_escapes", .value = 1}, {.key = "live_loadout", .value = 4}, {.key = "scripted_probability", .value = 0},
+            {.key = "selfplay_pool_probability", .value = 0}};
+        Env* env = make_env(knobs, 4, tag, 616 + (unsigned)tag);
+        for (int i = 0; i < 200; i++) {
+            puf_reset(env);
+            assert(!env->context.opp_driven);
+            for (int seat = 0; seat < 2; seat++) {
+                const int kit_dharok = riskfight_player_dharok_pieces(&env->state.env.players[seat]) >= RF_DHAROK_KIT_PIECES;
+                assert(env->state.data_escapes[seat] == (kit_dharok ? RF_DATA_ESCAPES_DHAROK : RF_DATA_ESCAPES_PROFILE));
+                dharok += kit_dharok;
+                other += !kit_dharok;
+                assert(!masks[seat][RF_HEAD_OFFSET[RF_PRIMARY] + RF_TELEPORT]);
+            }
+        }
+        /* Below 30 hitpoints out of heals the rule leaves at once: that seat's mask is the no-op, and a no-op step ends the fight by its teleport. */
+        for (int seat = 0; seat < 2; seat++) {
+            puf_reset(env);
+            Player* p = &env->state.env.players[seat];
+            p->current_hitpoints = 20;
+            for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+                OsrsConsumableKind k = (OsrsConsumableKind)osrs_inventory_cell_metadata(&p->inventory_cells[slot])->consumable_kind;
+                if (k != OSRS_CONSUMABLE_TELEPORT) p->inventory_cells[slot] = osrs_inventory_cell_from_content_code(0);
+            }
+            riskfight_native_observe(env);
+            unsigned char wait[RF_MASK_SIZE];
+            riskfight_write_wait_mask(wait);
+            assert(riskfight_data_escape(&env->state, seat) && !memcmp(masks[seat], wait, RF_MASK_SIZE));
+            const float ours = env->log.self_teleports, his = env->log.opponent_teleports;
+            memset(actions, 0, sizeof(actions));
+            puf_step(env);
+            assert(env->log.self_teleports - ours == (seat == 0) && env->log.opponent_teleports - his == (seat == 1));
+        }
+        destroy(env);
     }
     assert(dharok > 0 && other > 0);
-    /* Below 30 hitpoints out of heals the rule leaves at once: the mask is the no-op, and a no-op step ends the fight by his teleport. */
-    puf_reset(env);
-    Player* him = &env->state.env.players[1];
-    him->current_hitpoints = 20;
-    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
-        OsrsConsumableKind k = (OsrsConsumableKind)osrs_inventory_cell_metadata(&him->inventory_cells[slot])->consumable_kind;
-        if (k != OSRS_CONSUMABLE_TELEPORT) him->inventory_cells[slot] = osrs_inventory_cell_from_content_code(0);
-    }
-    riskfight_native_observe(env);
-    unsigned char wait[RF_MASK_SIZE];
-    riskfight_write_wait_mask(wait);
-    assert(riskfight_data_escape(&env->state) && !memcmp(masks[1], wait, RF_MASK_SIZE));
-    memset(actions, 0, sizeof(actions));
-    puf_step(env);
-    assert(env->log.sp_teleports[1] == 1 && env->log.sp_teleports[0] == 0);
-    destroy(env);
-    /* A frozen-tagged env whose seat 1 is the script: the script leaves by its own rule. */
+    /* A frozen-tagged env whose seat 1 is the script, and a self_play 0 env: our teleport is ours to choose, the script leaves by its own rule. */
     DictItem driven_knobs[] = {{.key = "data_escapes", .value = 1}, {.key = "scripted_probability", .value = 1}};
-    env = make_env(driven_knobs, 2, 1, 617);
-    assert(env->context.opp_driven && env->state.data_escapes == RF_DATA_ESCAPES_OFF);
-    destroy(env);
-    printf("data escapes: seat 1's own teleport masked, %d Dharok-kit and %d other sessions, the escape tick a step of no choice\n", dharok, other);
+    DictItem lone_knobs[] = {{.key = "data_escapes", .value = 1}, {.key = "self_play", .value = 0}};
+    for (int k = 0; k < 2; k++) {
+        Env* env = k ? make_env(lone_knobs, 2, 0, 618) : make_env(driven_knobs, 2, 1, 617);
+        assert(k ? !env->context.self_play : env->context.opp_driven);
+        assert(env->state.data_escapes[0] == RF_DATA_ESCAPES_OFF && env->state.data_escapes[1] == RF_DATA_ESCAPES_OFF);
+        assert(masks[0][RF_HEAD_OFFSET[RF_PRIMARY] + RF_TELEPORT]);
+        destroy(env);
+    }
+    printf("data escapes: both net seats' own teleport masked (%d Dharok-kit and %d other seats), the escape tick a step of no choice; free against the script\n",
+        dharok, other);
 }
 
 /* A ragger is the script, so he only steps into a seat 1 no learning policy plays: a self_play 0 env and a frozen (tag > 0) env draw him with the reputation's

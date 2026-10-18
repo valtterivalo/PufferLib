@@ -486,13 +486,13 @@ static void riskfight_write_wait_mask(unsigned char* mask) {
     for (int head = 0; head < RF_HEADS; head++) mask[RF_HEAD_OFFSET[head]] = 1;
 }
 
-static int riskfight_data_escape(const RiskfightState* s);
+static int riskfight_data_escape(const RiskfightState* s, int seat);
 
-/** The net's mask: its bag actions index the canonical order of riskfight_bag.h. While our hand is busy, the wait mask. A seat 1 under data_escapes never
+/** The net's mask: its bag actions index the canonical order of riskfight_bag.h. While our hand is busy, the wait mask. A seat under data_escapes never
  * teleports by its own choice, and on the tick its data-fitted escape fires (riskfight_data_escape) it gets the wait mask: the step teleports it, so the
  * row is a step of no choice and teaches the net nothing about leaving. */
 static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsigned char* mask) {
-    if (s->hand_busy[agent] || (agent == 1 && riskfight_data_escape(s))) {
+    if (s->hand_busy[agent] || riskfight_data_escape(s, agent)) {
         riskfight_write_wait_mask(mask);
         return;
     }
@@ -548,7 +548,7 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
         p->current_magic >= OSRS_VENGEANCE_MAGIC_LEVEL && s->inventory_use[agent].vengeance_sacks > 0;
     for (int action = 1; action < RF_ACTION_DIMS[RF_SPECIAL]; action++)
         heads[RF_SPECIAL][action] = p->special_energy >= action * spec.cost && ((gates.spec_ko >> action) & 1);
-    heads[RF_PRIMARY][RF_TELEPORT] = has_teleport && !(agent == 1 && s->data_escapes) &&
+    heads[RF_PRIMARY][RF_TELEPORT] = has_teleport && !s->data_escapes[agent] &&
         osrs_teleport_allowed(s->env.pvp_runtime.teleport[agent], s->env.tick);
     for (int action = 1; action < RF_ACTION_DIMS[RF_PRAYER]; action++)
         heads[RF_PRAYER][action] = p->current_prayer > 0;
@@ -616,7 +616,7 @@ static inline void riskfight_mask_key(const RiskfightState* s, int agent, const 
     key->has_sacks = s->inventory_use[agent].vengeance_sacks > 0;
     key->teleport_ok = osrs_teleport_allowed(s->env.pvp_runtime.teleport[agent], s->env.tick);
     key->hand_busy = s->hand_busy[agent] != 0;
-    key->data_escape = agent == 1 && s->data_escapes ? 1 + riskfight_data_escape(s) : 0;
+    key->data_escape = s->data_escapes[agent] ? 1 + riskfight_data_escape(s, agent) : 0;
     key->deployable = riskfight_deployable != 0;
     key->valid = 1;
     key->special_energy = p->special_energy;
@@ -990,13 +990,13 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
         actions[RF_PRIMARY] = RF_TELEPORT;
 }
 
-/** Whether seat 1, a net under RiskfightState.data_escapes, teleports on the tick about to be stepped: the escape rule its script would follow
- * (riskfight_script_escape on the opponent's profile, RF_DHAROK_TAB_PM in a Dharok kit), with the script's own rolls, while it holds a tab it may use now.
+/** Whether `seat`, a net under RiskfightState.data_escapes, teleports on the tick about to be stepped: the escape rule a script would follow in its place
+ * (riskfight_script_escape on the opponent's profile, RF_DHAROK_TAB_PM in a Dharok kit), with the seat's script rolls, while it holds a tab it may use now.
  * A pure function of the state: the mask (the no-op on that tick) and the step (the teleport) read the same decision. */
-static int riskfight_data_escape(const RiskfightState* s) {
-    if (!s->data_escapes) return 0;
-    const Player* p = &s->env.players[1];
-    if (!osrs_teleport_allowed(s->env.pvp_runtime.teleport[1], s->env.tick)) return 0;
+static int riskfight_data_escape(const RiskfightState* s, int seat) {
+    if (!s->data_escapes[seat]) return 0;
+    const Player* p = &s->env.players[seat];
+    if (!osrs_teleport_allowed(s->env.pvp_runtime.teleport[seat], s->env.tick)) return 0;
     int has_tab = 0, heals = 0;
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
         OsrsConsumableKind kind = (OsrsConsumableKind)osrs_inventory_cell_metadata(&p->inventory_cells[slot])->consumable_kind;
@@ -1004,7 +1004,7 @@ static int riskfight_data_escape(const RiskfightState* s) {
         heals |= kind == OSRS_CONSUMABLE_ANGLERFISH || kind == OSRS_CONSUMABLE_KARAMBWAN || kind == OSRS_CONSUMABLE_MARLIN ||
             kind == OSRS_CONSUMABLE_SUMMER_PIE || kind == OSRS_CONSUMABLE_HALIBUT || kind == OSRS_CONSUMABLE_BREW;
     }
-    return has_tab && riskfight_script_escape(s->opponent_profile, s->data_escapes == RF_DATA_ESCAPES_DHAROK, p->current_hitpoints, !heals,
-        s->consume_ticks[1], s->script_seed[1], (uint32_t)s->env.tick);
+    return has_tab && riskfight_script_escape(s->opponent_profile, s->data_escapes[seat] == RF_DATA_ESCAPES_DHAROK, p->current_hitpoints, !heals,
+        s->consume_ticks[seat], s->script_seed[seat], (uint32_t)s->env.tick);
 }
 #endif

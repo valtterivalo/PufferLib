@@ -65,14 +65,14 @@ static void run(int net, int fights, Tally* t) {
                     for (int h = 0; h < RF_HEADS; h++) act[i][seat][h] = m[RF_HEAD_OFFSET[h] + a[h]] ? (float)a[h] : 0.0f;
                 }
                 if (net) {
-                    assert(s->data_escapes != RF_DATA_ESCAPES_OFF);
+                    assert(s->data_escapes[1] != RF_DATA_ESCAPES_OFF);
                     t->offered += mask[i][1][RF_HEAD_OFFSET[RF_PRIMARY] + RF_TELEPORT];
                     t->chosen += act[i][1][RF_PRIMARY] == RF_TELEPORT;
-                    t->predicted += riskfight_data_escape(s);
+                    t->predicted += riskfight_data_escape(s, 1);
                 }
-                cell = escape_cell(s, net ? s->data_escapes == RF_DATA_ESCAPES_DHAROK : riskfight_dharok_opponent(s));
+                cell = escape_cell(s, net ? s->data_escapes[1] == RF_DATA_ESCAPES_DHAROK : riskfight_dharok_opponent(s));
             }
-            const int predicted = net && e->wait_left == 0 && riskfight_data_escape(s);
+            const int predicted = net && e->wait_left == 0 && riskfight_data_escape(s, 1);
             const float tp = e->log.opponent_teleports, annoyed = e->log.annoyed_exits, fought = e->log.fights_selfplay + e->log.fights_script;
             puf_step(e);
             const int escaped = e->log.opponent_teleports - tp > e->log.annoyed_exits - annoyed;
