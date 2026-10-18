@@ -740,6 +740,13 @@ enum { RF_DHAROK_MEAL_BREW_PM = 400 };
  * stayed in and plain hits finished him: 20% of sim knockouts against 1 of 63 spectated. */
 static const uint16_t RF_DHAROK_TAB_PM[4] = {29, 14, 4, 1};
 
+/* A Dharok pool opponent's orb (Feel, 10 off himself), per tick on his own hitpoints and the axe in hand, not tied to an axe swing: of the 1674 spectated axe
+ * swings only 327 had an orb in the 8 ticks before, and the orb came at 0.0157 per fighter-tick (0.16 damage per tick) against 0.005 on the profiles' orb_axe_pm
+ * rule. Per mille per fighter-tick at hitpoints 0-19 ... 80 up on the 261 Dharok v Dharok duels, without the axe in hand 30, 40, 37, 10, 19 and with it 14, 25,
+ * 32, 22, 18, over the RF_KIT_ORB_PM share of fighters carrying an orb. An orb is a lone 10 with no swing of the other side in the ticks around it, so none is
+ * seen the tick after his swing (RF_MEAL_AFTER_SWING: 0). */
+static const uint16_t RF_DHAROK_ORB_PM[2][5] = {{50, 67, 62, 17, 32}, {23, 42, 53, 37, 30}};
+
 /** The phase of the other side's attack clock a meal decided now lands in: the tick after his swing (opponent[5], ticks since it, is 1), the tick his weapon frees
  * his next swing (it equals his weapon's speed), or between (also before his first swing). `opponent` the opponent block of the script observation. */
 static RiskfightMealPhase riskfight_meal_phase(const float* obs, const float* opponent) {
@@ -956,8 +963,10 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     actions[RF_WEAPON] = inventory.item_slot[weapon];
     if (!item_is_two_handed(weapon) && inventory.shield != ITEM_NONE)
         actions[RF_SHIELD] = inventory.item_slot[inventory.shield];
-    actions[RF_ORB] = weapon == ITEM_DHAROKS_GREATAXE && self.attack_timer == 1 && hp > 20 &&
-        riskfight_sample_event(seed, attack_tick, 24, profile->orb_axe_pm);
+    int orb_pm = profile->dharok_eating ?
+        (riskfight_meal_phase(obs, opponent) == RF_MEAL_AFTER_SWING ? 0 : RF_DHAROK_ORB_PM[self.weapon == ITEM_DHAROKS_GREATAXE][min_int(4, hp / 20)]) :
+        (weapon == ITEM_DHAROKS_GREATAXE && self.attack_timer == 1 && hp > 20 ? profile->orb_axe_pm : 0);
+    actions[RF_ORB] = orb_pm && riskfight_sample_event(seed, profile->dharok_eating ? tick : attack_tick, 24, orb_pm);
     actions[RF_RING] = inventory.item_slot[obs[7] > 0.1f ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING];
     if (obs[RF_SELF_TELEPORT_LOCK] > 0) return;
     int supply_band = min_int(consume_ticks / RISKFIGHT_TAB_SUPPLY_TICKS, RISKFIGHT_TAB_SUPPLY_BANDS - 1);
