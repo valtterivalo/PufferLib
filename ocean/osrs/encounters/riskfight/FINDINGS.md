@@ -404,3 +404,33 @@ Live, s6t0 drank super restores at full prayer with nothing drained (prayer 87-9
   - **Sim mismatch found:** the teleport tick wipes his recoil/Vengeance damage from our own axe hit, so 1-HP swings looked safer than in OSRS (being fixed).
 - **Correction: the teleport wipe was right.** The user says a teleport stops all damage on you immediately, recoil and Vengeance included. The data agrees: 106 swing-then-teleport cases where the swinger's hit landed, scanned from the hit tick to his despawn, show no reflect or recoil splat on him at or after his teleport animation. 13 of 16 axe hits that procced his Vengeance put nothing on the teleporter; the other reflects land at +1, before the teleport animation. The change of 607ba342f (an inference) is reverted (46e254104). The orb → axe → teleport hand rule stays a wash in the sim: stake per fight 0.586 at T=1 against 0.589 baseline.
 - **Sweep 16 nets (tactics block, per-fight state reset)** still don't use the Dharok tools: axe swings 0.000-0.003 and orb 0 per fight, while strips run 0-0.86. This agrees with the oracle: even the strongest hand rules for axe, orb and maul don't pay in the current sim. What remains is how faithful the sim is, not the net's inputs.
+
+## 2026-10-18 afternoon: KO setups, orb timing, self-play
+
+- **The victim-mistake hypothesis, tested in matched windows** (state-defined: a recent Vengeance proc/reflect or a 20+ exchange, victim at 30-60 HP, attacker's specs spent or his timer free; 726 real windows, 5,798 sim):
+  - **Heals match:** sim victims don't heal faster or bigger. Heal by 3 ticks: 0.40 sim, inside the real 0.20-0.48 (eat animations miss 47% of heals). Heal sizes match when free (about 0.5 / 0.4 / 0.1 single / double / triple).
+  - **Locked victims:** with a timer on, real victims eat later (0.14 against 0.31 by 3 ticks) but bigger, a weak sign for the timer half of the hypothesis (19 heals).
+  - **The difference is the attacker:** a 50+ burst within 3 ticks happens 7.0% real against 3.6% sim, KO within 6 ticks 7.9% against 5.1%. In these windows the real attacker sits at 50 HP against 62 in the sim: more Dharok damage.
+  - An earlier comparison conditioned on KOs and was selection-biased. It doesn't refute the hypothesis; these windows don't support it either.
+- **Orb rate from visible ticks (486b94e33):**
+  - On the tick after his swing an orb's 10 can't be told from his hit, so the earlier "never orb on that tick" rule was a measurement artefact.
+  - Rates are now fitted on visible ticks only: 33 per 1,000 against 16 counted over all ticks. Orbs on ticks 2+ after his swing (33.0) and on the ready tick (36.9) are within noise, so no timing preference is visible.
+  - Sim opponent orb damage per tick: 0.29, against about 0.33 real.
+- **Dharok opponents teleport on their own HP** (67a46efca): per tick by HP band 28.5 / 13.5 / 3.5 / 0.8 per 1,000, against the old 6.8 / 7.2 / 3.1 / 2.2. KO share by axe unmoved (26%).
+- **Self-play:**
+  - **Why it never learned** (33 trials): every trial collapsed to teleporting out (episode length about 5, entropy 0.01) within ~5% of steps. Causes:
+    - seat 1 got seat 0's death price, so an even fight lost value for both;
+    - ragger draws in pure self-play envs trained seat 1's ignored actions;
+    - the opponent pool had 1-3 checkpoints.
+  - **Fixes (a7a55f2cf):** seat 1 uses 1/price in reward and observation; no raggers or scripts in pure self-play envs; `[selfplay] checkpoint_interval` 16.
+  - **A latent crash, also live (4f87a277a):** with five weapons swung and a sixth wielded, `riskfight_threat_refresh` built 6 slots where 5 fit, and `riskfight_threat_write` overran the observation buffer, corrupting the env pointer. Only our kits carry that many weapons, so self-play hit it first, but a live opponent switching through 6 weapons would hit it too. Cherry-picked onto the live branch.
+  - **3-arm test, 50M steps, ladder perf against the live population:**
+
+    | Arm | Ladder perf |
+    |---|---|
+    | A: no self-play | 9.05 |
+    | B: frozen opponents and scripts only | 6.25 |
+    | C: half self-play | 3.98 |
+
+    In C, seat 1 (the same policy) teleports in 98.5% of fights against seat 0's 0.8%: a seat-1 asymmetry remains (being investigated).
+- **Fast sweeps** (`scripts/sweep_riskfight_fast.sh`, 6 runs at most 240 s each in a narrow space; the user's call for iteration speed): fast1 best 10.12 in 52 s of training, fast2 best 9.70. Neither net uses the axe, orb or maul.
