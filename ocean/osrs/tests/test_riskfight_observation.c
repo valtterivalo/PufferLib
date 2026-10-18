@@ -104,20 +104,22 @@ static void use_consumable(OsrsConsumableKind kind) {
 
 static void test_opponent_consume_timer_inference(void) {
     context.self_play = 1;
+    /* The heal classifier holds every engine food: a brew dose (16) at hitpoints 50 fits a karambwan's 18 within the bar's resolution, and so its clock and
+     * attack delay. From 53 the bars before and after rule the karambwan out, and only the drink is left. */
     const struct {
-        int head, slot;
+        int head, slot, hitpoints;
         int food, potion, karam, delay;
     } cases[] = {
-        {RF_FOOD, 10, 1, 1, 0, 1},
-        {RF_DRINK, 8, 1, 1, 0, 0},
-        {RF_COMBO, 4, 1, 1, 1, 1},
+        {RF_FOOD, 10, 50, 1, 1, 0, 1},
+        {RF_DRINK, 8, 53, 1, 1, 0, 0},
+        {RF_COMBO, 4, 50, 1, 1, 1, 1},
     };
     for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
         reset();
         context.self_play = 1;
         state.env.players[0].veng_active = 0;
         state.env.players[1].veng_active = 0;
-        state.env.players[1].current_hitpoints = 50;
+        state.env.players[1].current_hitpoints = cases[c].hitpoints;
         observe_next_tick();
         received_hit(0, OSRS_HIT_DIRECT);
         int actions[2 * RF_HEADS] = {0};

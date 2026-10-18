@@ -67,11 +67,13 @@ static void test_hazards_match_profile(const RiskfightProfile* profile) {
     assert_rate(tabs, ticks, profile->tab_pm[0][0]);
 }
 
+/* The weapon of the next attack is one roll per attack. The maul combo (riskfight_script_combo) is a separate attack: on the tick after a swing (timer 3 of
+ * the Voidwaker's 4) he may switch to the maul and land its specials at once, so a maul switch on that tick is not the next attack's decision. */
 static void test_one_weapon_decision_per_attack(void) {
     reset();
     state.env.players[0].current_hitpoints = 110;
     state.visible[0].health_bar = 18;
-    int vw = 0;
+    int vw = 0, combos = 0;
     for (uint32_t seed = 1; seed <= 400; seed++) {
         int decisions[3];
         for (int timer = 3; timer >= 1; timer--) {
@@ -79,12 +81,16 @@ static void test_one_weapon_decision_per_attack(void) {
             state.env.players[0].attack_timer = timer;
             int actions[RF_HEADS];
             decide(&RISKFIGHT_HUMAN_PROFILES[0], seed, actions);
-            decisions[3 - timer] = actions[RF_WEAPON] == inventory_action(ITEM_VOIDWAKER);
+            int combo = actions[RF_WEAPON] == inventory_action(ITEM_GRANITE_MAUL_ORNATE);
+            assert(!combo || timer == 3);
+            combos += combo;
+            decisions[3 - timer] = combo ? -1 : actions[RF_WEAPON] == inventory_action(ITEM_VOIDWAKER);
         }
-        assert(decisions[0] == decisions[1] && decisions[1] == decisions[2]);
-        vw += decisions[0];
+        assert((decisions[0] == -1 || decisions[0] == decisions[1]) && decisions[1] == decisions[2]);
+        vw += decisions[2];
     }
     assert(vw > 0 && vw < 400);
+    assert(combos > 0);
 }
 
 static void test_full_hp_never_eats_or_specs_without_energy(void) {
