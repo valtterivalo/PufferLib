@@ -3,9 +3,9 @@
 
 Usage: python3 scripts/fit_dharok_personas.py [--duels FILE] [--names FILE] [--boot N]      (python3 standard library only; deterministic)
 
-Input: spectator.duels (see measure_dharok_play.py), Dharok v Dharok duels only, both sides; rows marked third-party skipped. --names (default FILE.names,
-written next to it by the light repo's tools/spectator_export.py run with names: `duel_id hash_a hash_b`) ties a duel side to a fighter across duels; without it
-every fighter-duel is its own fighter.
+Input: spectator.duels (see measure_dharok_play.py), Dharok v Dharok duels only, both sides; rows marked third-party skipped. --names (default FILE.names)
+ties a duel side to a fighter across duels (`duel_id hash_a hash_b`); both files come from the light repo's export:
+    python3 tools/spectator_export.py ~/.light2/c-engine/spectator.duels --names ~/.light2/c-engine/spectator.duels.names
 
 Behaviours (each an event with a yes/no outcome y in a cell of the state the script's table conditions on; the pooled rate of the cell is p):
 - meal_low: after the other side's hit leaves him below 60 hitpoints (bands 0-2 of fit_dharok_meals.py), NOT healed (bar + damage 8 over) by that side's next hit;
