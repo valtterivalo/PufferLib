@@ -46,6 +46,8 @@ typedef struct {
     int have_previous, previous_hitpoints, previous_range;
     RtServings previous_bag;
     int meals, overeats, bag_unexplained;
+    /* Our last special this fight (rt_note_spec): the O line's spec_us of the previous request (-1 none yet) and the fight tick the special was stepped on (-1 none). */
+    int previous_spec, last_spec_tick;
 } RtFight;
 
 static RtFight g_fight;
@@ -71,6 +73,7 @@ static void rt_fight_reset(RtFight* f, int start_tick, const RtSeen* seen) {
     v->spec_est = 100;
     v->health_bar = seen->bar_scale == OSRS_PLAYER_HEALTH_BAR_SCALE && seen->bar_ratio >= 0 ? seen->bar_ratio : OSRS_PLAYER_HEALTH_BAR_SCALE;
     f->land_pending[0] = f->land_pending[1] = f->last_land = -1;
+    f->previous_spec = f->last_spec_tick = -1;
 }
 
 /* The sim's content code of a bag item as the client showed it: canonical() maps the blighted ids and the ids the server models (pies included); an id it has no row for
@@ -141,6 +144,15 @@ static void rt_note_meals(RtFight* f, const RtServings* bag, int hitpoints, int 
     f->previous_bag = *bag;
     f->previous_hitpoints = hitpoints;
     f->previous_range = range;
+}
+
+/* Our special attacks, for the teleport block the sim sets on them (osrs_pvp_combat.h post_attack: osrs_teleport_record_offensive_pvp_special). The wire carries no special
+ * event of ours, so a special is our energy falling between two consecutive requests of the fight: regeneration only raises it and every special that costs energy costs more
+ * than a regeneration step adds. The request of tick N is the state after fight tick n - 1, so the drop is a special stepped on n - 1; across a missing tick (a gap of 2) it may
+ * have been n - 2, and n - 1 keeps the block shut the longer. A Behead costs no energy and is not seen. */
+static void rt_note_spec(RtFight* f, int spec_us, int n) {
+    if (f->previous_spec >= 0 && spec_us < f->previous_spec) f->last_spec_tick = n - 1;
+    f->previous_spec = spec_us;
 }
 
 /* What riskfight_observe_visible does after a sim tick, from what the client showed instead of the sim's players. `n` is the fight tick after this one. */
@@ -356,6 +368,12 @@ static double rt_decide(Request* q, const RtSeen* seen, int new_fight, int fight
     us->pvp_overheal_block = (uint8_t)rt_overheal_block(f, n);
     s->visible[0] = f->vis;
     s->env.tick = n;
+    /* The loaded state has no teleport block (riskfight_load_state resets it); ours is the sim's block from our last special, which the mask's teleport and the
+     * observation's RF_SELF_TELEPORT_LOCK read. His stays open: no observation of ours reads it. */
+    rt_note_spec(f, q->ours.spec_us, n);
+    if (f->last_spec_tick >= 0)
+        s->env.pvp_runtime.teleport[0] = osrs_teleport_record_offensive_pvp_special(s->env.pvp_runtime.teleport[0],
+            osrs_teleport_combat_context(s->env.pvp_runtime.teleport_world, is_in_wilderness(us->x, us->y)), f->last_spec_tick);
     /* Our overeats of this fight feed the session block's [5]; the chance range is the one the observation's [6] margin is taken against. */
     rt_note_meals(f, &seen->servings, us->current_hitpoints, riskfight_chance_range(s, 0));
     s->overeats[0] = f->overeats;
