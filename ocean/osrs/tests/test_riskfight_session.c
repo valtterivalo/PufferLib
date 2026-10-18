@@ -345,14 +345,16 @@ static void test_rude_teleports_build_reputation(void) {
 }
 
 /* A ragger: with the reputation's probability a new opponent is a ranged pool kit played by the script who swings a few times and teleports away. The fight is
- * RISKFIGHT_RAGGED: no stake, no rematch, and the wait is the regear R scaled by the reputation. */
+ * RISKFIGHT_RAGGED: no stake, no rematch, and the wait is the regear R scaled by the reputation. A ragger only steps into a seat 1 no learning policy plays: the
+ * env is tagged with a frozen policy (test_riskfight_mix has the pure self-play env, where he never comes). */
 static void test_ragger_rags_and_leaves(void) {
     env = make_pool_env(6000, 1, 71, 1);
+    env->tag = 1;
     env->training.rep = 10; /* the cap: RF_REP_RAG_CAP */
     int n = 2000, ragged = 0;
     for (int i = 0; i < n; i++) {
         RiskfightTransition t = {.delay = 100};
-        riskfight_training_next_fight(&env->training, &env->state, &env->context, &t, 0);
+        riskfight_training_next_fight(&env->training, &env->state, &env->context, &t, env->tag);
         ragged += env->state.ragger;
         if (!env->state.ragger) continue;
         assert(env->context.opp_driven && env->context.opp_kit);
@@ -363,20 +365,22 @@ static void test_ragger_rags_and_leaves(void) {
     destroy();
     /* Without the pool there is no ranged kit to wear: nobody rags. */
     env = make_pool_env(6000, 1, 72, 0);
+    env->tag = 1;
     env->training.rep = 10;
     for (int i = 0; i < 300; i++) {
         RiskfightTransition t = {.delay = 100};
-        riskfight_training_next_fight(&env->training, &env->state, &env->context, &t, 0);
+        riskfight_training_next_fight(&env->training, &env->state, &env->context, &t, env->tag);
         assert(!env->state.ragger);
     }
     destroy();
     /* The fight itself: we stand idle, he swings his share and leaves. */
     env = make_pool_env(6000, 1, 73, 1);
+    env->tag = 1;
     env->training.rep = 10;
     for (int i = 0; !env->state.ragger; i++) {
         assert(i < 200);
         RiskfightTransition t = {.delay = 100};
-        riskfight_training_next_fight(&env->training, &env->state, &env->context, &t, 0);
+        riskfight_training_next_fight(&env->training, &env->state, &env->context, &t, env->tag);
     }
     riskfight_native_observe(env);
     int limit = env->state.ragger_limit;
@@ -399,9 +403,43 @@ static void test_ragger_rags_and_leaves(void) {
     destroy();
 }
 
+/* Seat 1's death price is the inverse of seat 0's (death_price is us / him: his is him / us), clamped to the price range [0.1, 2.5]: his reward of a death is minus
+ * it, of a mutual death 1 minus it, and his observation reads it where seat 0's reads death_price. */
+static void test_seat_one_price_mirrors(void) {
+    env = make_env(6000, 2.0, 23);
+    assert(riskfight_seat_price(&env->state, 0) == 2.0f && riskfight_seat_price(&env->state, 1) == 0.5f);
+    float obs[RF_OBS_SIZE];
+    riskfight_write_observation(&env->state, 0, obs);
+    assert(obs[RF_PRICE] == 2.0f * 10.0f / RF_PRICE_MAX_X10);
+    riskfight_write_observation(&env->state, 1, obs);
+    assert(obs[RF_PRICE] == 0.5f * 10.0f / RF_PRICE_MAX_X10);
+    assert(observations[1][RF_PRICE] == obs[RF_PRICE] && observations[0][RF_PRICE] == 2.0f * 10.0f / RF_PRICE_MAX_X10);
+    env->state.env.players[1].current_hitpoints = 0;
+    puf_step(env);
+    assert(rewards[0] == 1 * RF_REWARD_SCALE && rewards[1] == -0.5f * RF_REWARD_SCALE);
+    wait_out();
+    env->state.env.players[0].current_hitpoints = 0;
+    puf_step(env);
+    assert(rewards[0] == -2.0f * RF_REWARD_SCALE && rewards[1] == 1 * RF_REWARD_SCALE);
+    wait_out();
+    env->state.env.players[0].current_hitpoints = 0;
+    env->state.env.players[1].current_hitpoints = 0;
+    puf_step(env);
+    assert(rewards[0] == (1 - 2.0f) * RF_REWARD_SCALE && rewards[1] == (1 - 0.5f) * RF_REWARD_SCALE);
+    /* The clamp: at the lowest price seat 1's inverse (10) is held at the highest, 2.5; at the highest seat 1's is 0.4, inside the range. */
+    env->state.death_price = 0.1f;
+    assert(riskfight_seat_price(&env->state, 1) == RF_PRICE_MAX_X10 / 10.0f);
+    riskfight_write_observation(&env->state, 1, obs);
+    assert(obs[RF_PRICE] == 1.0f);
+    env->state.death_price = RF_PRICE_MAX_X10 / 10.0f;
+    assert(fabsf(riskfight_seat_price(&env->state, 1) - 0.4f) < 1e-6f);
+    destroy();
+    puts("price mirror: seat 1 reads and is paid 1 / price, clamped to [0.1, 2.5]");
+}
+
 static void test_reward_scale_stays_within_one(void) {
     assert(RF_REWARD_SCALE * (RF_PRICE_MAX_X10 / 10.0f) == 1.0f);
-    /* The largest price: death is -1, kill 1 / Pmax, a mutual death 1 - 1 = -0.6 / 2.5. */
+    /* The largest price: our death is -1, a kill 1 / Pmax, a mutual death 1 - 2.5 = -1.5 / 2.5; seat 1's price is 0.4, his death -0.4 / 2.5. */
     env = make_env(6000, RF_PRICE_MAX_X10 / 10.0, 21);
     env->state.env.players[0].current_hitpoints = 0;
     puf_step(env);
@@ -409,12 +447,12 @@ static void test_reward_scale_stays_within_one(void) {
     wait_out();
     env->state.env.players[1].current_hitpoints = 0;
     puf_step(env);
-    assert(rewards[0] == 1 * RF_REWARD_SCALE && rewards[1] == -1.0f);
+    assert(rewards[0] == 1 * RF_REWARD_SCALE && fabsf(rewards[1] + 0.4f * RF_REWARD_SCALE) < 1e-6f);
     wait_out();
     env->state.env.players[0].current_hitpoints = 0;
     env->state.env.players[1].current_hitpoints = 0;
     puf_step(env);
-    assert(fabsf(rewards[0] - (1 - 2.5f) * RF_REWARD_SCALE) < 1e-6f);
+    assert(fabsf(rewards[0] - (1 - 2.5f) * RF_REWARD_SCALE) < 1e-6f && fabsf(rewards[1] - (1 - 0.4f) * RF_REWARD_SCALE) < 1e-6f);
     destroy();
     /* Drawn prices over many fights of a session: every reward of every outcome stays within [-1, 1], and one scale serves every fight. */
     env = make_env(60000, 0, 22);
@@ -561,6 +599,7 @@ int main(void) {
     test_rude_teleports_build_reputation();
     test_ragger_rags_and_leaves();
     test_rude_teleport_loses_the_opponent();
+    test_seat_one_price_mirrors();
     test_reward_scale_stays_within_one();
     test_session_of_n_ticks_ends();
     test_waits_are_steps();

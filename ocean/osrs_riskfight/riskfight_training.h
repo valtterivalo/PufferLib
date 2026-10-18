@@ -195,12 +195,15 @@ static void riskfight_training_randomize(RiskfightTraining* training, RiskfightS
 /** Who plays the next new opponent and what he wears, drawn before his reset. He is played by the script or OppFit (the lone opponent of a self_play 0 env;
  * in a self-play env with a frozen policy, with probability scripted_probability) or by a net in seat 1: the learning policy, or the frozen checkpoint the
  * env is tagged with. The script and OppFit play pool kits (needs opponent_pool); a net wears a pool kit with selfplay_pool_probability, else one of our
- * kits, drawn as ours are (context->kit_mix). */
+ * kits, drawn as ours are (context->kit_mix). A pure self-play env (self_play, frozen_policy 0) always gives seat 1 to the learning policy: its rows train
+ * policy 0, so a script there would teach the policy actions the env ignored. */
 static void riskfight_training_draw_opponent(RiskfightTraining* training, RiskfightContext* context, int frozen_policy) {
     training->opponent = RF_TRAIN_LEARNED;
     training->scripted = NULL;
-    /* A ragger is always the script, in any seat 1: he wears a ranged pool kit, so the pool has to be on. */
-    context->opp_ragger = context->opponent_pool && riskfight_training_draw(training, riskfight_rag_probability(&training->config.rep, training->rep));
+    const int learning_seat = context->self_play && frozen_policy == 0;
+    /* A ragger is always the script, in a seat 1 no learning policy plays: he wears a ranged pool kit, so the pool has to be on. */
+    context->opp_ragger = !learning_seat && context->opponent_pool &&
+        riskfight_training_draw(training, riskfight_rag_probability(&training->config.rep, training->rep));
     if (context->opp_ragger) {
         training->opponent = RF_TRAIN_SCRIPTED;
         training->scripted = riskfight_training_profile(training);

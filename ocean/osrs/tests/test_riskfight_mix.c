@@ -164,6 +164,30 @@ static void test_new_opponents_and_rematch(void) {
         (double)t.net_pool / t.net);
 }
 
+/* A ragger is the script, so he only steps into a seat 1 no learning policy plays: a self_play 0 env and a frozen (tag > 0) env draw him with the reputation's
+ * probability, a pure self-play env (tag 0) never does, nor any other driven opponent: seat 1's rows there train the learning policy, which must play them. */
+static void test_raggers_only_where_no_net_learns(void) {
+    const struct { int self_play, tag; float share; } cases[3] = {{1, 0, 0}, {1, 1, RF_REP_RAG_CAP}, {0, 0, RF_REP_RAG_CAP}};
+    for (int k = 0; k < 3; k++) {
+        DictItem knobs[] = {{.key = "self_play", .value = cases[k].self_play}, {.key = "scripted_probability", .value = 0.5}};
+        Env* env = make_env(knobs, 2, cases[k].tag, 900 + (unsigned)k);
+        const int n = 3000;
+        int ragged = 0, driven = 0;
+        for (int i = 0; i < n; i++) {
+            env->training.rep = 10; /* the cap: RF_REP_RAG_CAP */
+            RiskfightTransition fresh = {.delay = 100};
+            riskfight_training_next_fight(&env->training, &env->state, &env->context, &fresh, env->tag);
+            ragged += env->state.ragger;
+            driven += env->context.opp_driven;
+        }
+        if (cases[k].share == 0) assert(ragged == 0 && driven == 0);
+        else assert(within(ragged, n, cases[k].share));
+        destroy(env);
+        printf("raggers: self_play %d tag %d: %.3f of new opponents (%.3f), driven %.3f\n", cases[k].self_play, cases[k].tag, (double)ragged / n,
+            cases[k].share, (double)driven / n);
+    }
+}
+
 /* OppFit plays the pool kits it was fitted on, the script the rest, in a self-play env too; a net never gets the hook. */
 static void test_oppfit_in_self_play(void) {
     if (!getenv("RF_OPPFIT_MODEL") || !getenv("RF_OPPFIT_EAT")) { puts("oppfit share: skipped (RF_OPPFIT_MODEL / RF_OPPFIT_EAT not set)"); return; }
@@ -215,7 +239,8 @@ static void test_omission_only_for_the_driven(void) {
 }
 
 #define SWAP(a, b) do { __typeof__(a) tmp_ = (a); (a) = (b); (b) = tmp_; } while (0)
-/** The state as seat 1 would see it were the seats exchanged: everything the observation and the mask read is per seat. */
+/** The state as seat 1 would see it were the seats exchanged: everything the observation and the mask read is per seat. The price is seat 0's, so the exchange
+ * inverts it (exact for the powers of two the tests below use). */
 static void swap_seats(RiskfightState* s) {
     SWAP(s->env.players[0], s->env.players[1]);
     SWAP(s->inventory_use[0], s->inventory_use[1]);
@@ -224,6 +249,7 @@ static void swap_seats(RiskfightState* s) {
     SWAP(s->hand_busy[0], s->hand_busy[1]);
     SWAP(s->env.pvp_runtime.maul[0], s->env.pvp_runtime.maul[1]);
     SWAP(s->env.pvp_runtime.teleport[0], s->env.pvp_runtime.teleport[1]);
+    s->death_price = riskfight_seat_price(s, 1);
 }
 
 static uint32_t hash32(uint32_t x) { x ^= x >> 16; x *= 0x7feb352dU; x ^= x >> 15; x *= 0x846ca68bU; x ^= x >> 16; return x; }
@@ -249,6 +275,7 @@ static void test_swapped_seats_see_mirrored_observations(void) {
     for (int fight = 0; fight < 24; fight++) {
         Env* env = make_env(knobs, 2, 0, 500 + (unsigned)fight);
         RiskfightState* s = &env->state;
+        s->death_price = 2.0f; /* seat 1's is 0.5: the swap inverts it exactly */
         kits_differ += memcmp(s->env.players[0].equipped, s->env.players[1].equipped, NUM_GEAR_SLOTS) != 0;
         uint32_t rng = 0x9e3779b9u + (uint32_t)fight;
         for (int tick = 0; tick < 70 && !s->env.episode_over; tick++) {
@@ -296,7 +323,7 @@ static void test_start_views_mirror(void) {
         c->loadout[0] = kits[order];
         c->loadout[1] = kits[1 - order];
         riskfight_reset((EncounterState*)s, (EncounterContext*)c, 31337);
-        s->death_price = 1.25f;
+        s->death_price = order ? 0.5f : 2.0f; /* seat 0's price; seat 1's is its inverse, so the exchanged fight inverts it */
         s->session_ticks_left = 1234;
     }
     int differing = 0;
@@ -415,6 +442,7 @@ static void test_every_fight_is_a_regear(void) {
 int main(void) {
     test_mix_fractions();
     test_dharok_mix_fractions();
+    test_raggers_only_where_no_net_learns();
     test_new_opponents_and_rematch();
     test_oppfit_in_self_play();
     test_omission_only_for_the_driven();
