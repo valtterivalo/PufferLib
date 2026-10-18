@@ -800,3 +800,13 @@ Live candidate a1: anchor hyperparameters, 182.7M steps on 37d061a46. Greedy lad
   - `RF_AXE_SWING_PM` is fitted on the stale bar at the swing, which doesn't count meals eaten since his last hitsplat. The script reads its band from true HP after its meals, so low fighters drop out of the <40 axe band.
   - Reading the band from his HP at his last hitsplat is the next step. The `personas` branch also edits the `axe_pm` line.
 >>>>>>> lowhp-offence
+
+## 2026-10-19: food attack delay on the ready tick, data against the wiki's wording
+
+- **The wiki's wording:** "If your weapon is ready to attack again then eating does not add any new delay."
+- **Our 159 own tapes contradict it on the ready tick:**
+  - A meal on the tick the swing is due delays that swing by the full amount: +3 anglerfish, +2 karambwan, +5 both, in 101 of 106 meals.
+  - Each idle tick before the meal earns one tick back: e=1, 5 of 6; e=2, 2 of 2. From 3 idle ticks there is no delay.
+  - Without a meal, a click on a ready weapon swings that tick 83 of 95 times.
+- **The engine already matches the data,** so it stays unchanged. Its signed attack history keeps counting while idle, and food adds to it (320c10838; that commit chose the model for convenience, but the data confirm it).
+- **Reading:** the wiki's "ready" means idle long enough for the delay to have run out, i.e. 3 ticks for hard food. The older rule (add only when the timer is above 0) would be wrong at timer 0 too: 74 of 80 meals one tick before ready still added the full delay.
