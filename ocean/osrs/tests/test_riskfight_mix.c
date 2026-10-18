@@ -189,7 +189,7 @@ static void test_mirror_keeps_kits_and_levels(void) {
 }
 
 /* data_escapes: where both seats are nets (pure self-play, tag 0, and a frozen checkpoint, tag 1) neither may teleport by its own choice; when the scripts' escape
- * rule fires for a seat its mask is the no-op and the step teleports it. A seat in a Dharok kit follows RF_DHAROK_TAB_PM. Where seat 1 is the script (or in a
+ * rule fires for a seat its mask is the no-op and the step teleports it. A seat in a Dharok kit follows RF_DHAROK_TAB_P10K. Where seat 1 is the script (or in a
  * self_play 0 env) our teleport is free and the script leaves by its own rule. */
 static void test_data_escapes(void) {
     int dharok = 0, other = 0;

@@ -746,18 +746,19 @@ static const uint16_t RF_DHAROK_MEAL_PM[5][RF_MEAL_PHASES] = {
 static const uint16_t RF_DHAROK_MEAL_SINGLE_PM[10] = {150, 130, 100, 170, 310, 790, 970, 970, 920, 1000};
 static const uint16_t RF_DHAROK_MEAL_DOUBLE_PM[10] = {40, 140, 280, 540, 650, 210, 20, 30, 80, 0};
 enum { RF_DHAROK_MEAL_BREW_PM = 400 };
-/* A Dharok pool opponent's teleport tab, on his own hitpoints rather than on supplies used (tab_pm): of the 261 spectated Dharok v Dharok duels, the 198 that end
- * without a knockout end with the lower fighter at hitpoints 36 (median), 67% at 46 or less. Ends per mille per fighter-tick, the lower side taken as the one
- * leaving, at hitpoints 0-19, 20-39, 40-59, 60 up: 28.5, 13.5, 3.5, 0.8; the human profiles' tab_pm gave him 6.8, 7.2, 3.1, 2.2. Low, he tabbed too rarely,
- * stayed in and plain hits finished him: 20% of sim knockouts against 1 of 63 spectated. */
-static const uint16_t RF_DHAROK_TAB_PM[4] = {29, 14, 4, 1};
+/* A Dharok pool opponent's teleport tab, on his own hitpoints rather than on supplies used (tab_pm), per 10,000 fighter-ticks at hitpoints 0-19, 20-39, 40-59,
+ * 60 up (scripts/fit_dharok_tab.py, the 261 spectated Dharok v Dharok duels, the leaving side by his teleport animation). The spectated bar moves only with a
+ * hitsplat, so his hitpoints between hits are the last hitsplat's bar plus the heal the next one shows, in step with his eat animations; the old fit on the
+ * carried bar (28.5, 13.5, 3.5, 0.8 per mille) read him low too often, which spread the low bands' tabs over too many ticks: 46.5, 18.0, 4.6, 0.4 per mille
+ * on the corrected hitpoints. Per 10,000 because 60 up is under one per mille. */
+static const uint16_t RF_DHAROK_TAB_P10K[4] = {465, 180, 46, 4};
 
-/** The scripts' teleport, for a fighter whose tab is not locked: out of heals below 30 hitpoints, else a roll per tick, RF_DHAROK_TAB_PM on his own hitpoints
+/** The scripts' teleport, for a fighter whose tab is not locked: out of heals below 30 hitpoints, else a roll per tick, RF_DHAROK_TAB_P10K on his own hitpoints
  * in a Dharok kit (`dharok`), the profile's tab_pm on the supplies he used this round (consume_ticks) and hitpoints below 40 otherwise. */
 static int riskfight_script_escape(const RiskfightProfile* profile, int dharok, int hp, int out_of_heals, int consume_ticks, uint32_t seed, uint32_t tick) {
-    int supply_band = min_int(consume_ticks / RISKFIGHT_TAB_SUPPLY_TICKS, RISKFIGHT_TAB_SUPPLY_BANDS - 1);
-    int tab_pm = dharok ? RF_DHAROK_TAB_PM[min_int(3, hp / 20)] : profile->tab_pm[supply_band][hp < 40];
-    return (hp < 30 && out_of_heals) || riskfight_sample_event(seed, tick, 31, tab_pm);
+    if (hp < 30 && out_of_heals) return 1;
+    if (!dharok) return riskfight_sample_event(seed, tick, 31, profile->tab_pm[min_int(consume_ticks / RISKFIGHT_TAB_SUPPLY_TICKS, RISKFIGHT_TAB_SUPPLY_BANDS - 1)][hp < 40]);
+    return (int)(riskfight_sample_hash(seed, tick, 31) % 10000u) < RF_DHAROK_TAB_P10K[min_int(3, hp / 20)];
 }
 
 /* A Dharok pool opponent's orb (Feel, 10 off himself), per tick on his own hitpoints and the axe in hand, on every tick of the other side's attack clock. An orb is
@@ -999,7 +1000,7 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
 }
 
 /** Whether `seat`, a net under RiskfightState.data_escapes, teleports on the tick about to be stepped: the escape rule a script would follow in its place
- * (riskfight_script_escape on the opponent's profile, RF_DHAROK_TAB_PM in a Dharok kit), with the seat's script rolls, while it holds a tab it may use now.
+ * (riskfight_script_escape on the opponent's profile, RF_DHAROK_TAB_P10K in a Dharok kit), with the seat's script rolls, while it holds a tab it may use now.
  * A pure function of the state: the mask (the no-op on that tick) and the step (the teleport) read the same decision. */
 static int riskfight_data_escape(const RiskfightState* s, int seat) {
     if (!s->data_escapes[seat]) return 0;

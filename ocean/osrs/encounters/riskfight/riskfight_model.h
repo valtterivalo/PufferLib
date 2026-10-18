@@ -20,7 +20,7 @@ enum { RISKFIGHT_CONSUME_BANDS = 5, RISKFIGHT_AXE_BANDS = 3, RISKFIGHT_TAB_SUPPL
  * axe rates are a profile's greataxe wields per tick without the axe in hand by own HP at 40 and 80: over the training mean they scale riskfight_script's
  * per-attack RF_AXE_SWING_PM (his propensity), tab rates are indexed by
  * [consume ticks this round / 8, capped][own HP below 40]. dharok_eating: meals on the spectated Dharok rates (riskfight_script_dharok_meal) instead of the
- * consume bands' thresholds, which then repot only, and the teleport tab on his own HP (RF_DHAROK_TAB_PM) instead of tab_pm; never set in a profile table, the
+ * consume bands' thresholds, which then repot only, and the teleport tab on his own HP (RF_DHAROK_TAB_P10K) instead of tab_pm; never set in a profile table, the
  * step sets it for a Dharok pool opponent (riskfight_opponent_script). */
 typedef struct {
     uint16_t consume_pm[RISKFIGHT_CONSUME_BANDS];
@@ -178,7 +178,7 @@ typedef struct {
 } RiskfightVisibleOpponent;
 
 /* How a seat leaves (RiskfightState.data_escapes): by its own actions (the script's rule, OppFit's or a net's own teleport), or, a net, by the scripts' escape
- * rule: the opponent profile's tab_pm, or RF_DHAROK_TAB_PM in a Dharok kit. */
+ * rule: the opponent profile's tab_pm, or RF_DHAROK_TAB_P10K in a Dharok kit. */
 typedef enum { RF_DATA_ESCAPES_OFF, RF_DATA_ESCAPES_PROFILE, RF_DATA_ESCAPES_DHAROK } RiskfightDataEscapes;
 
 typedef struct {
@@ -286,7 +286,7 @@ typedef struct {
     float damage_reward_coeff;
     float chance_reward_coeff;
     RiskfightMotor motor[2]; /* the hand of each seat a net plays (seat 1 in self-play), so both seats of one net click alike */
-    /* When both seats are nets (self-play, seat 1 the learning policy or a frozen one), each leaves when the scripts' escape rule says so (RF_DHAROK_TAB_PM in a
+    /* When both seats are nets (self-play, seat 1 the learning policy or a frozen one), each leaves when the scripts' escape rule says so (RF_DHAROK_TAB_P10K in a
      * Dharok kit, else the profile's tab_pm and the out-of-heals rule), never by its own choice: env key data_escapes. Fighting skill is the net's, leaving is
      * the players'. Against a net a fight is worth what leaving is (0 in an even mirror), so a free teleport there taught the shared policy to leave, and it
      * left the live population too; the learner's teleport is trained only where seat 1 is the script or OppFit. */

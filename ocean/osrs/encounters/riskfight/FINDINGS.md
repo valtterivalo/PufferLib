@@ -586,3 +586,48 @@ Harness: `dh_eat` with both seats on the Dharok script (6,000 fights per arm, st
   - Lowering the 60-79 rate to 60 per mille, or the 80+ rates to half or zero, moves KO share by at most 0.015 (.166 to .180) and opponent HP by 5. Making seat 0 base Defence 80 like a Dharok kit moves nothing (KO .169).
 - **What differs is damage intake:** 1.53-1.62 per tick in the sim against 1.90 real, at every HP band. So sim fighters sit at 80+ 0.60 of the time against 0.32. That is not a meal parameter. The next suspects are swing timing and hit sizes against Dharok-armoured defenders at given HP.
 - **The teleport table has the same stale-bar bias.** Re-read on the gap HP estimate, tabs per 1,000 ticks at HP 0-19 / 20-39 / 40-59 / 60+ are 46.5 / 18.0 / 4.6 / 0.4, against the carried-bar fit's 25.2 / 11.5 / 3.4 / 0.5 (`RF_DHAROK_TAB_PM` = 29, 14, 4, 1). Swapping it in (per 10,000) moves the sim's escape share from .83 to .82 and KO share from .17 to .18. It is not committed: the low bands are rarely visited, and 60+ goes from 1 to 0.4 per 1,000, which the per-mille table can't hold.
+
+## 2026-10-18 night, later: teleport table on corrected hitpoints; the damage-intake gap is mostly a counting gap
+
+- **`RF_DHAROK_TAB_P10K`** (`scripts/fit_dharok_tab.py`) replaces `RF_DHAROK_TAB_PM`. It is fitted on HP between hitsplats (last hitsplat's bar plus the next one's heal, in step with eat animations), with the leaving side read from his teleport animation.
+
+  | | HP 0-19 | 20-39 | 40-59 | 60+ |
+  |---|---|---|---|---|
+  | Per 10,000 fighter-ticks (new) | 465 | 180 | 46 | 4 |
+  | Old carried-bar fit, same units | 252 | 115 | 34 | 5 |
+
+  It is per 10,000 because the 60+ rate is under one per mille. Non-Dharok profiles keep their per-mille roll unchanged.
+- **Damage per tick, decomposed** (`/tmp/mj/decomp.py`). Real: swings from attack animations, hits from the defender's hitsplat on the swing tick or the next. Sim: the probe's queued hits. Attacker HP is the gap estimate (real) or true HP (sim).
+  - **Like-for-like, the gap mostly goes away.** The 1.53 against 1.90 per tick came from two harness and counting effects:
+    - Seat 0 kept Defence 99. Base 80, as the opponent's Dharok kit gets, adds 0.09.
+    - The real figure counts the fighter's own orb 10s as hitsplats; the sim tally didn't (0.25 per tick of HP drops with no hit and no meal).
+    - HP lost per tick: 1.96 real against 1.62 + 0.25 = 1.87 sim.
+  - **Parts:**
+
+    | Part | Real | Sim |
+    |---|---|---|
+    | Swings per tick | 0.175 | 0.195 |
+    | Accuracy of normal swings | 0.27-0.31 | 0.25-0.26 |
+    | Mean hit given a hit: axe | 32.6 | 28.6 |
+    | ... VW | 19.9 | 21.1 |
+    | ... VW spec | 44.1 | 41.1 |
+
+    The script doesn't lose attack ticks to eating, and its weapon shares are close. No mechanics error found.
+  - **The biggest term left is low attackers.** At own HP < 40, damage per tick is 2.22 real against 1.26 sim:
+    - Greataxe 1.12 against 0.61 (swings per tick 0.092 against 0.062, accuracy 0.35 against 0.26).
+    - Voidwaker spec 0.49 against 0.23 (0.011 against 0.006 per tick).
+
+    It is small overall, because the sim spends 0.026 of ticks below 40 against real 0.05.
+- **Heal intake is not lower in the sim:** 1.60 per tick against at least 1.70 real (the bar hides heals above 99).
+  - Fight length: real median 146 ticks counts the spectated window only, and 0.17 of real duels end with neither a KO nor a teleport seen. So "187 against 146" is not a like-for-like gap.
+- **Re-measured** (6,000 fights, both seats on the Dharok script, seat 0 at base Defence 80, new tab table):
+
+  | Measure | Real | Sim |
+  |---|---|---|
+  | Opponent HP when the low fighter is ready (median), low fighter 1-20 / 20-35 / 35-50 | 59 / 66 / 66 | 78 / 80 / 80 |
+  | KO / teleport by lower / by leader | .24 / .43 / .14 | .19 / .66 / .15 |
+  | Time at HP < 40 / 40-79 / 80+ | .05 / .63 / .32 | .03 / .39 / .59 |
+  | HP lost per tick | 1.96 | 1.61 + 0.25 orb |
+  | Fight length, median ticks | 146 (spectated window) | 200 |
+
+  The opponent-HP and time-in-band gaps remain. With damage and heal intake matched per tick, the next suspect is the HP the fight starts at: the spectated window starts mid-fight, while the sim starts at the drawn start HP.

@@ -1,5 +1,5 @@
 /* Seat 1's escapes, a net under data_escapes against the script itself: the per-tick teleport rate of seat 1 by the cells of the scripts' escape rule (a Dharok kit:
- * RF_DHAROK_TAB_PM's hitpoint bands; any other kit: tab_pm's supply band and hitpoints below 40), over ticks it holds a usable tab.
+ * RF_DHAROK_TAB_P10K's hitpoint bands; any other kit: tab_pm's supply band and hitpoints below 40), over ticks it holds a usable tab.
  *   net     pure self-play (tag 0, our kits, data_escapes 1): seat 1's own teleport masked, it leaves by riskfight_data_escape
  *   script  a frozen-tagged env whose seat 1 is the script in pool kits (scripted_probability 1)
  * Both seats play the script with its teleport taken out (the net's actions), so seat 1 leaves only by the escape rule (the script: its own rule).
