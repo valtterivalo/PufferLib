@@ -41,7 +41,7 @@ typedef struct {
  * weight). Orbs differ as much between fighters, but the kit's orb share (RF_KIT_ORB_PM, carrying or not) already gives that spread. */
 typedef enum { RF_PERSONA_CUM, RF_PERSONA_EAT, RF_PERSONA_BIG_MEAL, RF_PERSONA_AXE } RiskfightDharokPersonaTrait;
 #include "riskfight_personas.h"
-_Static_assert(RF_DHAROK_PERSONAS < 255, "dharok_persona is 1 + a row in a uint8_t");
+typedef char riskfight_dharok_persona_fits_uint8[RF_DHAROK_PERSONAS < 255 ? 1 : -1]; /* dharok_persona is 1 + a row in a uint8_t; a typedef compiles as C and CUDA C++ */
 
 /** 1 + a row of RF_DHAROK_PERSONA, in proportion to the fighters' spectated fights, by a uniform 32-bit roll. */
 static uint8_t riskfight_dharok_persona_draw(uint32_t roll) {
