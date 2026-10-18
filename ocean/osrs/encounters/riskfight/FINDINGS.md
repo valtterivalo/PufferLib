@@ -311,3 +311,23 @@ Live, s6t0 drank super restores at full prayer with nothing drained (prayer 87-9
 - **The axe KO setup** (`scripts/measure_dharok_play.py` (d)): the "axe+reflect stack" is not an axe play. 13 real KOs carry the killer's reflect, but only 1 has his axe swing; most are a VW spec on the reflect. The 26 axe KOs come at his hitpoints 36 (56 at all axe swings) on a victim bar of 12.7/30 (17.4). Vengeance up (0.19 vs 0.32), the orb (0.12 vs 0.11) and strips (0 vs 0.03) do not stand out. The script's axe now rolls per attack on `RF_AXE_SWING_PM`, the measured share of non-special swings by own HP × Veng up × victim bar (e.g. 25 at 80+ HP on a full bar, 490 at 40-79 HP on a bar under 10, 794 below 40 HP), scaled by the profile's axe propensity. Orb, strip and Veng rules are unchanged: nothing in the data times them to the KO.
   - `/tmp/dhsim` (6,000 fights, fight starts): KO by axe went from 10.1% to 22.7% (real 41%); reflect 12.8 → 13.2% (real 9.5); stack 3.4 → 3.0% (real 20.6, mostly VW); VW 35.5 → 33.0% (real 27); other 37.1 → 27.0% (real 1.6). Damage per tick taken went from 1.657 to 1.669 (real 1.973). The gap is no longer the axe decision: sim axe shares by state are within a few points of real. It is the HP distribution and the many small-hit KOs ("other").
 - **Overeat counting:** most meals the probe counts above the gate are motor-delayed clicks from a chain decided in range. One counting artefact: a brew consumed that tick shrank the range it was judged against. The range is now taken at the tick's start (d747134a6).
+- **Axe roll from the real KO table (9754d0d83).** The script's axe roll is now a per-attack table from 12,189 real non-special swings: per 1,000, by own HP × victim bar × own Vengeance. The victim's bar matters most (87 / 334 / 526), then own HP (50 / 194 / 640), then Vengeance (127 down, 239 up).
+
+  | Sim (6,000 fights) | Before | After | Real |
+  |---|---|---|---|
+  | KOs by axe | 10.1% | 22.7% | 41.3% |
+  | Damage per tick | 1.66 | 1.67 | 1.97 |
+
+  What's left is KOs from many small hits.
+  - The real "axe+reflect stack" is mostly a VW/AGS special landing on a reflect; 1 of 13 is an axe.
+  - Before axe KOs, the orb (0.12 against 0.03 base) and Vengeance (0.19 against 0.20) are hardly over-represented, so the script times neither to the axe.
+- **The axe does not pay for our seat in the current sim** (hand rules on our Dharok kit against the scripted pool, about 13,000 fights per arm, kills/deaths per 100):
+
+  | Rule | Kills | Deaths |
+  |---|---|---|
+  | Never axe | 63.0 ± 0.4 | 1.3 |
+  | Axe below 60 HP | 63.0 | 1.9 |
+  | The real fighters' table | 62.5 | 1.8 |
+
+  So the nets' zero axe use is the sim's optimum, not an exploration failure. This contradicts the user's account of real Dharok fights. Either the sim still misses what makes the axe pay (stacking with a reflect, strips that bait hits, the opponent misjudging his eat), or our VW main is simply better. Open question for the user.
+- **Install for the morning: s13t04 stays.** In the newest env (sweep 15's probe binary) it scores Dharok 10.77 and VW 10.92 net/h. s14t0 scores 10.53 / 9.82 and s14t4 9.89 / 10.86. Sweep 15 trains on the newest env.
