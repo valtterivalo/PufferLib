@@ -573,6 +573,7 @@ typedef struct PuffeRL {
     ulong seed;
     curandStatePhilox4_32_10_t** rng_states;  // per-buffer persistent RNG states [num_buffers]
     char env_name[64];  // For policy arch rebuild at create.
+    int greedy;  // sample_logits takes argmax/mean; 0 in training, set by run_bot_ladder
 } PuffeRL;
 
 // Infer path: sample + forward, then vec workers.
@@ -598,6 +599,9 @@ __global__ void rng_init(curandStatePhilox4_32_10_t* states, uint64_t seed, int 
 // Action logits and value share one row: [logits..., value]. logstd empty ⇒ discrete.
 // Discrete: always-cache logsumexp + inverse-CDF; mask always present (all-ones if env has none).
 // Continuous: ignores mask.
+// greedy: discrete heads take the argmax of the legal logits (lowest index on
+// ties), continuous heads take the mean; no RNG draw. greedy=0 is the training
+// sampler, bit-for-bit (same draws, same RNG advance).
 __global__ void sample_logits(
         Prec dec_out,              // (B, logits_dim + 1)
         Prec logstd,               // (1, od) continuous only; .data null if discrete
@@ -608,7 +612,8 @@ __global__ void sample_logits(
         precision_t* value_out,    // (B,)
         curandStatePhilox4_32_10_t* rng_states,
         precision_t* action_mask,  // (B, A_total); always allocated
-        int mask_stride) {
+        int mask_stride,
+        int greedy) {
     int B = dec_out.shape[0];
     int fused_cols = dec_out.shape[1];
     int num_atns = NUM_ATNS;
@@ -630,8 +635,8 @@ __global__ void sample_logits(
             float mean = safe_continuous_mean(logits, logits_base + h);
             float log_std = safe_continuous_logstd(logstd_data, h);
             float std = expf(log_std);
-            float action = finite_or_clamp(
-                mean + std * curand_normal(&state), -1.0e6f, 1.0e6f);
+            float action = greedy ? finite_or_clamp(mean, -1.0e6f, 1.0e6f)
+                : finite_or_clamp(mean + std * curand_normal(&state), -1.0e6f, 1.0e6f);
             // Preserve reduced-precision continuous semantics for logprob.
             precision_t stored_p = from_float(action);
             float stored = to_float(stored_p);
@@ -655,22 +660,37 @@ __global__ void sample_logits(
             float eps = h == 0 ? nethack_verb_eps_load(
                 action_mask + mask_base + logits_offset, A, &inv_K) : 0.0f;
 #endif
-            float rand_val = curand_uniform(&state);
-            float cumsum = 0.0f;
             int sampled = A - 1;
-            for (int a = 0; a < A; a++) {
-#ifdef PUFFER_NETHACK
-                if (eps > 0.0f) {
-                    cumsum += nethack_verb_eps_mix(expf(cache[a] - logsumexp),
-                        action_mask[mask_base + logits_offset + a], eps, inv_K);
-                } else
-#endif
-                {
-                    cumsum += expf(cache[a] - logsumexp);
+            if (greedy) {
+                float best = 0.0f;
+                int found = 0;
+                for (int a = 0; a < A; a++) {
+                    if (to_float(action_mask[mask_base + logits_offset + a]) == 0.0f) {
+                        continue;
+                    }
+                    if (!found || cache[a] > best) {
+                        best = cache[a];
+                        sampled = a;
+                        found = 1;
+                    }
                 }
-                if (rand_val < cumsum) {
-                    sampled = a;
-                    break;
+            } else {
+                float rand_val = curand_uniform(&state);
+                float cumsum = 0.0f;
+                for (int a = 0; a < A; a++) {
+#ifdef PUFFER_NETHACK
+                    if (eps > 0.0f) {
+                        cumsum += nethack_verb_eps_mix(expf(cache[a] - logsumexp),
+                            action_mask[mask_base + logits_offset + a], eps, inv_K);
+                    } else
+#endif
+                    {
+                        cumsum += expf(cache[a] - logsumexp);
+                    }
+                    if (rand_val < cumsum) {
+                        sampled = a;
+                        break;
+                    }
                 }
             }
             // CDF fall-through (float rounding) lands on A - 1, which may be
@@ -884,7 +904,7 @@ static void pufferl_forward_step(PuffeRL* pufferl, int buf, int t,
             act_b.data, env->actions.data + (long)sub * act_cols,
             lp_b.data, val_b.data,
             pufferl->rng_states[buf] + off,
-            mask_b.data, mask_stride);
+            mask_b.data, mask_stride, pufferl->greedy);
     }
 }
 
@@ -3102,6 +3122,9 @@ static float run_bot_ladder(Ini* ini, TrainContext* ctx, Dict* log) {
     // One PuffeRL for the whole ladder. close_pufferl frees nothing, so a
     // trainer per rung is a leak. Swap bot_policy and restart instead.
     PuffeRL* ep = eval_make(ini, ctx, EVAL_SCORE, 0);
+    // Before the first forward: rollout graphs capture lazily, baking the
+    // sample_logits greedy argument into the graph.
+    ep->greedy = puf_ini_get(ini, "selfplay", "eval_greedy") != 0;
     float sum = 0, timeouts_sum = 0;
     for (int i = 0; i < rungs; i++) {
         if (PUF_BACKEND != PUF_GPU) {
