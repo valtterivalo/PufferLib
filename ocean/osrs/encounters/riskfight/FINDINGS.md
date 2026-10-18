@@ -561,7 +561,7 @@ Measured on the 261 spectated Dharok v Dharok duels against 6000 sim fights (`ri
 | C: half self-play | 74 | 6.84 | 6.76 | 6.63 |
 
 - **The collapse is gone:** with both seats escaping by the data model, self-play trials score 6.4-6.8, against 0.1 / −3.8 / 5.1 in fast sweep 3. They still trail the plain arm by 0.9-1.6 per hour at this budget, on both seeds and both kits.
-- **Self-play is off for now.** Sweeps pin `selfplay.enabled` to 0 (fast4). The machinery stays in place.
+- **Self-play is off for now.** Correction: the pin `--sweep.selfplay.enabled.max=0.4` never reached fast4 or fast5, because `sweep_riskfight_fast.sh` dropped extra arguments (fixed: they now pass through). Both sweeps sampled self-play in runs 1, 2 and 5. In fast5 those scored 5.73 / 4.10 / 4.18, against 8.68 / 7.69 / 7.07 without self-play, which agrees with the two-seed test. The machinery stays in place.
 - **Neither arm uses the Dharok tools:** no orb; axe swings only at about 96 HP or not at all.
 - **Scores fell across the board** compared with fast3 (run 0 10.31): after the meal refit, sim Dharok opponents heal before the next swing as real fighters do, so they are harder to KO. Scores aren't comparable across that change.
 

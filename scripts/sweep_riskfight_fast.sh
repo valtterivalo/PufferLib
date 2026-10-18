@@ -3,9 +3,9 @@
 # they are not the final hyperparameter search). Same objective, env and anchor as scripts/sweep_riskfight_live.sh, plus:
 #   at most RUNS trials (default 6: about 20 minutes on one GPU), each costing at most 240 s (max_suggestion_cost),
 #   a narrow search space around the anchor (total_timesteps 5e7..2.2e8, nets 256..512 x 1..2, the PPO knobs near their good region).
-#   cd REPO && ./build.sh osrs_riskfight && RF_OPPFIT_MODEL=... RF_OPPFIT_EAT=... scripts/sweep_riskfight_fast.sh RUN_DIR [RUNS]
+#   cd REPO && ./build.sh osrs_riskfight && RF_OPPFIT_MODEL=... RF_OPPFIT_EAT=... scripts/sweep_riskfight_fast.sh RUN_DIR [RUNS] [more ./puffer sweep args]
 set -euo pipefail
-RUN=${1:?usage: sweep_riskfight_fast.sh RUN_DIR [RUNS]}
+RUN=${1:?usage: sweep_riskfight_fast.sh RUN_DIR [RUNS] [more ./puffer sweep args]}
 RUNS=${2:-6}
 exec "$(dirname "$0")/sweep_riskfight_live.sh" "$RUN" \
   --sweep.max_runs="$RUNS" --sweep.max_suggestion_cost=240 \
@@ -24,4 +24,4 @@ exec "$(dirname "$0")/sweep_riskfight_live.sh" "$RUN" \
   --sweep.train.vf_clip_coef.min=0.05 --sweep.train.vf_clip_coef.max=0.3 \
   --sweep.env.scripted_probability.min=0 --sweep.env.scripted_probability.max=0.2 \
   --sweep.env.selfplay_pool_probability.min=0.8 --sweep.env.selfplay_pool_probability.max=1 \
-  --sweep.vec.hist_policy_percent.min=0.3 --sweep.vec.hist_policy_percent.max=0.7
+  --sweep.vec.hist_policy_percent.min=0.3 --sweep.vec.hist_policy_percent.max=0.7 "${@:3}"
