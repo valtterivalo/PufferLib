@@ -238,3 +238,45 @@ Live, s6t0 drank super restores at full prayer with nothing drained (prayer 87-9
   - RF_OVEREAT_PATIENCE is now 9 (p90 of the user's overeats per fight: 8).
 - **The teleport at 410** was kosher 1 because no spec weapon of his was known or likely (`his_cheapest 0`), though he had 100 energy. A player assumes the other side carries a special at the commonest cost, 50 (`RF_KOSHER_ASSUMED_SPEC`). After our specials, a teleport is now kosher only once his estimate is below 50.
 - **Prayers in training:** the plugin turns on Smite and Piety 1-3 ticks (uniform) after the fight starts. A deployed net's seat in `puf_step` now gets them from a per-fight draw of 1-3 steps, not on the first tick.
+
+## 2026-10-18 night: the meal gate as a one-tick bound, s12t4, the Dharok kit and mixed-kit training
+
+- **Overeating in run-20261017T230317Z.71610:** the chance range summed his axe and a possible double maul (146-159 all fight), so it never gated a meal.
+  - The user's account: his axe hit and maul specials land on different ticks, and you eat in between; a camp of 85-92 HP against an axe of about 70 is near optimal.
+  - The data agrees: in all 11 recorded combos the opening and the maul land on different ticks.
+  - The range is now the larger of the two (a036f19c9; reads 88 in that fight).
+  - Calibrated on the user's 1,667 meals, 73.7% of them are within it; above it, 20% are while he eats and 49% while he can't swing next tick. The gate is stricter than the user.
+- **Rude teleport read as kosher:** no spec weapon of his reached the 0.5 prior, so `riskfight_teleport_kosher_now` treated him as unable to spec, with 100 energy unspent. It now assumes a 50 special.
+- **Specs in that fight:** 62 and 57, near max; he ate before each.
+- **Plugin:**
+  - fight prayers now start 1-3 random ticks in (light #348), and the sim matches;
+  - triple eats landed in the tick live (last click 343 and 321 ms) after the batch pace change.
+- **s12t4 installed** (sweep 12 best, 256x2, VW kits; C a196976aa, branch live-s12), on the four live traces against s7t18:
+  - fewer meals and restores;
+  - teleports only kosher ones;
+  - no meal at 90+ HP.
+- **The user's Dharok kit** (MCP snapshot `~/.light2/kits/dharok-20261018.json`):
+  - worn: Dharok helm/body/legs, Voidwaker, dragon defender;
+  - bag: 2 pies, 6 halibut, 10 marlin, 2 restores, 2 brews, ornate maul, greataxe, super combat, locator orb, Vengeance, tab;
+  - risk ~5M against ~1M for the VW kit.
+
+  It is now RISKFIGHT_DHAROK_LOADOUT (5650a5856).
+  - `live_loadout=4` draws our kit per session: Dharok half the time, the three VW kits the rest. The sweep and its [bot_eval] score use it.
+  - The deployable mask offers body/legs strip and re-strip (the game's empty-cell rule holds) and the orb (with an orb and HP > 1).
+  - The RL server emits them; `SIM_IDS` knows halibut, marlin, the orb and the Dharok ids.
+  - Plugin (light #349):
+    - halibut/marlin/pies are meals;
+    - `specOk` uses the spec cost table, not "Voidwaker";
+    - the orb clicks "Feel";
+    - double spec toggles play as one tick batch.
+- **Dharok opponents from spectator data** (672bd9ddb, `scripts/measure_dharok_play.py`, 599 Dharok fighters):
+  - strips per 1,000 full-set ticks: 1.5 / 2.1 / 2.8 by his bar band (low / mid / high);
+  - strip duration about 4.5 ticks;
+  - 88 of 98 strips followed by an axe were re-equipped first;
+  - axe wields per 1,000 ticks: 75 / 44 / 15 by his bar;
+  - orb: exactly-10 HP drops 441 times against about 3.5 for neighbouring values; 248 per 1,000 axe swings follow an orb; 53-69% of axe fighters carry it.
+
+  The script now strips and re-equips at those rates, and 60% of axe kits carry the orb.
+- **Housekeeping:**
+  - env_trace goldens refreshed on both platforms (5db4ceb3a);
+  - a sweep dir copied from the last one keeps the old `./puffer`. A failed nvcc build then silently ran the old binary once (sweep 13's first launch, killed within seconds); the binary is now deleted before every build.
