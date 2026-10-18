@@ -829,3 +829,47 @@ Live candidate a1: anchor hyperparameters, 182.7M steps on 37d061a46. Greedy lad
   - The remaining axe gap sits in the table's other axes: the opponent's bar (the sim opponent sits higher, 74-77 against 66-69) and the profiles' axe propensity.
   - Swing within 2 ticks (.12 against .25) is unchanged. On the ready tick the meal's attack delay is right (093cedadc), so the gap is in when the script eats relative to its swing.
 - **Tests:** test_riskfight_dharok_script (axe cells within 2% of the new table), _mix, _mechanics, _session, _scripts (now sets the bar along with our HP), test_riskfight, _humanlike, _training, test_soulreaper_zcb and test_rf_serve_visible pass. test_riskfight_long_determinism is remote-only and timed out locally. The env_trace goldens are not refreshed.
+
+## 2026-10-19: why a low sim Dharok fighter swings late, and a meal rule on his own clock
+
+- **Where the gap is** (after a hitsplat leaves him at bar 1-11; real from `spectator.duels`, sim from 6,000 Dharok-script fights; his own attack clock at the next tick, meals counted in):
+
+  | Clock at t+1 | Real share / swing by +2 / eats first | Sim before | Sim after |
+  |---|---|---|---|
+  | 0 (may swing) | .32 / .48 / .42 | .18 / .49 / .56 | .18 / .61 / .44 |
+  | 1 | .17 / .42 / .51 | .19 / .23 / .81 | .19 / .48 / .56 |
+  | 2 | .24 / .10 / .63 | .29 / .00 / .91 | .26 / .00 / .67 |
+  | 3 up | .28 / .07 / .78 | .34 / .00 / .95 | .37 / .00 / .94 |
+
+  - **His clock at the hit:** real fighters are ready more often (.32 against .18). This accounts for about half of the swing-by-+2 gap. The other half is the meal order at clock 1: the sim ate first (.81) on a running clock, and the meal's attack delay pushed the swing out 3 ticks.
+  - Eating and swinging can't happen on one ready tick (the meal delays the swing; 093cedadc), so the tick order is "eat first" or "swing first".
+  - PID is not a factor: a swing's hitsplat lands on the same tick .52 real and .53 sim (landed hits only).
+- **Change:** `RF_DHAROK_MEAL_CLOCK` = 632 / 200 / 316 / 2852 (`scripts/fit_dharok_meal_clock.py`).
+  - Below 40 HP (meal bands 0-1), the meal hazard is raised to that exponent per mille by the fighter's own attack timer (0, 1, 2, 3 up).
+  - Clocks 0-2 are fitted on the real "eats first" shares.
+  - Clock 3 up takes the rest of a 4-tick cycle's 4000, so meals per cycle stay as before.
+  - The persona eat exponent applies on top.
+- **Low-attacker table** (`scripts/measure_dharok_low_attack.py`), real / before / after:
+
+  | Band | Swing by +2 | Axe swings | Damage per tick |
+  |---|---|---|---|
+  | 0-19 | .24 / .12 / .19 | .37 / .23 / .27 | .72 / .51 / .65 |
+  | 20-39 | .28 / .13 / .20 | .31 / .24 / .28 | .75 / .66 / .73 |
+  | 40-59 | .30 / .19 / .19 | .31 / .18 / .19 | .95 / .89 / .92 |
+
+  - KO share .195 → .200 (real .24).
+  - Cost on the meal target: healed by the opponent's next hit is down 0.02-0.04 (0-20: .82 → .78). His next hit kills at .048 → .051, .025 → .025, .010 → .011.
+  - A clock-0 exponent of 1200 restores the healed share and gives back most of the swing gain.
+- **a2, paired meal / no-meal probe** (our HP at or below his chance range, a meal allowed, he < 40; 180 sessions; KO / death):
+
+  | | Before: meal | Before: no meal | After: meal | After: no meal |
+  |---|---|---|---|---|
+  | Dharok kit (a2 eats .047 / .039) | .404 / .023 | .569 / .034 | .381 / .015 | .464 / .025 |
+  | VW kit (a2 eats .052 / .052) | .398 / .021 | .478 / .042 | .369 / .019 | .451 / .060 |
+
+  - The rule halves the KO premium of skipping the meal in the Dharok kit (+.165 → +.083). In the VW kit it raises the death cost (+.021 → +.041).
+  - Skipping still pays unless a death costs more than about 2 kills (VW) or 8 (Dharok).
+- **Open:**
+  - The axe share is still short of real at every clock (.39-.43 against .54-.62 per first swing). It comes from `RF_AXE_SWING_PM`'s other inputs: the opponent's bar, and the profiles' axe propensity.
+  - The clock mix at the hit (.18 against .32 ready) reflects the script swinging on nearly every ready tick at 60 up (.91 against .39 real).
+- Tests: test_riskfight_dharok_script, _mix, _mechanics, _session, _scripts, test_riskfight, _humanlike and _training pass. The env_trace goldens are not refreshed.

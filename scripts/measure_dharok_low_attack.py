@@ -5,7 +5,7 @@ Usage: python3 scripts/measure_dharok_low_attack.py [--duels FILE] [SIM ...]    
 
 Input: spectator.duels (see measure_dharok_play.py), Dharok v Dharok duels only, both sides, up to the first knockout. Optional SIM files are per-tick logs of
 both seats on the Dharok script, one line per seat and tick: `T fight tick seat hp_before hp_after attack_timer_before swung weapon_class spec ate eat_actions
-stop hit_damage` (weapon_class 1 axe, 2 Voidwaker, 3 maul, 0 other; hit_damage the hitsplat on that seat this tick).
+stop hit_damage`, further fields ignored (weapon_class 1 axe, 2 Voidwaker, 3 maul, 0 other; hit_damage the hitsplat on that seat this tick).
 
 An event is a hitsplat on him with damage and a bar (real: a fresh read, so no stale-bar estimate; sim: true hitpoints after the hit), by the band his
 hitpoints fall in (0-19, 20-39, 40-59, 60 up). Over the next W ticks: whether he swings (any swing animation; sim: the step's swing), how soon, his axe swings
@@ -98,7 +98,7 @@ def sim(paths):
                 a["n"] += 1
                 used, first = set(), None
                 for u in range(t + 1, t + 1 + W):
-                    _, _, _, swung, wc, spec, _, _, _, _ = mine[u]
+                    _, _, _, swung, wc, spec, _, _, _, _ = mine[u][:10]
                     if not swung:
                         continue
                     first = u if first is None else first

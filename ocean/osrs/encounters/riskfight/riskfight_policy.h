@@ -811,6 +811,20 @@ static int riskfight_persona_odds(int pm, int mult) {
 }
 
 /** `persona`: his RF_DHAROK_PERSONA row, NULL for the pooled rates. */
+/* Below 40 hitpoints (meal bands 0-1) a Dharok fighter eats around his own swing, not through it: after a hit leaves him at bar 1-11, his first eat animation
+ * comes before his next swing in 0.42 / 0.51 / 0.63 / 0.78 of 1,422 spectated events by his own clock at the next tick (0: may swing, 1, 2, 3 up), against
+ * 0.56 / 0.81 / 0.91 / 0.95 in the sim at a flat hazard; a meal on a running clock delays the swing by its full attack delay, so the sim swung within 2 ticks
+ * 0.23 of the time at clock 1 against 0.42 spectated (scripts/fit_dharok_meal_clock.py). RF_DHAROK_MEAL_CLOCK[min(attack timer, 3)] is the exponent, per
+ * mille, of the band's per-tick hazard: 1 - (1 - h)^(e / 1000). Clock 0, 1 and 2 are fitted on that order; clock 3 up (after his swing) takes the rest of a
+ * 4-tick cycle's 4000, so a fighter on a 4-tick weapon eats as much per cycle as before (fit_dharok_meals.py's "healed before his next hit"). */
+enum { RF_DHAROK_MEAL_CLOCKS = 4 };
+static const uint16_t RF_DHAROK_MEAL_CLOCK[RF_DHAROK_MEAL_CLOCKS] = {632, 200, 316, 2852};
+
+/** A per mille per-tick hazard raised to `exponent` per mille: 1 - (1 - pm / 1000)^(exponent / 1000). */
+static int riskfight_hazard_power(int pm, int exponent) {
+    return (int)lround(1000.0 * (1.0 - pow(1.0 - pm / 1000.0, exponent / 1000.0)));
+}
+
 static void riskfight_script_dharok_meal(const float* obs, const RiskfightObservedSelf* self, const RiskfightObservedInventory* inventory,
     const uint16_t* persona, uint32_t seed, uint32_t tick, int* actions) {
     int hp = self->hitpoints;
@@ -818,7 +832,8 @@ static void riskfight_script_dharok_meal(const float* obs, const RiskfightObserv
     const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
     int band = riskfight_dharok_meal_band(hp);
     int meal_pm = RF_DHAROK_MEAL_PM[band][riskfight_meal_phase(obs, opponent)];
-    if (persona && band <= 4) meal_pm = (int)lround(1000.0 * (1.0 - pow(1.0 - meal_pm / 1000.0, persona[RF_PERSONA_EAT] / 1000.0)));
+    if (band <= 1) meal_pm = riskfight_hazard_power(meal_pm, RF_DHAROK_MEAL_CLOCK[min_int(RF_DHAROK_MEAL_CLOCKS - 1, max_int(0, self->attack_timer))]);
+    if (persona && band <= 4) meal_pm = riskfight_hazard_power(meal_pm, persona[RF_PERSONA_EAT]);
     if (!riskfight_sample_event(seed, tick, 32, meal_pm)) return;
     int single = RF_DHAROK_MEAL_SINGLE_PM[hp / 10], doubles = RF_DHAROK_MEAL_DOUBLE_PM[hp / 10];
     if (persona && single < 1000) {
