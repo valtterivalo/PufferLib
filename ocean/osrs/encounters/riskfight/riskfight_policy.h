@@ -352,7 +352,8 @@ __attribute__((constructor)) static void riskfight_build_mask_template(void) {
  * - super restore, sanfew: a level it restores (attack, strength, defence, ranged, magic: encounter_apply_stat_restore) below base, or prayer missing at least the dose's prayer restore;
  *   prayer potion: that prayer rule alone (osrs_consumable_prayer_restore_amount, the amount osrs_player_inventory_drink_effect adds);
  * - super combat, divine super combat, ranging: a level it boosts below base + its boost (encounter_super_combat_boost, encounter_ranging_boost);
- * - brew: hitpoints below base + its heal or defence below base + its boost (encounter_apply_brew_heal, encounter_brew_drain_stats); the drain of the others is no reason;
+ * - brew: hitpoints below base + its heal (encounter_apply_brew_heal). Its defence boost alone is no reason: a brew above the heal cap drains attack and strength
+ *   for at most a few points of defence, and the user counts it as over-eating (live, s15t85 sipped brews at 120 HP to lift defence 118 to 120);
  * - food, karambwan: a heal above 0 (osrs_eat_food: below base, an anglerfish outside the overheal lock below base + 22); a partial heal counts.
  * A drink the riskfight engine gives no effect (osrs_player_inventory_drink_effect aborts on it) is never useful. */
 static int riskfight_consumable_useful(const Player* p, OsrsConsumableKind kind) {
@@ -372,8 +373,7 @@ static int riskfight_consumable_useful(const Player* p, OsrsConsumableKind kind)
         case OSRS_CONSUMABLE_RANGING:
             return p->current_ranged < p->base_ranged + osrs_ranging_boost_amount(p->base_ranged);
         case OSRS_CONSUMABLE_BREW:
-            return p->current_hitpoints < p->base_hitpoints + osrs_brew_heal_amount(p->base_hitpoints) ||
-                p->current_defence < p->base_defence + osrs_brew_defence_boost_amount(p->base_defence);
+            return p->current_hitpoints < p->base_hitpoints + osrs_brew_heal_amount(p->base_hitpoints);
         case OSRS_CONSUMABLE_MARLIN:
         case OSRS_CONSUMABLE_HALIBUT:
         case OSRS_CONSUMABLE_SUMMER_PIE:

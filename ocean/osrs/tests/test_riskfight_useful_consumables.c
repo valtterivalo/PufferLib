@@ -117,8 +117,8 @@ static void test_brew(void) {
     assert(offered(SLOT_BREW));
     p->current_hitpoints = hp_cap;
     p->current_defence = def_cap - 1;
-    assert(offered(SLOT_BREW));
-    puts("brew: not offered at its hitpoints and defence caps, drained levels or not; offered one below either");
+    assert(!offered(SLOT_BREW)); /* defence below its cap alone is no reason: it heals nothing there */
+    puts("brew: not offered at its hitpoints cap, drained levels or defence below its cap notwithstanding; offered one hitpoint below");
 }
 
 static void test_meals(void) {
