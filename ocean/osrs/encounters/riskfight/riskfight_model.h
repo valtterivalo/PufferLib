@@ -18,13 +18,15 @@ typedef enum { RISKFIGHT_HUMAN, RISKFIGHT_HUMAN_HELDOUT, RISKFIGHT_ALL_IN, RISKF
 enum { RISKFIGHT_CONSUME_BANDS = 5, RISKFIGHT_AXE_BANDS = 3, RISKFIGHT_TAB_SUPPLY_BANDS = 3, RISKFIGHT_TAB_SUPPLY_TICKS = 8 };
 /** Per-mille rates of one scripted fighter. Consume bands split own HP at 40, 65, 73 and 90,
  * axe rates are greataxe wields per tick without the axe in hand, banded by own HP at 40 and 80 (riskfight_script), tab rates are indexed by
- * [consume ticks this round / 8, capped][own HP below 40]. */
+ * [consume ticks this round / 8, capped][own HP below 40]. dharok_eating: meals on the spectated Dharok rates (riskfight_script_dharok_meal) instead of the
+ * consume bands' thresholds, which then repot only; never set in a profile table, the step sets it for a Dharok pool opponent (riskfight_opponent_script). */
 typedef struct {
     uint16_t consume_pm[RISKFIGHT_CONSUME_BANDS];
     uint16_t vw_pm, maul_pm;
     uint16_t axe_pm[RISKFIGHT_AXE_BANDS];
     uint16_t orb_axe_pm, veng_pm;
     uint16_t tab_pm[RISKFIGHT_TAB_SUPPLY_BANDS][2];
+    uint8_t dharok_eating;
 } RiskfightProfile;
 #include "riskfight_profiles.h"
 static const RiskfightProfile RISKFIGHT_ALL_IN_PROFILE = {{300, 80, 0, 0, 0}, 1000, 1000, {1000, 1000, 1000}, 1000, 1000, {{0, 0}, {0, 0}, {0, 0}}};
@@ -636,6 +638,12 @@ enum { RF_DHAROK_KIT_PIECES = 3, RF_DHAROK_KIT_BASE_DEFENCE = 80 };
 static int riskfight_base_defence(const RiskfightContext* ctx, int seat, const RiskfightLoadout* loadout) {
     int driven = seat == 1 && ctx->opp_kit && (!ctx->self_play || ctx->opp_driven);
     return driven && riskfight_loadout_dharok_pieces(loadout) >= RF_DHAROK_KIT_PIECES ? RF_DHAROK_KIT_BASE_DEFENCE : MAXED_BASE_DEFENCE;
+}
+
+/** Seat 1 is a Dharok pool kit the script or OppFit plays (riskfight_base_defence gave him RF_DHAROK_KIT_BASE_DEFENCE): his eating and start hitpoints are the
+ * spectated Dharok fighters' (riskfight_script_dharok_meal, riskfight_start_dharok_hitpoints). */
+static int riskfight_dharok_opponent(const RiskfightState* s) {
+    return s->env.players[1].base_defence == RF_DHAROK_KIT_BASE_DEFENCE;
 }
 
 static void riskfight_reset(EncounterState* state, EncounterContext* context, uint32_t seed) {

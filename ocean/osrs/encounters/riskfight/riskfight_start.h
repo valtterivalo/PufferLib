@@ -51,6 +51,26 @@ static int riskfight_start_regear_hitpoints(uint32_t* rng) {
     abort();
 }
 
+/* A Dharok pool opponent's hitpoints where his bar hides them (riskfight_dharok_opponent): spectated Dharok fighters (scripts/measure_dharok_eating.py, 512
+ * fighters of the 261 Dharok v Dharok duels) show a full bar on the first read in 339 (a regear: the hits before the bar first drops put most at 115-121), and
+ * below it, by tens of hitpoints from 0-9 to 90-98, RF_START_DHAROK_LOW (the bar plus the damage of that tick). */
+enum { RF_START_DHAROK_FULL = 339 };
+static const uint8_t RF_START_DHAROK_LOW[10] = {2, 0, 3, 4, 6, 5, 17, 39, 26, 71};
+
+/** A Dharok pool opponent's start hitpoints: a regear's in the measured share, else a ten of RF_START_DHAROK_LOW by its count, uniform inside it (90-98 for the last). */
+static int riskfight_start_dharok_hitpoints(uint32_t* rng) {
+    int low = 0;
+    for (int i = 0; i < 10; i++) low += RF_START_DHAROK_LOW[i];
+    int pick = encounter_rand_int(rng, RF_START_DHAROK_FULL + low);
+    if (pick < RF_START_DHAROK_FULL) return riskfight_start_regear_hitpoints(rng);
+    pick -= RF_START_DHAROK_FULL;
+    for (int i = 0; i < 10; i++) {
+        if (pick < RF_START_DHAROK_LOW[i]) return 10 * i + encounter_rand_int(rng, i == 9 ? 9 : 10);
+        pick -= RF_START_DHAROK_LOW[i];
+    }
+    abort();
+}
+
 /** Takes `count` items of `kind` out of the bag, from the last slot back (an eaten fish or karambwan); at most what the bag holds. */
 static void riskfight_start_use_items(Player* p, OsrsConsumableKind kind, int count) {
     for (int slot = OSRS_INVENTORY_SIZE - 1; slot >= 0 && count > 0; slot--)
@@ -161,7 +181,8 @@ static void riskfight_start_apply(RiskfightState* s, RiskfightContext* ctx, cons
 
     OsrsHealthBarRange range = osrs_health_bar_range(r->bar, OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121);
     if (kit_hitpoints < 99) his->current_hitpoints = kit_hitpoints; /* a kit that starts hurt (the pool's Dharok's at 22) keeps it: that is the kit, not a regear */
-    else if (range.kind == OSRS_HEALTH_BAR_MISSING || (range.kind == OSRS_HEALTH_BAR_KNOWN && range.upper == 121)) his->current_hitpoints = riskfight_start_regear_hitpoints(rng);
+    else if (range.kind == OSRS_HEALTH_BAR_MISSING || (range.kind == OSRS_HEALTH_BAR_KNOWN && range.upper == 121))
+        his->current_hitpoints = him == 1 && riskfight_dharok_opponent(s) ? riskfight_start_dharok_hitpoints(rng) : riskfight_start_regear_hitpoints(rng);
     else {
         assert(range.kind == OSRS_HEALTH_BAR_KNOWN);
         his->current_hitpoints = range.lower + encounter_rand_int(rng, range.upper - range.lower + 1);

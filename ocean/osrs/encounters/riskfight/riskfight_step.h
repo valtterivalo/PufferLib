@@ -545,6 +545,15 @@ static void riskfight_plugin_prayers(int* actions) {
     actions[RF_OVERHEAD] = ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE;
 }
 
+/** The script playing `seat` on the opponent's profile; a Dharok pool opponent in seat 1 eats as spectated Dharok fighters do (RiskfightProfile.dharok_eating). */
+static void riskfight_opponent_script(const RiskfightState* s, int seat, int* actions) {
+    float obs[RF_OBS_SIZE];
+    riskfight_write_script_observation(s, seat, obs);
+    RiskfightProfile profile = *s->opponent_profile;
+    profile.dharok_eating = seat == 1 && riskfight_dharok_opponent(s);
+    riskfight_script(obs, &profile, s->script_seed[seat], s->consume_ticks[seat], actions);
+}
+
 /** `actions`: the heads of seat 0, then of seat 1 when he is a second agent, on physical slots like riskfight_policy_commands (a net's go through
  * riskfight_bag_to_physical first: osrs_riskfight.h puf_step). */
 static void riskfight_step(EncounterState* state, EncounterContext* context, const int* actions) {
@@ -555,11 +564,7 @@ static void riskfight_step(EncounterState* state, EncounterContext* context, con
     const int seat_agent = ctx->self_play && !ctx->opp_driven;
     if (!seat_agent) {
         if (ctx->opp_hook) ctx->opp_hook(ctx->opp_user, s, opponent_actions);
-        else {
-            float obs[RF_OBS_SIZE];
-            riskfight_write_script_observation(s, 1, obs);
-            riskfight_script(obs, s->opponent_profile, s->script_seed[1], s->consume_ticks[1], opponent_actions);
-        }
+        else riskfight_opponent_script(s, 1, opponent_actions);
         if (ctx->opp_omit) memset(opponent_actions, 0, sizeof(opponent_actions));
         /* Over-eating is rude: once we have overeaten more than RF_OVEREAT_PATIENCE times this fight he has had enough and leaves within a few ticks. */
         if (!s->annoyed && s->overeats[0] > RF_OVEREAT_PATIENCE) {
@@ -592,10 +597,8 @@ static void riskfight_step_human(EncounterState* state, EncounterContext* contex
     RiskfightState* s = (RiskfightState*)state;
     RiskfightContext* ctx = (RiskfightContext*)context;
     int human = ctx->human_player;
-    float obs[RF_OBS_SIZE];
     int actions[RF_HEADS];
-    riskfight_write_script_observation(s, 1 - human, obs);
-    riskfight_script(obs, s->opponent_profile, s->script_seed[1 - human], s->consume_ticks[1 - human], actions);
+    riskfight_opponent_script(s, 1 - human, actions);
     riskfight_policy_commands(s, 1 - human, actions, &ctx->policy_commands[1 - human]);
     riskfight_step_queues(s, ctx,
         human == 0 ? &hi->commands : &ctx->policy_commands[0].commands,

@@ -551,21 +551,21 @@ static int riskfight_sample_event(uint32_t seed, uint32_t tick, uint32_t salt, i
     return (int)(riskfight_sample_hash(seed, tick, salt) % 1000u) < per_mille;
 }
 
-/** Heals below 73 HP, a restore when drained, a combat repot when the boost has faded. */
+/** Heals below 73 HP (with `meals`: the profile's own eating), a restore when drained, a combat repot when the boost has faded. */
 static void riskfight_script_consume(const RiskfightObservedSelf* self,
-    const RiskfightObservedInventory* inventory, int* actions) {
+    const RiskfightObservedInventory* inventory, int meals, int* actions) {
     int hp = self->hitpoints;
-    if (hp < 73 && self->food_timer == 0) {
+    if (meals && hp < 73 && self->food_timer == 0) {
         actions[RF_FOOD] = inventory->kind_slot[OSRS_CONSUMABLE_ANGLERFISH];
         if (!actions[RF_FOOD]) actions[RF_FOOD] = inventory->kind_slot[OSRS_CONSUMABLE_MARLIN];
         if (!actions[RF_FOOD]) actions[RF_FOOD] = inventory->kind_slot[OSRS_CONSUMABLE_SUMMER_PIE];
     }
-    if (hp < 45 && self->karambwan_timer == 0) {
+    if (meals && hp < 45 && self->karambwan_timer == 0) {
         actions[RF_COMBO] = inventory->kind_slot[OSRS_CONSUMABLE_KARAMBWAN];
         if (!actions[RF_COMBO]) actions[RF_COMBO] = inventory->kind_slot[OSRS_CONSUMABLE_HALIBUT];
     }
     if (self->potion_timer != 0) return;
-    if (hp < 65) actions[RF_DRINK] = inventory->kind_slot[OSRS_CONSUMABLE_BREW];
+    if (meals && hp < 65) actions[RF_DRINK] = inventory->kind_slot[OSRS_CONSUMABLE_BREW];
     if (actions[RF_DRINK]) return;
     /* Defence is judged against his base (riskfight_base_defence; the observation shows his kit, not his seat): drained below it, repotted 11 above it, as
      * attack and strength are at 99 and 110. */
@@ -577,6 +577,41 @@ static void riskfight_script_consume(const RiskfightObservedSelf* self,
     } else if (hp >= 65 && (self->attack < 110 || self->strength < 110 || self->defence < self->base_defence + 11)) {
         actions[RF_DRINK] = inventory->kind_slot[OSRS_CONSUMABLE_SUPER_COMBAT];
     }
+}
+
+/* A Dharok pool opponent's meals (RiskfightProfile.dharok_eating): he keeps his hitpoints low for the greataxe and eats on his own hitpoints by tens, not on the
+ * crater thresholds above. Measured on the 261 spectated Dharok v Dharok duels by scripts/measure_dharok_eating.py (512 fighters; a meal is a rise of his bar,
+ * read on nearly every tick, plus the damage he took, of 8 or more): meals per tick at hitpoints 0-9 ... 90-98 are 81, 130, 140, 155, 164, 158, 93, 16, 4.4,
+ * 0.7 per mille, none from 99 up; single (under 30) / double (anglerfish and karambwan, under 48) / triple (and a brew dose) as RF_DHAROK_MEAL_SINGLE_PM /
+ * _DOUBLE_PM, the rest triple. A single is an anglerfish (+7 bar points with no damage between the reads, 316 at 50-79 hitpoints) or a brew dose (+4 and +5,
+ * 260; +6, 259, is either): RF_DHAROK_MEAL_BREW_PM of them a brew dose. RF_DHAROK_MEAL_PM are the per-tick tries, fitted on /tmp/dhsim so the meals the sim
+ * lands (a try waits out no timer) come back at the measured rates. */
+static const uint16_t RF_DHAROK_MEAL_PM[10] = {38, 95, 123, 160, 173, 172, 107, 18, 5, 2};
+static const uint16_t RF_DHAROK_MEAL_SINGLE_PM[10] = {150, 130, 100, 170, 310, 790, 970, 970, 920, 1000};
+static const uint16_t RF_DHAROK_MEAL_DOUBLE_PM[10] = {40, 140, 280, 540, 650, 210, 20, 30, 80, 0};
+enum { RF_DHAROK_MEAL_BREW_PM = 400 };
+
+static void riskfight_script_dharok_meal(const RiskfightObservedSelf* self, const RiskfightObservedInventory* inventory, uint32_t seed, uint32_t tick, int* actions) {
+    int hp = self->hitpoints;
+    if (hp >= 99 || !riskfight_sample_event(seed, tick, 32, RF_DHAROK_MEAL_PM[hp / 10])) return;
+    int size = (int)(riskfight_sample_hash(seed, tick, 33) % 1000u);
+    int pieces = size < RF_DHAROK_MEAL_SINGLE_PM[hp / 10] ? 1 : size < RF_DHAROK_MEAL_SINGLE_PM[hp / 10] + RF_DHAROK_MEAL_DOUBLE_PM[hp / 10] ? 2 : 3;
+    int brew = self->potion_timer == 0 ? inventory->kind_slot[OSRS_CONSUMABLE_BREW] : 0;
+    if (pieces == 1 && brew && riskfight_sample_event(seed, tick, 34, RF_DHAROK_MEAL_BREW_PM)) {
+        actions[RF_DRINK] = brew;
+        return;
+    }
+    if (self->food_timer == 0) {
+        actions[RF_FOOD] = inventory->kind_slot[OSRS_CONSUMABLE_ANGLERFISH];
+        if (!actions[RF_FOOD]) actions[RF_FOOD] = inventory->kind_slot[OSRS_CONSUMABLE_MARLIN];
+        if (!actions[RF_FOOD]) actions[RF_FOOD] = inventory->kind_slot[OSRS_CONSUMABLE_SUMMER_PIE];
+    }
+    if (pieces >= 2 && self->karambwan_timer == 0) {
+        actions[RF_COMBO] = inventory->kind_slot[OSRS_CONSUMABLE_KARAMBWAN];
+        if (!actions[RF_COMBO]) actions[RF_COMBO] = inventory->kind_slot[OSRS_CONSUMABLE_HALIBUT];
+    }
+    /* A brew dose is the third piece, or the meal itself when no food is left. */
+    if ((pieces == 3 || !actions[RF_FOOD]) && brew) actions[RF_DRINK] = brew;
 }
 
 /* His hit followed by an instant maul special: the tick after a swing of his (attack timer at speed - 1, no meal in between), with the energy for k specials (k up to two)
@@ -697,7 +732,8 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     /* The combo's tick is all clicks of the switch and the specials: no meal on it. */
     int consume_band = (hp >= 40) + (hp >= 65) + (hp >= 73) + (hp >= 90);
     if (!combo_specs && riskfight_sample_event(seed, tick, 11, profile->consume_pm[consume_band]))
-        riskfight_script_consume(&self, &inventory, actions);
+        riskfight_script_consume(&self, &inventory, !profile->dharok_eating, actions);
+    if (!combo_specs && profile->dharok_eating) riskfight_script_dharok_meal(&self, &inventory, seed, tick, actions);
     if (actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO]) actions[RF_PRIMARY] = RF_STOP;
     uint8_t generic_spec = plain_spec != ITEM_NONE ? plain_spec : plain_main != ITEM_NONE && osrs_spec_cost(plain_main) > 0 ? plain_main : ITEM_NONE;
     int generic_cost = generic_spec == ITEM_NONE ? 100 : osrs_spec_cost(generic_spec);
