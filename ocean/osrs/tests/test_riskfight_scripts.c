@@ -143,6 +143,15 @@ static void test_restore_and_boost_priority(void) {
     assert(p->current_attack == 118 && p->current_strength == 118 && p->current_defence == 118);
     assert(p->current_hitpoints == 121);
 
+    /* The Voidwaker crater kit (no Dharok piece) repots on Defence alone below 110: the Dharok kit's lower thresholds are not his. */
+    context.loadout[0] = &RISKFIGHT_LIVE_LOADOUT;
+    reset();
+    context.loadout[0] = NULL;
+    assert(item_count(ITEM_DHAROKS_HELM) == 0 && p->base_defence == 99);
+    p->current_defence = 105;
+    decide(&HUNGRY, actions);
+    assert(drink_kind(actions) == OSRS_CONSUMABLE_SUPER_COMBAT);
+
     reset();
     p->current_magic = 89;
     p->current_attack = 99;
