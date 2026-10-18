@@ -28,6 +28,10 @@ A Dharok fighter is a duel side that, on some tick, wears Dharok's helm, platebo
 (e) Voidwaker specials of Dharok fighters holding a Voidwaker, by the opponent's bar the tick before: specials per 1,000 ticks and their cumulative share. The
     lowest bar holding 95% of the specials at or below it is riskfight_policy.h's RF_VW_SPEC_BAR_MAX (the script's gate). The rate stays at 6-13 per 1,000
     ticks up to bar 25 and falls to under 1 from bar 27; the gate cuts where the specials end, not at a fixed share of the bar.
+(f) The orb per tick for riskfight_policy.h's RF_DHAROK_ORB_PM, on the Dharok v Dharok duels from the first hit to the knockout: a lone 10 on a tick with no
+    swing of the opponent on ticks i-1..i+1 and no Vengeance proc of his on i-1, i. On any other tick an orb can't be told from his hit, so those ticks leave both
+    the count and the denominator (the tick after his swing always does): no orb seen there is not evidence of none. By his own hitpoints band and the axe in
+    hand the tick before, over KIT_ORB_PM; then the visible rate by ticks since the opponent's swing, the ready tick (his weapon frees the next swing) apart.
 """
 import argparse
 import collections
@@ -53,6 +57,8 @@ OWN_SWING_WINDOW = 2
 LONG_WIELDS = 8   # axe wields that make a fighter's orb share readable (the share of fighters showing the orb levels off from about here)
 DH_SWINGS = {2066, 2067}
 AXE_POOL_MIN = 60  # swings under which an RF_AXE_SWING_PM cell takes its Vengeance pair's pooled share
+KIT_ORB_PM = 600   # riskfight_kits.h's RF_KIT_ORB_PM: (f) divides by it
+WEAPON_SPEED = {27690: 4, 12006: 4, 4151: 4, 24225: 7, 4153: 7, 12848: 7, 11802: 6, 13652: 4, 21009: 5, 28338: 5, **{a: 7 for a in DHAROK_AXES}}  # (f) his clock
 
 
 def die(message):
@@ -295,6 +301,8 @@ def measure(duels):
     out.append(measure_axe_swings(duels, dh))
     out.append("")
     out.append(measure_vw_specs(duels))
+    out.append("")
+    out.append(measure_orb_ticks(duels))
     return "\n".join(out)
 
 
@@ -319,6 +327,52 @@ def measure_vw_specs(duels):
         if gate is None and cum >= VW_GATE_SHARE * total: gate = bar
         out.append(f"| {bar} | {ticks[bar]} | {specs[bar]} | {1000 * rate:.1f} | {cum / max(1, total):.3f} |")
     out.append(f"RF_VW_SPEC_BAR_MAX (the lowest bar with {VW_GATE_SHARE:.0%} of the specials at or below it): {gate}")
+    return "\n".join(out)
+
+
+def measure_orb_ticks(duels):
+    """(f), see the module docstring."""
+    seen, orbs = collections.Counter(), collections.Counter()     # (axe in hand, hp band) on ticks the detector can see
+    since_seen, since_orbs, since_all = collections.Counter(), collections.Counter(), collections.Counter()
+    for d in duels:
+        sides = (Side(d, 0), Side(d, 1))
+        if not (sides[0].is_dharok() and sides[1].is_dharok()): continue
+        rows = d["rows"]
+        n = len(rows)
+        first = next((i for i in range(n) if sides[0].dmg[i] + sides[1].dmg[i] > 0), None)
+        if first is None: continue
+        dead = next((i for i in range(n) if rows[i][2][DEAD] == "1" or rows[i][3][DEAD] == "1"), n - 1)
+        for v in (0, 1):
+            s, k = sides[v], 1 - v
+            last, speed = None, None
+            for i in range(max(1, first), min(dead + 1, n - 1)):
+                if s.third[i]: continue
+                if s.opp_swing[i - 1]:
+                    last, speed = i - 1, WEAPON_SPEED.get(int(rows[i - 1][2 + k][WEAPON_FIELD]), 4)
+                since = None if last is None else i - last
+                timing = "before his first swing" if since is None else "ready" if since == speed - 1 else min(since, 6)
+                since_all[timing] += 1
+                if any(s.opp_swing[i - 1:i + 2]) or s.opp_veng_proc[i - 1] or s.opp_veng_proc[i]:
+                    continue
+                key = (s.axe(i - 1), min(4, int(s.bar[i - 1] * 99 / 30) // 20))
+                orb = s.nhit[i] == 1 and s.dmg[i] == 10
+                seen[key] += 1
+                orbs[key] += orb
+                since_seen[timing] += 1
+                since_orbs[timing] += orb
+    out = ["(f) orb clicks (a lone 10) per Dharok fighter-tick of the Dharok v Dharok duels, counted only on ticks the orb can be told from his hit: no swing of "
+           "the opponent on ticks i-1..i+1 and no Vengeance proc of his on i-1, i. Those ticks leave both the count and the denominator (the tick after his "
+           f"swing is always one of them). Script per mille over the RF_KIT_ORB_PM ({KIT_ORB_PM}) share of fighters carrying an orb (RF_DHAROK_ORB_PM)"]
+    rows = []
+    for axe in (False, True):
+        for b in range(5):
+            rows.append((("axe" if axe else "no axe") + f" hp {20 * b}-{20 * b + 19 if b < 4 else 99}", seen[(axe, b)], orbs[(axe, b)],
+                         pm(orbs[(axe, b)], seen[(axe, b)]), round(1000 * 1000 * orbs[(axe, b)] / seen[(axe, b)] / KIT_ORB_PM) if seen[(axe, b)] else "-"))
+    out.append(table(["his state the tick before", "visible ticks", "orbs", "per mille", "script per mille"], rows))
+    out.append("by ticks since the opponent's swing (ready: the tick before his weapon frees the next one): ticks, visible ticks, orbs, per mille of visible")
+    order = ["before his first swing", 1, 2, 3, 4, 5, 6, "ready"]
+    out.append(table(["since his swing", "ticks", "visible", "orbs", "per mille"],
+                     [("6+" if t == 6 else t, since_all[t], since_seen[t], since_orbs[t], pm(since_orbs[t], since_seen[t])) for t in order]))
     return "\n".join(out)
 
 
