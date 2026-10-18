@@ -597,6 +597,58 @@ static int riskfight_script_combo(const float* obs, const RiskfightObservedSelf*
     return riskfight_sample_event(seed, tick - 1, 27, per_mille) ? k : 0;
 }
 
+/* A Dharok fighter's strip: with the helm on, he takes his platebody and/or platelegs off into free bag cells, so the other side hits him more often (into his
+ * Vengeance) and his hitpoints drop for the next greataxe swing, then puts them back on for the set effect before the swing. Measured on spectator.duels by
+ * scripts/measure_dharok_play.py (599 Dharok fighters; a strip lasts >= 2 ticks and starts on a tick without a weapon change, the rest are switch artefacts):
+ * 174 strips by 114 fighters over 74,179 full-set fighter-ticks; per full-set tick by his own bar (scale 30) 0-11: 9 of 5,882, 12-23: 80 of 38,064, 24-30: 85
+ * of 30,233 (RF_STRIP_PER_100K); 161 of 174 with a weapon other than the axe in hand; body and legs 119, body alone 40, legs alone 15. Back on at 251 per mille
+ * per stripped tick past the first (164 re-equips over 654 such ticks); of the 98 strips the axe followed within 20 ticks, 88 had both pieces back on first
+ * and 10 swung stripped. Each piece needs a free cell (the game's rule, the action mask's too): a full bag cannot strip. */
+static const int RF_STRIP_PER_100K[3] = {153, 210, 281};
+enum { RF_STRIP_BOTH_PM = 684, RF_STRIP_BODY_UPTO_PM = 914, RF_STRIP_REEQUIP_PM = 251 };
+
+static int riskfight_is_dharok_piece(uint8_t item) {
+    return item < NUM_ITEMS && (ITEM_DATABASE[item].effect_mask & OSRS_ITEM_EFFECT_DHAROK_PIECE);
+}
+
+static int riskfight_script_strip_roll(uint32_t seed, uint32_t tick, int bar) {
+    return (int)(riskfight_sample_hash(seed, tick, 28) % 100000u) < RF_STRIP_PER_100K[(bar >= 12) + (bar >= 24)];
+}
+
+/** Platebody and platelegs of a Dharok fighter (RF_BODY, RF_LEGS), see RF_STRIP_PER_100K. `axe` is set when he holds the greataxe or wants it this tick: he never
+ * strips then, and a stripped fighter puts both pieces back on at once. `switching`: another weapon goes in hand this tick, no strip on it (the measurement's
+ * rule). Returns 1 while stripped: the axe waits for the re-equip, so the set is whole at the swing. */
+static int riskfight_script_dharok_armour(const float* obs, uint32_t seed, uint32_t tick, int hp, int axe, int switching, int* actions) {
+    uint8_t head = (uint8_t)lroundf(obs[RF_EQUIPPED_START + GEAR_SLOT_HEAD] * RF_OBSERVATION_ITEM_SCALE);
+    uint8_t body = (uint8_t)lroundf(obs[RF_EQUIPPED_START + GEAR_SLOT_BODY] * RF_OBSERVATION_ITEM_SCALE);
+    uint8_t legs = (uint8_t)lroundf(obs[RF_EQUIPPED_START + GEAR_SLOT_LEGS] * RF_OBSERVATION_ITEM_SCALE);
+    if (!riskfight_is_dharok_piece(head)) return 0;
+    int body_slot = 0, legs_slot = 0, empty = 0;
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        uint16_t code = osrs_inventory_cell_obs_code_decode(obs[RF_INVENTORY_START + slot * RF_INVENTORY_WIDTH]);
+        const OsrsItemContentMetadata* m = osrs_item_content_metadata(code);
+        empty += code == 0;
+        if (!riskfight_is_dharok_piece(m->item_idx)) continue;
+        if (m->gear_slot == GEAR_SLOT_BODY && !body_slot) body_slot = slot + 1;
+        if (m->gear_slot == GEAR_SLOT_LEGS && !legs_slot) legs_slot = slot + 1;
+    }
+    int body_off = body == ITEM_NONE && body_slot, legs_off = legs == ITEM_NONE && legs_slot;
+    int bar = osrs_health_bar_ratio(hp, 99, OSRS_PLAYER_HEALTH_BAR_SCALE);
+    if (body_off || legs_off) {
+        /* The first stripped tick is the one after the strip roll fired: he keeps the pieces off through it. */
+        int reequip = axe || (!riskfight_script_strip_roll(seed, tick - 1, bar) && riskfight_sample_event(seed, tick, 29, RF_STRIP_REEQUIP_PM));
+        if (reequip && body_off) actions[RF_BODY] = body_slot;
+        if (reequip && legs_off) actions[RF_LEGS] = legs_slot;
+        return 1;
+    }
+    if (axe || switching || !empty || !riskfight_is_dharok_piece(body) || !riskfight_is_dharok_piece(legs) || !riskfight_script_strip_roll(seed, tick, bar)) return 0;
+    int pieces = (int)(riskfight_sample_hash(seed, tick, 30) % 1000u);
+    int both = pieces < RF_STRIP_BOTH_PM && empty >= 2;
+    if (both || pieces < RF_STRIP_BODY_UPTO_PM) actions[RF_BODY] = RF_UNEQUIP;
+    if (both || pieces >= RF_STRIP_BODY_UPTO_PM) actions[RF_LEGS] = RF_UNEQUIP;
+    return 0;
+}
+
 /** Weapon rolls are keyed on the tick the next attack comes off cooldown, so one attack gets one decision.
  * consume_ticks counts this round's ticks on which the fighter ate or drank. */
 static void riskfight_script(const float* obs, const RiskfightProfile* profile, uint32_t seed,
@@ -660,6 +712,10 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
         voidwaker_main ? ITEM_VOIDWAKER : inventory.main_weapon != ITEM_NONE ? inventory.main_weapon : self.weapon;
     uint8_t weapon = vw_spec ? ITEM_VOIDWAKER : maul_spec ? maul_item : generic_roll ? generic_spec :
         axe_swing ? ITEM_DHAROKS_GREATAXE : main_weapon;
+    /* A stripped Dharok fighter puts body and legs back on before he takes the axe: the wield waits for the tick after (its roll is keyed on attack_tick). */
+    int axe = weapon == ITEM_DHAROKS_GREATAXE || self.weapon == ITEM_DHAROKS_GREATAXE;
+    if (riskfight_script_dharok_armour(obs, seed, tick, hp, axe, weapon != self.weapon, actions) && axe && self.weapon != ITEM_DHAROKS_GREATAXE)
+        weapon = main_weapon;
     /* Behead: with all five stacks held and the other side hurt, at the same rate as his other specials; it costs no energy. */
     int stacks = (int)lroundf(obs[RF_THREAT_START + RF_THREAT_STACKS_OFFSET + 1] * OSRS_SOUL_STACKS_MAX);
     int behead = weapon == ITEM_SOULREAPER_AXE && !vw_spec && !maul_spec && !generic_roll && stacks == OSRS_SOUL_STACKS_MAX && opponent[0] < 0.65f &&

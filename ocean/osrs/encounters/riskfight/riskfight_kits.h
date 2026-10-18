@@ -92,7 +92,7 @@ static void riskfight_kit_finish(RiskfightKit* k) {
 
 /** The loadout of a kit: its worn gear, its other weapons in the bag, and the supplies of its bag kind filling what is left (live kit: 12 anglerfish, 7 karambwan,
  * 2 brews, 2 restores, a super combat or ranging potion, a teleport tab and a Vengeance sack around the maul). One slot stays free when a two-handed weapon in the
- * bag must take the shield off. */
+ * bag must take the shield off. The orb copy of a greataxe kit then trades one anglerfish for the locator orb (RF_KIT_ORB_PM). */
 static void riskfight_kit_loadout(const RiskfightKit* k, RiskfightLoadout* out) {
     memset(out, 0, sizeof(*out));
     memcpy(out->equipment, k->equipment, NUM_GEAR_SLOTS);
@@ -247,6 +247,29 @@ static void riskfight_pool_edges(RiskfightKit* out, int* count) {
 }
 #undef RF_ADD
 
+/* The locator orb ("Feel": 10 damage to himself, riskfight_script's RF_ORB before a greataxe swing) in a greataxe kit's bag, in place of one anglerfish, in
+ * RF_KIT_ORB_PM of the draws of every such kit: each is split in an orb copy and a plain one. Measured on spectator.duels by scripts/measure_dharok_play.py:
+ * a hit of exactly 10 with no swing of the other side, no Vengeance and no recoil behind it comes 441 times against a baseline of 3.5 for its neighbours; of
+ * the 93 Dharok fighters with >= 8 axe wields, 49 (527 per mille) showed such a 10, a lower bound (an orb under the other side's swing hides), and 64 (688)
+ * took any single 10, an upper bound; the midpoint, to 50. */
+enum { RF_KIT_ORB_PM = 600 };
+
+static int riskfight_kit_orb_ok(const RiskfightKit* k) {
+    if (k->bag == RF_BAG_BARE) return 0;
+    for (int i = 0; i < k->weapon_count; i++) if (k->weapons[i] == ITEM_DHAROKS_GREATAXE) return 1;
+    return 0;
+}
+
+static void riskfight_loadout_add_orb(RiskfightLoadout* l) {
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
+        if (osrs_item_content_metadata(l->inventory[slot])->consumable_kind == OSRS_CONSUMABLE_ANGLERFISH) {
+            l->inventory[slot] = riskfight_supply_code(OSRS_CONSUMABLE_LOCATOR_ORB, 0);
+            return;
+        }
+    fprintf(stderr, "riskfight pool: a greataxe kit's bag holds no anglerfish for the orb\n");
+    abort();
+}
+
 __attribute__((constructor)) static void riskfight_build_pool(void) {
     static RiskfightKit group[3][RF_POOL_MAX];
     int count[3] = {0, 0, 0};
@@ -265,14 +288,25 @@ __attribute__((constructor)) static void riskfight_build_pool(void) {
     riskfight_pool_edges(group[2], &count[2]);
     for (int g = 1; g < 3; g++)
         for (int i = 0; i < count[g]; i++) riskfight_kit_finish(&group[g][i]);
-    if (count[0] + count[1] + count[2] > RF_POOL_MAX) { fprintf(stderr, "riskfight pool: %d kits do not fit RF_POOL_MAX %d\n", count[0] + count[1] + count[2], RF_POOL_MAX); abort(); }
+    int kits = 0;
+    for (int g = 0; g < 3; g++)
+        for (int i = 0; i < count[g]; i++) kits += 1 + riskfight_kit_orb_ok(&group[g][i]);
+    if (kits > RF_POOL_MAX) { fprintf(stderr, "riskfight pool: %d kits do not fit RF_POOL_MAX %d\n", kits, RF_POOL_MAX); abort(); }
     for (int g = 0; g < 3; g++) {
         float total = 0;
         for (int i = 0; i < count[g]; i++) total += group[g][i].weight;
         for (int i = 0; i < count[g]; i++) {
-            group[g][i].weight = RF_POOL_MASS[g] * group[g][i].weight / total;
-            riskfight_kit_loadout(&group[g][i], &RISKFIGHT_POOL_LOADOUT[RISKFIGHT_POOL_COUNT]);
-            riskfight_pool_add(&group[g][i]);
+            RiskfightKit k = group[g][i];
+            float weight = RF_POOL_MASS[g] * k.weight / total;
+            int orb = riskfight_kit_orb_ok(&k);
+            k.weight = orb ? weight * (1000 - RF_KIT_ORB_PM) / 1000 : weight;
+            riskfight_kit_loadout(&k, &RISKFIGHT_POOL_LOADOUT[RISKFIGHT_POOL_COUNT]);
+            riskfight_pool_add(&k);
+            if (!orb) continue;
+            k.weight = weight * RF_KIT_ORB_PM / 1000;
+            riskfight_kit_loadout(&k, &RISKFIGHT_POOL_LOADOUT[RISKFIGHT_POOL_COUNT]);
+            riskfight_loadout_add_orb(&RISKFIGHT_POOL_LOADOUT[RISKFIGHT_POOL_COUNT]);
+            riskfight_pool_add(&k);
         }
     }
 }
