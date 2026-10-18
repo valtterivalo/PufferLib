@@ -808,3 +808,24 @@ Live candidate a1: anchor hyperparameters, 182.7M steps on 37d061a46. Greedy lad
   - Without a meal, a click on a ready weapon swings that tick 83 of 95 times.
 - **The engine already matches the data,** so it stays unchanged. Its signed attack history keeps counting while idle, and food adds to it (320c10838; that commit chose the model for convenience, but the data confirm it).
 - **Reading:** the wiki's "ready" means idle long enough for the delay to have run out, i.e. 3 ticks for hard food. The older rule (add only when the timer is above 0) would be wrong at timer 0 too: 74 of 80 meals one tick before ready still added the full delay.
+
+## 2026-10-19: the greataxe band read from the bar at his last hit
+
+- **What changed:** the band of `RF_AXE_SWING_PM` is now his own bar the tick before the swing. The bar moves only with a hitsplat, so it is his HP at his last hit, before any meals since. `scripts/measure_dharok_play.py` (d) is refitted on 14,872 swings from `spectator.duels` of 10-19.
+- **The script reads the same quantity:** the bar the other side last saw, put in the script observation as `RF_SCRIPT_OWN_BAR`. It used to read its true HP after its meals, which lifted low fighters who had just eaten into a higher band.
+- **The table barely moved:** <40 755 / 722 / 509 (was 794 / 736 / 494); 40-79 and 80+ within 0-35 per mille.
+- **Personas:** the persona axe column is refitted on the same band (`scripts/fit_dharok_personas.py`); 129 of 131 multipliers moved, the eat and big_meal columns are unchanged.
+- **Re-measured** (`scripts/measure_dharok_low_attack.py`, both seats on the Dharok script, 6,000 fights; real is now 310 duels). Real / before / after:
+
+  | Band | Swing by +2 | Axe swings | Damage per tick |
+  |---|---|---|---|
+  | 0-19 | .25 / .11 / .12 | .39 / .18 / .23 | .66 / .50 / .51 |
+  | 20-39 | .31 / .13 / .13 | .34 / .19 / .24 | .72 / .65 / .66 |
+  | 40-59 | .30 / .20 / .19 | .32 / .18 / .18 | 1.00 / .90 / .89 |
+
+  KO share .194 → .195 (real .24).
+- **What is left:**
+  - The swing that follows is the one the script chose: with his bar below 12, 0.45 of sim swings are axe and the script wanted the axe on 0.45 of them, against 0.64 real.
+  - The remaining axe gap sits in the table's other axes: the opponent's bar (the sim opponent sits higher, 74-77 against 66-69) and the profiles' axe propensity.
+  - Swing within 2 ticks (.12 against .25) is unchanged. On the ready tick the meal's attack delay is right (093cedadc), so the gap is in when the script eats relative to its swing.
+- **Tests:** test_riskfight_dharok_script (axe cells within 2% of the new table), _mix, _mechanics, _session, _scripts (now sets the bar along with our HP), test_riskfight, _humanlike, _training, test_soulreaper_zcb and test_rf_serve_visible pass. test_riskfight_long_determinism is remote-only and timed out locally. The env_trace goldens are not refreshed.

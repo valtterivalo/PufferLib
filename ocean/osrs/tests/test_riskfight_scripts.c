@@ -15,6 +15,12 @@ static const RiskfightProfile QUIET = {{0}, 0, 0, {0}, 0, 0, {{0}}};
 static const RiskfightProfile AXER = {{0}, 0, 0, {1000, 1000, 0}, 0, 0, {{0}}};
 static const RiskfightProfile HUNGRY = {{1000, 1000, 1000, 1000, 1000}, 0, 0, {0}, 0, 0, {{0}}};
 
+/* Our hitpoints and the bar the other side last saw (the script's axe band reads that bar, RF_SCRIPT_OWN_BAR), as if a hit had just left us there. */
+static void set_own_hitpoints(int hp) {
+    state.env.players[0].current_hitpoints = hp;
+    state.visible[1].health_bar = osrs_health_bar_ratio(hp < 99 ? hp : 99, 99, OSRS_PLAYER_HEALTH_BAR_SCALE);
+}
+
 static void decide(const RiskfightProfile* profile, int* actions) {
     float obs[RF_OBS_SIZE];
     riskfight_write_script_observation(&state, 0, obs);
@@ -47,7 +53,7 @@ static int item_count(int item) {
 static void test_return_to_one_handed_weapon(void) {
     reset();
     Player* p = &state.env.players[0];
-    p->current_hitpoints = 65;
+    set_own_hitpoints(65);
     p->attack_timer = 0;
     state.env.tick = 10;
     riskfight_observe_visible(&state, 0, 1);
@@ -62,7 +68,7 @@ static void test_return_to_one_handed_weapon(void) {
     execute(actions);
     assert(p->equipped[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE);
     assert(p->equipped[GEAR_SLOT_SHIELD] == ITEM_NONE);
-    p->current_hitpoints = 100;
+    set_own_hitpoints(100);
     decide(&AXER, actions);
     assert(actions[RF_WEAPON] && actions[RF_SHIELD]);
     execute(actions);
@@ -76,7 +82,7 @@ static void test_return_to_one_handed_weapon(void) {
 static void test_joint_weapon_shield_mask(void) {
     reset();
     Player* p = &state.env.players[0];
-    p->current_hitpoints = 65;
+    set_own_hitpoints(65);
     p->attack_timer = 0;
     state.env.tick = 10;
     riskfight_observe_visible(&state, 0, 1);
@@ -91,7 +97,7 @@ static void test_joint_weapon_shield_mask(void) {
     execute(actions);
     assert(p->equipped[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE);
     assert(osrs_first_empty_inventory_cell(p->inventory_cells, -1) == -1);
-    p->current_hitpoints = 100;
+    set_own_hitpoints(100);
     decide(&AXER, actions);
     int shield_action = actions[RF_SHIELD];
     assert(shield_action > 0);
@@ -161,7 +167,7 @@ static void test_restore_and_boost_priority(void) {
     assert(p->current_magic == 99);
 
     reset();
-    p->current_hitpoints = 20;
+    set_own_hitpoints(20);
     p->current_prayer = 0;
     p->current_attack = 80;
     decide(&HUNGRY, actions);
@@ -172,7 +178,7 @@ static void test_forced_tab_checks_supplies_not_cooldowns(void) {
     reset();
     Player* p = &state.env.players[0];
     int actions[RF_HEADS];
-    p->current_hitpoints = 20;
+    set_own_hitpoints(20);
     p->food_timer = p->karambwan_timer = p->potion_timer = 3;
     decide(&QUIET, actions);
     assert(actions[RF_PRIMARY] != RF_TELEPORT);

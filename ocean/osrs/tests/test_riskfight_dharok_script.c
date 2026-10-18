@@ -138,7 +138,7 @@ static void test_orb_takes_ten(void) {
 }
 
 /* The greataxe per attack, over the training profiles and many seeds: one decision per tentacle attack, the share that takes the axe against RF_AXE_SWING_PM
- * (scripts/measure_dharok_play.py (d)) by his own hitpoints, his Vengeance up and the other side's bar, within 15% (the profiles' own axe propensity averages
+ * (scripts/measure_dharok_play.py (d)) by his own bar, his Vengeance up and the other side's bar, within 15% (the profiles' own axe propensity averages
  * out to 1 over the training profiles). No energy, so no special or combo takes the attack. */
 static void test_axe_swings_by_state(void) {
     enum { AXE_SEEDS = 25, CYCLES = 100 };
@@ -151,6 +151,7 @@ static void test_axe_swings_by_state(void) {
     int speed = ITEM_DATABASE[main].attack_speed;
     for (size_t c = 0; c < sizeof(CELLS) / sizeof(CELLS[0]); c++) {
         p->current_hitpoints = CELLS[c].hp;
+        state.visible[1].health_bar = osrs_health_bar_ratio(CELLS[c].hp, 99, OSRS_PLAYER_HEALTH_BAR_SCALE); /* his own bar as last seen (RF_SCRIPT_OWN_BAR) */
         p->veng_active = CELLS[c].veng;
         state.visible[0].health_bar = CELLS[c].bar;
         long axes = 0, attacks = 0;
