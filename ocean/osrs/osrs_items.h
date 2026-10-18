@@ -98,7 +98,8 @@ static inline int osrs_stat_item_register(const Item* row, int attack_style) {
 /* Equivalent combat gear variants. Locked cape stats: OSRS Wiki,
  * https://oldschool.runescape.wiki/w/Infernal_cape#Combat_stats .
  * Raw 24224 is the locked infernal cape, not granite maul 24225. Dragon claws (cr) 28039 is the Bounty Hunter ornament of dragon claws with the same
- * stats, speed and special (https://oldschool.runescape.wiki/w/Dragon_claws_(cr)); Voidwaker (deadman) 29607 and Statius's warhammer (bh) 27908 are
+ * stats, speed and special (https://oldschool.runescape.wiki/w/Dragon_claws_(cr)); Dragon scimitar (cr) 28031 likewise of dragon scimitar 4587 (RuneLite item
+ * stats identical: slash 67, strength 66, speed 4; seen live 2026-10-18); Voidwaker (deadman) 29607 and Statius's warhammer (bh) 27908 are
  * the untradeable variants of 27690 and 22622. The ids from 1706 on are the charged, ornament, locked and degraded variants of hand rows whose wiki
  * Combat stats are identical to the row's (checked per page, see items/wiki_item_rows.tsv for the format): Amulet of glory(1,2,3,5,6), Ahrim's staff 100,
  * Torag's platelegs 100, Strength amulet (t), Dragon dagger (unp), Dark bow (yellow), Imbued Guthix cape (stats of the imbued Zamorak cape row),
@@ -123,6 +124,7 @@ static inline int osrs_stat_item_register(const Item* row, int attack_style) {
     X(24133, ITEM_INFERNAL_CAPE) \
     X(24224, ITEM_INFERNAL_CAPE) \
     X(27908, ITEM_STATIUS_WARHAMMER) \
+    X(28031, ITEM_DRAGON_SCIMITAR) \
     X(28039, ITEM_DRAGON_CLAWS) \
     X(28055, ITEM_DRAGON_BOOTS) \
     X(28069, ITEM_FIGHTER_TORSO) \
