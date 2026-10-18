@@ -790,14 +790,31 @@ static RiskfightMealPhase riskfight_meal_phase(const float* obs, const float* op
     return since <= 1 ? RF_MEAL_SINCE_1 : since == 2 ? RF_MEAL_SINCE_2 : since == 3 ? RF_MEAL_SINCE_3 : RF_MEAL_LATE;
 }
 
-static void riskfight_script_dharok_meal(const float* obs, const RiskfightObservedSelf* self, const RiskfightObservedInventory* inventory, uint32_t seed,
-    uint32_t tick, int* actions) {
+/** A per mille rate with its odds times a persona's per mille multiplier (RF_DHAROK_PERSONA); 0 and 1000 up stay. */
+static int riskfight_persona_odds(int pm, int mult) {
+    if (pm <= 0 || pm >= 1000) return pm;
+    double odds = (double)pm / (1000 - pm) * mult / 1000.0;
+    return (int)lround(1000.0 * odds / (1.0 + odds));
+}
+
+/** `persona`: his RF_DHAROK_PERSONA row, NULL for the pooled rates. */
+static void riskfight_script_dharok_meal(const float* obs, const RiskfightObservedSelf* self, const RiskfightObservedInventory* inventory,
+    const uint16_t* persona, uint32_t seed, uint32_t tick, int* actions) {
     int hp = self->hitpoints;
     if (hp >= 99) return;
     const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
-    if (!riskfight_sample_event(seed, tick, 32, RF_DHAROK_MEAL_PM[riskfight_dharok_meal_band(hp)][riskfight_meal_phase(obs, opponent)])) return;
+    int band = riskfight_dharok_meal_band(hp);
+    int meal_pm = RF_DHAROK_MEAL_PM[band][riskfight_meal_phase(obs, opponent)];
+    if (persona && band <= 4) meal_pm = (int)lround(1000.0 * (1.0 - pow(1.0 - meal_pm / 1000.0, persona[RF_PERSONA_EAT] / 1000.0)));
+    if (!riskfight_sample_event(seed, tick, 32, meal_pm)) return;
+    int single = RF_DHAROK_MEAL_SINGLE_PM[hp / 10], doubles = RF_DHAROK_MEAL_DOUBLE_PM[hp / 10];
+    if (persona && single < 1000) {
+        int big = riskfight_persona_odds(1000 - single, persona[RF_PERSONA_BIG_MEAL]);
+        doubles = doubles * big / (1000 - single);
+        single = 1000 - big;
+    }
     int size = (int)(riskfight_sample_hash(seed, tick, 33) % 1000u);
-    int pieces = size < RF_DHAROK_MEAL_SINGLE_PM[hp / 10] ? 1 : size < RF_DHAROK_MEAL_SINGLE_PM[hp / 10] + RF_DHAROK_MEAL_DOUBLE_PM[hp / 10] ? 2 : 3;
+    int pieces = size < single ? 1 : size < single + doubles ? 2 : 3;
     int brew = self->potion_timer == 0 ? inventory->kind_slot[OSRS_CONSUMABLE_BREW] : 0;
     if (pieces == 1 && brew && riskfight_sample_event(seed, tick, 34, RF_DHAROK_MEAL_BREW_PM)) {
         actions[RF_DRINK] = brew;
@@ -954,7 +971,8 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     int consume_band = (hp >= 40) + (hp >= 65) + (hp >= 73) + (hp >= 90);
     if (!combo_specs && riskfight_sample_event(seed, tick, 11, profile->consume_pm[consume_band]))
         riskfight_script_consume(&self, &inventory, !profile->dharok_eating, actions);
-    if (!combo_specs && profile->dharok_eating) riskfight_script_dharok_meal(obs, &self, &inventory, seed, tick, actions);
+    const uint16_t* persona = profile->dharok_eating && profile->dharok_persona ? RF_DHAROK_PERSONA[profile->dharok_persona - 1] : NULL;
+    if (!combo_specs && profile->dharok_eating) riskfight_script_dharok_meal(obs, &self, &inventory, persona, seed, tick, actions);
     if (actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO]) actions[RF_PRIMARY] = RF_STOP;
     uint8_t generic_spec = plain_spec != ITEM_NONE ? plain_spec : plain_main != ITEM_NONE && osrs_spec_cost(plain_main) > 0 ? plain_main : ITEM_NONE;
     int generic_cost = generic_spec == ITEM_NONE ? 100 : osrs_spec_cost(generic_spec);
@@ -975,6 +993,7 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     int axe_band = (hp >= 40) + (hp >= 80);
     int opp_axe_band = (opp_bar >= 10) + (opp_bar >= 20);
     int axe_pm = RF_AXE_SWING_PM[axe_band][obs[11] > 0.5f][opp_axe_band] * profile->axe_pm[axe_band] / RF_AXE_WIELD_MEAN[axe_band];
+    if (persona) axe_pm = riskfight_persona_odds(axe_pm, persona[RF_PERSONA_AXE]);
     int axe_swing = has_axe && riskfight_sample_event(seed, attack_tick, 23, axe_pm);
     uint8_t weapon = vw_spec ? ITEM_VOIDWAKER : maul_spec ? maul_item : generic_roll ? generic_spec :
         axe_swing ? ITEM_DHAROKS_GREATAXE : main_weapon;

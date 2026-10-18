@@ -547,12 +547,14 @@ static void riskfight_plugin_prayers(int* actions) {
     actions[RF_OVERHEAD] = ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE;
 }
 
-/** The script playing `seat` on the opponent's profile; a Dharok pool opponent in seat 1 eats as spectated Dharok fighters do (RiskfightProfile.dharok_eating). */
+/** The script playing `seat` on the opponent's profile; a Dharok pool opponent in seat 1 eats as spectated Dharok fighters do (RiskfightProfile.dharok_eating), as
+ * the spectated fighter of his persona (RiskfightState.opponent_persona). */
 static void riskfight_opponent_script(const RiskfightState* s, int seat, int* actions) {
     float obs[RF_OBS_SIZE];
     riskfight_write_script_observation(s, seat, obs);
     RiskfightProfile profile = *s->opponent_profile;
     profile.dharok_eating = seat == 1 && riskfight_dharok_opponent(s);
+    profile.dharok_persona = profile.dharok_eating ? s->opponent_persona : 0;
     riskfight_script(obs, &profile, s->script_seed[seat], s->consume_ticks[seat], actions);
 }
 

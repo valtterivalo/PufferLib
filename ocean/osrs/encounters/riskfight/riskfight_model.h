@@ -21,7 +21,8 @@ enum { RISKFIGHT_CONSUME_BANDS = 5, RISKFIGHT_AXE_BANDS = 3, RISKFIGHT_TAB_SUPPL
  * per-attack RF_AXE_SWING_PM (his propensity), tab rates are indexed by
  * [consume ticks this round / 8, capped][own HP below 40]. dharok_eating: meals on the spectated Dharok rates (riskfight_script_dharok_meal) instead of the
  * consume bands' thresholds, which then repot only, and the teleport tab on his own HP (RF_DHAROK_TAB_P10K) instead of tab_pm; never set in a profile table, the
- * step sets it for a Dharok pool opponent (riskfight_opponent_script). */
+ * step sets it for a Dharok pool opponent (riskfight_opponent_script). dharok_persona: with dharok_eating, 1 + his row of RF_DHAROK_PERSONA (riskfight_personas.h),
+ * 0 for the pooled rates; the step sets it from RiskfightState.opponent_persona. */
 typedef struct {
     uint16_t consume_pm[RISKFIGHT_CONSUME_BANDS];
     uint16_t vw_pm, maul_pm;
@@ -29,8 +30,26 @@ typedef struct {
     uint16_t orb_axe_pm, veng_pm;
     uint16_t tab_pm[RISKFIGHT_TAB_SUPPLY_BANDS][2];
     uint8_t dharok_eating;
+    uint8_t dharok_persona;
 } RiskfightProfile;
 #include "riskfight_profiles.h"
+/* A spectated Dharok fighter's own play, kept by a Dharok pool opponent over the rounds of a session (scripts/fit_dharok_personas.py). Spectated fighters differ
+ * beyond the noise of their counts in how fast they eat after a hit, how big their meals are and how often they swing the greataxe, and those differences
+ * persist across their fights; a row is one fighter's empirical-Bayes estimate, spread back to the fitted between-fighter variance, the traits of a row kept
+ * together so their correlation stays. Per mille multipliers: EAT the exponent of the log-survival of RF_DHAROK_MEAL_PM bands 0-4 (above 1000 eats sooner),
+ * BIG_MEAL the odds of a double or triple meal, AXE the odds of RF_AXE_SWING_PM. CUM is the cumulative count of the fighter's spectated fights (the draw's
+ * weight). Orbs differ as much between fighters, but the kit's orb share (RF_KIT_ORB_PM, carrying or not) already gives that spread. */
+typedef enum { RF_PERSONA_CUM, RF_PERSONA_EAT, RF_PERSONA_BIG_MEAL, RF_PERSONA_AXE } RiskfightDharokPersonaTrait;
+#include "riskfight_personas.h"
+_Static_assert(RF_DHAROK_PERSONAS < 255, "dharok_persona is 1 + a row in a uint8_t");
+
+/** 1 + a row of RF_DHAROK_PERSONA, in proportion to the fighters' spectated fights, by a uniform 32-bit roll. */
+static uint8_t riskfight_dharok_persona_draw(uint32_t roll) {
+    uint32_t at = roll % RF_DHAROK_PERSONA[RF_DHAROK_PERSONAS - 1][RF_PERSONA_CUM];
+    int i = 0;
+    while (RF_DHAROK_PERSONA[i][RF_PERSONA_CUM] <= at) i++;
+    return (uint8_t)(i + 1);
+}
 static const RiskfightProfile RISKFIGHT_ALL_IN_PROFILE = {{300, 80, 0, 0, 0}, 1000, 1000, {1000, 1000, 1000}, 1000, 1000, {{0, 0}, {0, 0}, {0, 0}}};
 static const RiskfightProfile RISKFIGHT_ESCAPER_PROFILE = {{500, 300, 200, 100, 100}, 150, 3, {29, 17, 6}, 100, 1000, {{20, 100}, {50, 250}, {100, 500}}};
 
@@ -193,6 +212,7 @@ typedef struct {
     RiskfightVisibleOpponent visible[2];
     RiskfightOutcome outcome[2];
     const RiskfightProfile* opponent_profile;
+    uint8_t opponent_persona; /* RiskfightProfile.dharok_persona of a Dharok pool opponent: drawn off opp_roll, so a rematch keeps it */
     uint32_t script_seed[2];
     int consume_ticks[2];
     uint8_t anim_carry[2]; /* the player showed an animation (swing, meal, cast or block) on the previous tick: a meal now may hide behind it */
@@ -769,6 +789,7 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
     if (ctx->opp_kit) riskfight_kit_apply(s, 1, ctx->opp_kit, ctx->opp_roll);
     if (ctx->our_kit) riskfight_kit_apply(s, 0, ctx->our_kit, ctx->our_roll);
     s->opponent_profile = riskfight_pick_profile(ctx->opponent, osrs_lowbias32(s->env.rng_state + 3 * 0x9e3779b9U));
+    s->opponent_persona = riskfight_dharok_persona_draw(osrs_lowbias32(ctx->opp_roll ^ 0x70657273u));
     /* A seat in a Dharok kit (RF_DHAROK_KIT_PIECES pieces, worn or in the bag) leaves as the spectated Dharok fighters do, whatever base Defence it fights on. */
     const int nets = ctx->data_escapes && ctx->self_play && !ctx->opp_driven;
     for (int seat = 0; seat < 2; seat++)

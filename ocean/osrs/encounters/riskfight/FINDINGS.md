@@ -713,3 +713,52 @@ Live candidate a1: anchor hyperparameters, 182.7M steps on 37d061a46. Greedy lad
   a1 never swings the axe, so these strips are thrashing on an action it never found a use for.
 - **The user rejected the mask that would have blocked strips with no spare piece in the bag.** Stripping is a real top-player tactic: take more damage on purpose to feed Vengeance or recoil, lower your own HP for the axe, bait the opponent, even drop Piety. The fix belongs in the world: opponents and observations under which the payoff exists and can be seen. A ban would remove the tactic.
 - **Low-HP non-eating, by the same principle:** risking HP is valid when he truly can't threaten us (no spec energy, no Vengeance, on his attack timer). The bug is learning it as a blanket rule because sim opponents at low HP are harmless. LowHpThreat found the sim mechanic behind that: an eat clears the attack interaction, so a meal costs the tick's swing. Being checked against data.
+
+## 2026-10-19: Dharok fighters differ; per-opponent personas (branch personas)
+
+- **Data:** `spectator.duels` re-exported with the two 2026-10-18 sessions. It is a clean superset (the old file is a byte prefix), kept as `spectator.duels.bak-20261018`. Duels 537 → 687, Dharok v Dharok 261 → 310, third-party rows 0.032 (unchanged). The export now also writes `spectator.duels.names` (hashed names per duel side). That gives 134 Dharok v Dharok fighters, 100 with 2+ fights and 52 with 5+. The meal, tab, axe and orb fits move within noise (meal 589/572/468/241/36 → 583/581/470/241/35; tab 465/180/46/4 → 468/176/48/5), so no table changes.
+- **Between-fighter heterogeneity** (`scripts/fit_dharok_personas.py`). For each behaviour: Pearson X² over fighters against a parametric-bootstrap null at each fighter's n, the moment sd of a fighter's multiplier on the pooled cell rates, and the persistent share. The persistent share is the split-half cross moment of his alternate fights over the fighter-duel variance.
+
+  | Behaviour | X² / null (p) | sd, fighters [90%] | Persistent share |
+  |---|---|---|---|
+  | Unfed by the next hit, < 60 HP | 1.37 (0.10) | 0.53 [0.31, 0.71] | 2.4 [1.0, 4.1] |
+  | Healed by the next hit, 60-79 HP | 1.53 (0.005) | 0.21 [0.17, 0.26] | 1.2 [0.65, 1.9] |
+  | Swing on a ready tick | 2.31 (0.005) | 0.07 | 0.73 |
+  | VW spec per tick, his bar ≤ 25 | 1.09 (0.23) | — | — |
+  | Axe share of swings | 3.41 (0.005) | 0.33 [0.28, 0.37] | 0.68 [0.47, 0.91] |
+  | Orb per visible tick | 8.56 (0.005) | 0.87 | 0.65 |
+  | Tab per tick | 0.92 (0.60) | — | — |
+  | Double or triple meal | 1.73 (0.005) | 0.16 [0.11, 0.21] | 1.45 |
+
+  - Meal promptness, uptime, axe, orb and meal size are real traits, and they persist across a fighter's fights. Spec rate and tab-by-HP are not distinguishable from noise at these n.
+  - The orb spread is already in the sim: a 0/1 carry at `RF_KIT_ORB_PM` 0.6 gives a multiplier sd of 0.82.
+  - Correlations (fights-weighted r of empirical-Bayes multipliers, 90% CI):
+    - Fast eaters take bigger meals: +0.44 [0.26, 0.62].
+    - Fast eaters swing less on ready ticks: −0.45 [−0.60, −0.26]. The same holds for big-meal takers and uptime: −0.50.
+    - Axe use is independent of eating (+0.06).
+  - There is one style axis, careful against aggressive.
+- **Outcomes per fight** (r, 90% CI):
+  - Slow eaters (< 60) take more KOs (+0.22 [0.09, 0.35]) and escape less (−0.37).
+  - Fast eaters escape more (+0.21).
+  - VW spec rate goes with KOs dealt (+0.29 [0.18, 0.41]).
+  - Axe propensity predicts nothing (+0.09 [−0.04, 0.21]).
+
+  Behaviours carry outcome signal, but the signal is weak at the fighter level.
+- **Personas** (`riskfight_personas.h`, generated):
+  - **Fit:** one row per spectated fighter (131), drawn in proportion to his fights. Each trait gets a random effect th ~ N(mu, sigma²), fitted by marginal likelihood. The posterior means are spread back to sigma² × min(1, persistent share), and the rows are kept whole so the correlations stay.
+  - **Traits:**
+    - EAT: the exponent on the log-survival of `RF_DHAROK_MEAL_PM` bands 0-4. p10/p50/p90 are 0.77/1.05/1.34.
+    - BIG_MEAL: the odds of a double or triple meal (0.62/0.93/1.34).
+    - AXE: the odds of `RF_AXE_SWING_PM` (0.57/0.99/1.59). Axe takes only its persistent share, because the per-fight profile `axe_pm` (sd 0.23) already supplies the within-fighter part.
+  - **Wiring:** `RiskfightState.opponent_persona` is drawn off `opp_roll`, so a rematch keeps him, and the step passes it in `RiskfightProfile.dharok_persona`. 0 means pooled rates, so scripts and tests that build a profile are unchanged.
+  - **Not modelled:**
+    - Uptime: the script always attacks, so there is no table to scale.
+    - Spec timing and tab HP: no detectable spread.
+- **Validation** (`dh` harness, both seats on the Dharok script, starts drawn, 6,000 fights per arm, pooled vs personas):
+  - Pooled targets are unchanged:
+    - KO .197 / .188 (real .248).
+    - Escape share .802 / .809 (real .577).
+    - Opponent HP p25/med/p75 when the low fighter is ready at 1-20: 60/75/84 and 61/74/84.
+  - The spread moves toward real. Axe share sd over fighter-fights is .35 pooled, .40-.41 with personas, and .46 real.
+  - The harness's crude unfed-at-next-hit reading (.38 sim against .064 real on current status) is not like for like, so the eat spread is not checked in the sim.
+- Tests pass: test_riskfight_dharok_script, _mix, _mechanics, _session. The goldens are not refreshed: the persona changes Dharok pool opponents' meal and axe rolls.
