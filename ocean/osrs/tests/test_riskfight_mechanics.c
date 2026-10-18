@@ -130,6 +130,20 @@ static void test_maul_double_spec_gate(void) {
     printf("spec gate: wield maul + k = 2 at his full bar keeps 100 energy, at bar 3 spends (%d left)\n", low);
 }
 
+/** RF_ATTACK chosen on 10 ticks in a row queues one attack click, as gs_rl_server's rt_records sends one: none while we are already attacking him. */
+static void test_attack_clicks_once(void) {
+    reset(9, 0);
+    int attack[RF_HEADS] = {0}, clicks = 0;
+    attack[RF_PRIMARY] = RF_ATTACK;
+    for (int tick = 0; tick < 10; tick++) {
+        step(attack);
+        const HumanCommandQueue* queued = &context.policy_commands[0].commands;
+        for (int i = 0; i < queued->count; i++) clicks += queued->items[i].kind == HUMAN_COMMAND_ATTACK_NPC;
+    }
+    assert(clicks == 1 && osrs_interaction_active(&us()->interaction));
+    printf("attack: RF_ATTACK on 10 ticks queues %d attack click\n", clicks);
+}
+
 static void test_dharok_roll_covers_every_integer(void) {
     reset(5, 0);
     Player* p = us();
@@ -164,6 +178,7 @@ static void test_dharok_roll_covers_every_integer(void) {
 int main(void) {
     test_orb_then_axe_never_dropped();
     test_maul_double_spec_gate();
+    test_attack_clicks_once();
     test_dharok_roll_covers_every_integer();
     puts("Riskfight mechanics passed");
     return 0;
