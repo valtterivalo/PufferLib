@@ -267,7 +267,7 @@ static void riskfight_policy_commands(const RiskfightState* s, int agent,
         human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_SPEC_TOGGLE});
     if (primary == RF_STOP)
         human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_STOP});
-    else if (primary == RF_ATTACK && riskfight_attack_click(&s->env.players[agent], actions[RF_SPECIAL]))
+    else if (primary == RF_ATTACK && riskfight_attack_click(&s->env.players[agent], actions[RF_SPECIAL], actions))
         human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_ATTACK_NPC, .npc_slot = 1 - agent});
     else if (primary > 0 && primary < RF_ATTACK) {
         int dx = ENCOUNTER_MOVE_TARGET_DX[primary];

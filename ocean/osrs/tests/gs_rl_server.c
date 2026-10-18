@@ -260,7 +260,7 @@ static int rt_records(const int* actions, const RiskfightState* s, RtRecord* out
     const int specials = riskfight_spec_clicks(s, 0, actions);
     for (int k = 0; k < specials; k++) out[n++] = (RtRecord){GS_WIRE_SPEC_TOGGLE, 0};
     int attacking = osrs_interaction_active(&s->env.players[0].interaction);
-    if (actions[RF_PRIMARY] == RF_ATTACK && riskfight_attack_click(&s->env.players[0], specials)) out[n++] = (RtRecord){GS_WIRE_ATTACK, 0};
+    if (actions[RF_PRIMARY] == RF_ATTACK && riskfight_attack_click(&s->env.players[0], specials, actions)) out[n++] = (RtRecord){GS_WIRE_ATTACK, 0};
     if (actions[RF_PRIMARY] == RF_STOP && attacking) out[n++] = (RtRecord){GS_WIRE_STOP_ATTACK, 0};
     assert(n <= GS_WIRE_MAX_RECORDS);
     return n;

@@ -474,11 +474,18 @@ static int riskfight_spec_clicks(const RiskfightState* s, int agent, const int* 
     return k * spec_max + riskfight_in_flight_max(s, agent) >= riskfight_threat_his_hp_lower(v->health_bar) ? k : 0;
 }
 
-/** Whether RF_ATTACK clicks the target: when we are not attacking him already (a weapon switch keeps the interaction, so there is nothing to re-click), or when the
- * decision clicks the special (`specials` toggles, riskfight_spec_clicks): the target click releases a granite maul's prepared specials (osrs_granite_maul.h) and
- * is how a player double-specs. The sim's step and gs_rl_server's records both go through this. */
-static int riskfight_attack_click(const Player* p, int specials) {
-    return !osrs_interaction_active(&p->interaction) || specials > 0;
+/** Whether RF_ATTACK clicks the target: when we are not attacking him already, when the decision clicks the special (`specials` toggles,
+ * riskfight_spec_clicks): the target click releases a granite maul's prepared specials (osrs_granite_maul.h) and is how a player double-specs, or when the
+ * decision makes an inventory action (`actions`: a meal, drink or combo food, an equip or unequip, the orb). In the game every inventory action clears the attack
+ * interaction (osrs_interaction_check_interrupt; the orb's self-damage clears it too), and a target click after it on the same tick locks back on: that is how a
+ * player eats, or switches, and swings on one tick. Our live recordings of 2026-10-17/18 agree: of 91 meals eaten within 8 ticks of our swing, our interaction
+ * read NONE within 2 ticks of the meal in 72, and the 4 meals with no attack click after them were followed by no swing. The sim's step
+ * (riskfight_policy_commands) and gs_rl_server's records both go through this, and both queue the inventory clicks before the attack. */
+static int riskfight_attack_click(const Player* p, int specials, const int* actions) {
+    if (!osrs_interaction_active(&p->interaction) || specials > 0 || actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO] || actions[RF_ORB]) return 1;
+    for (int head = 0; head < RF_HEADS; head++)
+        if (RF_GEAR_SLOT_BY_HEAD[head] >= 0 && actions[head]) return 1;
+    return 0;
 }
 
 /** The mask of a tick of waiting between fights, or of a decision our hand cannot click on (RiskfightState.hand_busy): the no-op of every head and nothing else

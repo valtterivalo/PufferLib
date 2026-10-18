@@ -1,11 +1,14 @@
-/* Three mechanics of the riskfight sim, on the user's Dharok kit (RISKFIGHT_DHAROK_LOADOUT: Voidwaker and defender worn, the ornate maul, the greataxe and the
+/* Mechanics of the riskfight sim, on the user's Dharok kit (RISKFIGHT_DHAROK_LOADOUT: Voidwaker and defender worn, the ornate maul, the greataxe and the
  * locator orb in the bag, one cell freed so a two-hander can be wielded):
  * - busy hand: with the motor on, an orb click (and the attack) then the next decision's greataxe wield is never silently dropped. While clicks of the previous
  *   decision are unlanded the mask is the no-op of every head and the tactics block's hand_busy reads 1 (RiskfightState.hand_busy); on the first decision that
  *   is not busy the wield is offered, and it lands. Over many motor seeds, so both a busy and a free follow-up decision occur;
  * - spec gate: wield the maul + two special toggles at his full hitpoints (the mask offers k = 2: it rates the Voidwaker, whose k = 2 disarms) spends no energy,
  *   because two maul specials cannot reach his lower bound (riskfight_spec_clicks drops the toggles); the same decision with his bar low does spend;
- * - Dharok roll: a normal greataxe hit in the full set at low hitpoints rolls uniformly from 0 to the multiplied max: every integer of 0..max shows up and none above.
+ * - Dharok roll: a normal greataxe hit in the full set at low hitpoints rolls uniformly from 0 to the multiplied max: every integer of 0..max shows up and none above;
+ * - inventory then attack: an inventory click with RF_ATTACK while attacking him queues the attack click after it (the click clears the interaction,
+ *   riskfight_attack_click re-locks it); the food's attack delay stays: on a ready tick a drink + attack swings on that tick, hard food + attack 3 ticks later,
+ *   and a drink without the attack click (the old behaviour) loses the interaction and swings a tick or more later.
  *   cc -std=gnu11 -O2 -I. -o /tmp/test_riskfight_mechanics ocean/osrs/tests/test_riskfight_mechanics.c -lm      (cwd = repo root) */
 #include <assert.h>
 #include <stdio.h>
@@ -144,6 +147,65 @@ static void test_attack_clicks_once(void) {
     printf("attack: RF_ATTACK on 10 ticks queues %d attack click\n", clicks);
 }
 
+/** Attacking him until the tick our weapon is ready (the next step would swing). */
+static void attack_until_ready(void) {
+    reset(9, 0);
+    int attack[RF_HEADS] = {0};
+    attack[RF_PRIMARY] = RF_ATTACK;
+    step(attack);
+    for (int tick = 0; us()->attack_timer > 0; tick++) {
+        assert(tick < 10);
+        step(attack);
+    }
+    assert(osrs_interaction_active(&us()->interaction));
+    us()->current_hitpoints = 50;
+}
+
+static int first_slot_clicking(OsrsClickAction click) {
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
+        if (osrs_inventory_cell_metadata(&us()->inventory_cells[slot])->click_action == click) return slot;
+    assert(0);
+    return -1;
+}
+
+/** On a ready tick: the inventory click of `head` at `slot`, with RF_ATTACK when `attack`, then RF_ATTACK every tick. Returns the ticks after that tick to our
+ * swing (0: on it). With `attack` the queue holds the inventory click before the attack click and the interaction is set after the tick. */
+static int ticks_to_swing(int head, int slot, int attack) {
+    int decision[RF_HEADS] = {0}, keep[RF_HEADS] = {0};
+    decision[head] = slot + 1;
+    decision[RF_PRIMARY] = attack ? RF_ATTACK : 0;
+    keep[RF_PRIMARY] = RF_ATTACK;
+    const int clock = us()->attack_timer_uncapped;
+    step(decision);
+    const HumanCommandQueue* queued = &context.policy_commands[0].commands;
+    int click_at = -1, attack_at = -1;
+    for (int i = 0; i < queued->count; i++) {
+        if (queued->items[i].kind == HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK && queued->items[i].inventory_slot == slot) click_at = i;
+        if (queued->items[i].kind == HUMAN_COMMAND_ATTACK_NPC) attack_at = i;
+    }
+    assert(click_at >= 0 && (attack ? attack_at > click_at : attack_at < 0));
+    assert(osrs_interaction_active(&us()->interaction) == attack);
+    if (head == RF_FOOD && attack) assert(us()->attack_timer_uncapped == clock + 3 - 1); /* hard food's +3 on the clock, one tick run */
+    int waited = 0;
+    for (; !us()->just_attacked; waited++) {
+        assert(waited < 6);
+        step(keep);
+    }
+    return waited;
+}
+
+static void test_inventory_then_attack_relocks(void) {
+    attack_until_ready();
+    const int drink_now = ticks_to_swing(RF_DRINK, first_slot_clicking(OSRS_CLICK_DRINK), 1);
+    attack_until_ready();
+    const int drink_old = ticks_to_swing(RF_DRINK, first_slot_clicking(OSRS_CLICK_DRINK), 0);
+    attack_until_ready();
+    const int food_now = ticks_to_swing(RF_FOOD, first_slot_clicking(OSRS_CLICK_EAT), 1);
+    assert(drink_now == 0 && drink_old >= 1 && food_now == 3);
+    printf("inventory then attack: on a ready tick a drink + attack swings on it (without the re-click %d ticks later), hard food + attack 3 ticks later\n",
+        drink_old);
+}
+
 static void test_dharok_roll_covers_every_integer(void) {
     reset(5, 0);
     Player* p = us();
@@ -179,6 +241,7 @@ int main(void) {
     test_orb_then_axe_never_dropped();
     test_maul_double_spec_gate();
     test_attack_clicks_once();
+    test_inventory_then_attack_relocks();
     test_dharok_roll_covers_every_integer();
     puts("Riskfight mechanics passed");
     return 0;
