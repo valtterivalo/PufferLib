@@ -21,7 +21,8 @@ A Dharok fighter is a duel side that, on some tick, wears Dharok's helm, platebo
     Also reported: axe swings (2066/2067) with a single 10 in the 2 ticks up to them (what mine_riskfight_behavior.py fits orb_axe_pm on), and the share of
     Dharok fighters with >= LONG_WIELDS axe wields carrying an orb, bounded below by an unexplained 10 and above by any single 10: its midpoint is the pool's
     RF_KIT_ORB_PM (riskfight_kits.h). The strip numbers are riskfight_policy.h's RF_STRIP_* constants.
-(d) Greataxe swings: of a Dharok fighter's swings without a special, the share with the axe anim, by his own bar band, his Vengeance up (a cast seen and no
+(d) Greataxe swings: of a Dharok fighter's swings without a special, the share with the axe anim, by his own bar band the tick before (his hitpoints at his last
+    hit, what the script reads: RF_SCRIPT_OWN_BAR), his Vengeance up (a cast seen and no
     proc of his since) and the opponent's bar the tick before (riskfight_policy.h's RF_AXE_SWING_PM). Then the knockouts of the Dharok v Dharok duels: the
     killer's state at his axe swing (Vengeance up, an orb drop or a strip in the 5 ticks up to it, the opponent swinging the tick before, both bars) against
     all axe swings and all Dharok ticks, and the axe swings carrying his own reflect on the knockout.
@@ -387,7 +388,7 @@ def measure_axe_swings(duels, dh):
     for s in dh:
         for i in range(1, len(s.ticks)):
             if s.third[i] or not s.swing[i] or s.special[i]: continue
-            key = (band(s.bar[i]), s.veng_up[i], opp_band(s.opp_bar[i - 1]))
+            key = (band(s.bar[i - 1]), s.veng_up[i], opp_band(s.opp_bar[i - 1]))
             swings[key] += 1
             axes[key] += s.axe_swing[i]
     out.append(f"(d) greataxe share of a Dharok fighter's swings without a special ({sum(swings.values())} swings), per mille (swings), by his own bar band, "

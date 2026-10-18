@@ -316,9 +316,15 @@ static void riskfight_write_observation_core(const RiskfightState* s, int agent,
 
 /** What the scripts read: the observation without its appended blocks (they read nothing from them), at the cost of the base. The bag in physical slot order: scripts
  * click physical slots. */
+/* The script observation's own health bar (scale 30) as the other side last saw it: it moves only with a hitsplat on him, so it leaves out the meals he ate
+ * since (RF_AXE_SWING_PM's band). The script observation carries no threat features, so the bar sits in the threat block's first float. */
+enum { RF_SCRIPT_OWN_BAR = RF_THREAT_START };
+
+/** The scripts' observation: the base with the bag in physical slot order; of the threat block only the Soulreaper stacks and RF_SCRIPT_OWN_BAR. */
 static void riskfight_write_script_observation(const RiskfightState* s, int agent, float* obs) {
     riskfight_write_observation_core(s, agent, obs, &RF_BAG_PHYSICAL, NULL);
     riskfight_threat_write_stacks(&s->env.players[agent], &s->visible[agent].threat, obs + RF_THREAT_START); /* the Soulreaper stacks are the one thing a script reads there */
+    obs[RF_SCRIPT_OWN_BAR] = (float)s->visible[1 - agent].health_bar / OSRS_PLAYER_HEALTH_BAR_SCALE;
 }
 
 /** The full observation, the net's: the base with the bag in canonical order (riskfight_bag.h), then the appended blocks in order (threat features, session, timing,
@@ -916,17 +922,19 @@ static int riskfight_script_dharok_armour(const float* obs, uint32_t seed, uint3
     return 0;
 }
 
-/* The greataxe per attack, measured by scripts/measure_dharok_play.py (d): of a Dharok fighter's swings without a special (anim, 12,189 on spectator.duels), the
- * share swung with the axe, per mille, by his own bar (hitpoints <40, 40-79, 80+), his Vengeance up (cast seen, not yet proc'd) and the other side's bar (scale
- * 30: <10, 10-19, 20+). A cell under 60 swings pools with its Vengeance pair, both take the pair's share (all of <40, 80+ at bar <10). The axe follows the
- * other side's bar most (87 / 334 / 526 by his bar), then his own hitpoints (50 / 194 / 640), then his Vengeance (127 down, 239 up). At the 26 axe knockouts
+/* The greataxe per attack, measured by scripts/measure_dharok_play.py (d): of a Dharok fighter's swings without a special (anim, 14,872 on spectator.duels of
+ * 2026-10-19), the share swung with the axe, per mille, by his own bar the tick before the swing (bar 0-11, 12-23, 24-30: hitpoints about <40, 40-79, 80+), his
+ * Vengeance up (cast seen, not yet proc'd) and the other side's bar (scale 30: <10, 10-19, 20+). His bar moves only with a hitsplat, so it is his hitpoints at
+ * his last hit, before the meals he ate since; the script reads the same bar (RF_SCRIPT_OWN_BAR), not its hitpoints after its meals, which put low fighters
+ * that had eaten into a higher band. A cell under 60 swings pools with its Vengeance pair, both take the pair's share (all of <40, 80+ at bar <10). The axe
+ * follows the other side's bar (506 / 321 / 82) and his own bar (643 / 186 / 50), then his Vengeance (119 down, 237 up). At the 26 axe knockouts
  * of the 261 Dharok v Dharok duels he is lower (hitpoints 36 against 56 at all axe swings) on a lower bar (12.7 against 17.4), which the table carries; the
  * rest does not depart from all axe swings: Vengeance up 0.19 (0.32), an orb drop in the 5 ticks up to the swing 0.12 (0.11), stripped 0 (0.03), the other
  * side swinging the tick before 0.27 (0.14, 26 knockouts). An axe swing with his reflect on the knockout is 1 of 63 knockouts: no rule times one. */
 static const int16_t RF_AXE_SWING_PM[3][2][3] = {
-    {{794, 736, 494}, {794, 736, 494}},
-    {{490, 327, 104}, {554, 393, 192}},
-    {{234, 135, 25}, {234, 218, 107}},
+    {{755, 722, 509}, {755, 722, 509}},
+    {{484, 316, 97}, {521, 387, 197}},
+    {{239, 126, 27}, {239, 222, 119}},
 };
 /* The training profiles' mean axe_pm per own band (AXE_WIELD_PM_OWN_BAND, scripts/mine_riskfight_behavior.py): a profile's axe_pm over it is his own propensity. */
 static const int RF_AXE_WIELD_MEAN[3] = {75, 44, 15};
@@ -997,7 +1005,8 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
         voidwaker_main ? ITEM_VOIDWAKER : inventory.main_weapon != ITEM_NONE ? inventory.main_weapon : self.weapon;
     /* The greataxe swing: one roll per attack (keyed on attack_tick), RF_AXE_SWING_PM by his own hitpoints, his Vengeance up and the other side's bar, times the
      * profile's own axe propensity (profile->axe_pm over the training profiles' mean RF_AXE_WIELD_MEAN, scripts/mine_riskfight_behavior.py). */
-    int axe_band = (hp >= 40) + (hp >= 80);
+    int own_bar = (int)lroundf(obs[RF_SCRIPT_OWN_BAR] * OSRS_PLAYER_HEALTH_BAR_SCALE);
+    int axe_band = (own_bar >= 12) + (own_bar >= 24);
     int opp_axe_band = (opp_bar >= 10) + (opp_bar >= 20);
     int axe_pm = RF_AXE_SWING_PM[axe_band][obs[11] > 0.5f][opp_axe_band] * profile->axe_pm[axe_band] / RF_AXE_WIELD_MEAN[axe_band];
     if (persona) axe_pm = riskfight_persona_odds(axe_pm, persona[RF_PERSONA_AXE]);
