@@ -96,10 +96,14 @@ static int riskfight_training_draw(RiskfightTraining* training, float probabilit
     return probability > 0 && encounter_rand_float(&training->rng) < probability;
 }
 
-/** One of our kits (live_loadout 3): the recorded live kit, the Voidwaker kit, or the Voidwaker kit with summer pies. */
-static const RiskfightLoadout* riskfight_training_draw_kit(RiskfightTraining* training) {
+/** One of our kits (context->kit_mix): the recorded live kit, the Voidwaker kit, or the Voidwaker kit with summer pies, evenly (RF_KIT_MIX_VW); with RF_KIT_MIX_DHAROK
+ * the Dharok kit half the time and those three a sixth each. */
+static const RiskfightLoadout* riskfight_training_draw_kit(RiskfightTraining* training, int kit_mix) {
     static const RiskfightLoadout* const kits[] = {&RISKFIGHT_LIVE_LOADOUT, &RISKFIGHT_VW_LOADOUT, &RISKFIGHT_VW_PIES_LOADOUT};
-    return kits[encounter_rand_int(&training->rng, 3)];
+    assert(kit_mix == RF_KIT_MIX_VW || kit_mix == RF_KIT_MIX_DHAROK);
+    if (kit_mix == RF_KIT_MIX_VW) return kits[encounter_rand_int(&training->rng, 3)];
+    int draw = encounter_rand_int(&training->rng, 6);
+    return draw < 3 ? &RISKFIGHT_DHAROK_LOADOUT : kits[draw - 3];
 }
 
 /** A scripted session opponent: a training human, or a synthetic curveball. */
@@ -191,7 +195,7 @@ static void riskfight_training_randomize(RiskfightTraining* training, RiskfightS
 /** Who plays the next new opponent and what he wears, drawn before his reset. He is played by the script or OppFit (the lone opponent of a self_play 0 env;
  * in a self-play env with a frozen policy, with probability scripted_probability) or by a net in seat 1: the learning policy, or the frozen checkpoint the
  * env is tagged with. The script and OppFit play pool kits (needs opponent_pool); a net wears a pool kit with selfplay_pool_probability, else one of our
- * kits, drawn as ours are (live_loadout 3). */
+ * kits, drawn as ours are (context->kit_mix). */
 static void riskfight_training_draw_opponent(RiskfightTraining* training, RiskfightContext* context, int frozen_policy) {
     training->opponent = RF_TRAIN_LEARNED;
     training->scripted = NULL;
@@ -210,7 +214,7 @@ static void riskfight_training_draw_opponent(RiskfightTraining* training, Riskfi
     context->opp_plain = 0;
     if (!driven) {
         context->opp_plain = !riskfight_training_draw(training, training->config.pool_probability);
-        if (context->kit_mix) context->loadout[1] = riskfight_training_draw_kit(training);
+        if (context->kit_mix != RF_KIT_MIX_NONE) context->loadout[1] = riskfight_training_draw_kit(training, context->kit_mix);
     }
 }
 
@@ -267,7 +271,7 @@ static void riskfight_training_shuffle_bags(RiskfightTraining* training, Riskfig
 /** The first fight of a session: our kit (drawn once per session), full supplies on both sides, a new opponent. */
 static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* training,
     RiskfightState* state, RiskfightContext* context, int frozen_policy) {
-    if (context->kit_mix) context->loadout[0] = riskfight_training_draw_kit(training);
+    if (context->kit_mix != RF_KIT_MIX_NONE) context->loadout[0] = riskfight_training_draw_kit(training, context->kit_mix);
     training->rep = riskfight_training_draw(training, training->config.rep_start_probability) ? RF_REP_START_MAX * (1.0f - encounter_rand_float(&training->rng)) : 0;
     riskfight_training_draw_opponent(training, context, frozen_policy);
     riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);

@@ -121,11 +121,13 @@ static void test_vw_kit_shape(void) {
     assert(fish == 14 && karambwan == 7 && restore == 2 && brew == 2 && combat == 1 && sack == 1 && tab == 1 && empty == 0);
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) assert(!item_is_two_handed(kit->equipment[slot]));
     riskfight_put_int((EncounterState*)&state, (EncounterContext*)&context, "live_loadout", 2);
-    assert(context.loadout[0] == &RISKFIGHT_VW_LOADOUT && context.loadout[1] == &RISKFIGHT_LIVE_LOADOUT && !context.kit_mix);
+    assert(context.loadout[0] == &RISKFIGHT_VW_LOADOUT && context.loadout[1] == &RISKFIGHT_LIVE_LOADOUT && context.kit_mix == RF_KIT_MIX_NONE);
     riskfight_put_int((EncounterState*)&state, (EncounterContext*)&context, "live_loadout", 3);
-    assert(context.kit_mix && context.loadout[1] == &RISKFIGHT_LIVE_LOADOUT);
+    assert(context.kit_mix == RF_KIT_MIX_VW && context.loadout[1] == &RISKFIGHT_LIVE_LOADOUT);
+    riskfight_put_int((EncounterState*)&state, (EncounterContext*)&context, "live_loadout", 4);
+    assert(context.kit_mix == RF_KIT_MIX_DHAROK && context.loadout[0] == &RISKFIGHT_VW_LOADOUT && context.loadout[1] == &RISKFIGHT_LIVE_LOADOUT);
     riskfight_put_int((EncounterState*)&state, (EncounterContext*)&context, "live_loadout", 0);
-    assert(!context.kit_mix && !context.loadout[0] && !context.loadout[1]);
+    assert(context.kit_mix == RF_KIT_MIX_NONE && !context.loadout[0] && !context.loadout[1]);
 }
 
 int main(void) {

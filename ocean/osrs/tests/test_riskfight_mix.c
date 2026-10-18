@@ -2,7 +2,8 @@
  *
  *   mix       a fight is pure self-play (both seats the learning policy: tag 0), a frozen checkpoint (tag 1, net), or a pool kit played by OppFit or the script
  *             (tag 1, scripted_probability). The shares follow from vec.hist_policy_percent h and env.scripted_probability s: 1-h, h(1-s), h s. The kit of a
- *             net-played seat 1 is a pool kit with selfplay_pool_probability, else one of ours (live_loadout 3); the script and OppFit always take a pool kit.
+ *             net-played seat 1 is a pool kit with selfplay_pool_probability, else one of ours (live_loadout 3: the three Voidwaker kits; live_loadout 4: the Dharok
+ *             kit half the time, else those three); the script and OppFit always take a pool kit.
  *   rematch   keeps seat 1's player, his kit and his price; a new opponent draws all three again.
  *   symmetry  the observation and the mask are one function of a seat's own view: swapping the seats of a state swaps the two views, so a copy of one net
  *             in either seat is shown the mirrored fight. The session rules (rude teleport, rematch, regear, delays) treat both seats alike.
@@ -101,6 +102,28 @@ static void test_mix_fractions(void) {
     printf("mix: self-play %.3f frozen %.3f scripted/oppfit %.3f (expected %.3f %.3f %.3f); net pool kit %.3f (%.2f), live %.3f of the three kits (live, vw, vw with pies)\n",
         (double)pure / all.n, (double)frozen / all.n, (double)scripted / all.n, 1 - h, h * (1 - s), h * s,
         (double)all.net_pool / all.net, q, (double)all.net_live / (all.net - all.net_pool));
+}
+
+/* live_loadout 4: our kit, drawn once per session, is the Dharok kit half the time and each Voidwaker kit a sixth; a net in seat 1 wearing one of ours draws the same way. */
+static void test_dharok_mix_fractions(void) {
+    DictItem knobs[] = {{.key = "live_loadout", .value = 4}, {.key = "scripted_probability", .value = 0}, {.key = "selfplay_pool_probability", .value = 0}};
+    Env* env = make_env(knobs, 3, 0, 4242);
+    assert(env->context.kit_mix == RF_KIT_MIX_DHAROK);
+    const RiskfightLoadout* kits[4] = {&RISKFIGHT_DHAROK_LOADOUT, &RISKFIGHT_LIVE_LOADOUT, &RISKFIGHT_VW_LOADOUT, &RISKFIGHT_VW_PIES_LOADOUT};
+    const double share[4] = {0.5, 1.0 / 6, 1.0 / 6, 1.0 / 6};
+    enum { RESETS = 6000 };
+    int ours[4] = {0}, his[4] = {0};
+    for (int i = 0; i < RESETS; i++) {
+        puf_reset(env);
+        assert(env->context.opp_kit == NULL);
+        for (int k = 0; k < 4; k++) { ours[k] += env->context.loadout[0] == kits[k]; his[k] += env->context.loadout[1] == kits[k]; }
+        if (env->context.loadout[0] == &RISKFIGHT_DHAROK_LOADOUT) assert(env->state.env.players[0].equipped[GEAR_SLOT_BODY] == ITEM_DHAROKS_PLATEBODY);
+    }
+    for (int k = 0; k < 4; k++) assert(within(ours[k], RESETS, share[k]) && within(his[k], RESETS, share[k]));
+    assert(ours[0] + ours[1] + ours[2] + ours[3] == RESETS && his[0] + his[1] + his[2] + his[3] == RESETS);
+    destroy(env);
+    printf("dharok mix: our kit Dharok %.3f, live %.3f, vw %.3f, vw pies %.3f (0.5 and a sixth each); seat 1 Dharok %.3f\n", (double)ours[0] / RESETS,
+        (double)ours[1] / RESETS, (double)ours[2] / RESETS, (double)ours[3] / RESETS, (double)his[0] / RESETS);
 }
 
 /* The mix also holds across the opponents of one session, and a rematch keeps his player. */
@@ -390,6 +413,7 @@ static void test_every_fight_is_a_regear(void) {
 
 int main(void) {
     test_mix_fractions();
+    test_dharok_mix_fractions();
     test_new_opponents_and_rematch();
     test_oppfit_in_self_play();
     test_omission_only_for_the_driven();

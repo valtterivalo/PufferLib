@@ -361,7 +361,7 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
         gear_masks[gear_slot] = heads[head];
         heads[head][RF_UNEQUIP] = p->equipped[gear_slot] != ITEM_NONE && has_empty;
     }
-    int has_teleport = 0, one_handed_switch = 0, has_shield = 0, two_handed_wieldable = 0;
+    int has_teleport = 0, has_orb = 0, one_handed_switch = 0, has_shield = 0, two_handed_wieldable = 0;
     const RiskfightSpecWeapon spec = riskfight_spec_weapon(p);
     const RiskfightThreatGates gates = riskfight_threat_gates(s, agent, spec);
     for (int entry = 0; entry < OSRS_INVENTORY_SIZE; entry++) {
@@ -387,12 +387,15 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
             (m->consumable_kind != OSRS_CONSUMABLE_BREW || gates.meals) &&
             (m->consumable_kind != OSRS_CONSUMABLE_DIVINE_COMBAT || p->current_hitpoints > OSRS_DIVINE_DAMAGE);
         has_teleport |= m->click_action == OSRS_CLICK_TELEPORT;
+        has_orb |= m->click_action == OSRS_CLICK_SELF_DAMAGE;
     }
     if (has_shield && one_handed_switch && item_is_two_handed(p->equipped[GEAR_SLOT_WEAPON])) {
         for (int entry = 0; entry < OSRS_INVENTORY_SIZE; entry++)
             if (osrs_inventory_cell_metadata(&p->inventory_cells[order.slot[entry]])->gear_slot == GEAR_SLOT_SHIELD)
                 heads[RF_SHIELD][entry + 1] = 1;
     }
+    /* The orb's Feel only while it can take a hitpoint off: it never takes us below 1 (osrs_player_self_damage). */
+    heads[RF_ORB][1] = has_orb && p->current_hitpoints > 1;
     heads[RF_VENGEANCE][1] = !p->veng_active && p->veng_cooldown <= 1 &&
         p->current_magic >= OSRS_VENGEANCE_MAGIC_LEVEL && s->inventory_use[agent].vengeance_sacks > 0;
     for (int action = 1; action < RF_ACTION_DIMS[RF_SPECIAL]; action++)
@@ -406,7 +409,7 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
     if (riskfight_deployable) {
         for (int head = 0; head < RF_HEADS; head++) {
             int keep = head == RF_WEAPON || head == RF_SHIELD || head == RF_RING || (head >= RF_FOOD && head <= RF_COMBO) ||
-                head == RF_VENGEANCE || head == RF_SPECIAL || head == RF_PRIMARY;
+                head == RF_ORB || head == RF_VENGEANCE || head == RF_SPECIAL || head == RF_PRIMARY || head == RF_BODY || head == RF_LEGS;
             if (!keep) memset(heads[head] + 1, 0, RF_ACTION_DIMS[head] - 1);
         }
         for (int action = 1; action < RF_ACTION_DIMS[RF_PRIMARY]; action++)
@@ -415,6 +418,10 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
         heads[RF_SHIELD][RF_UNEQUIP] &= two_handed_wieldable;
         heads[RF_WEAPON][RF_UNEQUIP] = 0;
         heads[RF_RING][RF_UNEQUIP] = 0;
+        /* Body and legs come off (the strip: he hits more often, into our Vengeance, and our hitpoints drop for a Dharok swing) and go back on from the bag: a bag
+         * piece is offered only while that slot is bare, so it puts back what came off and never swaps one worn piece for another. */
+        for (int head = RF_BODY; head <= RF_LEGS; head++)
+            if (p->equipped[RF_GEAR_SLOT_BY_HEAD[head]] != ITEM_NONE) memset(heads[head] + 1, 0, OSRS_INVENTORY_SIZE);
     }
 }
 
@@ -434,7 +441,7 @@ typedef struct {
     uint16_t cells[OSRS_INVENTORY_SIZE];
     uint8_t equipped[NUM_GEAR_SLOTS];
     uint8_t below_full, above_divine, food_ready, karambwan_ready, potion_ready, prayer, magic_ok, veng_active, veng_cooled, has_sacks,
-        teleport_ok, deployable, valid;
+        teleport_ok, orb_ok, deployable, valid;
     RiskfightThreatGates gates;
     uint32_t useful; /* bit `slot`: riskfight_consumable_useful of that physical slot's eat or drink item */
     int special_energy;
@@ -444,12 +451,15 @@ typedef struct {
 static inline void riskfight_mask_key(const RiskfightState* s, int agent, const unsigned char* buffer, RiskfightMaskKey* key) {
     const Player* p = &s->env.players[agent];
     memset(key, 0, sizeof(*key));
+    int has_orb = 0;
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
         key->cells[slot] = p->inventory_cells[slot].content_code;
         const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[slot]);
         if ((m->click_action == OSRS_CLICK_EAT || m->click_action == OSRS_CLICK_DRINK) && riskfight_consumable_useful(p, (OsrsConsumableKind)m->consumable_kind))
             key->useful |= 1u << slot;
+        has_orb |= m->click_action == OSRS_CLICK_SELF_DAMAGE;
     }
+    key->orb_ok = has_orb && p->current_hitpoints > 1; /* the RF_ORB bit */
     memcpy(key->equipped, p->equipped, NUM_GEAR_SLOTS);
     key->gates = riskfight_threat_gates(s, agent, riskfight_spec_weapon(p));
     key->below_full = p->current_hitpoints < p->base_hitpoints;

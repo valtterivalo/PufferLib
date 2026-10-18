@@ -23,7 +23,7 @@
  * Every tick of a fight must reach the server with the full request body: the server owns the history ring, the consume estimates and the recurrent state.
  * A tick gap above 2 or a tick that does not advance starts a new fight. On a decision tick the response is `R id micros 2 <3 x "feasible kill death value worlds">
  * A n <n x "due kind arg timing">` (best_index 2 = replace the remainder with these clicks, due = tick + 1); on an `OBS` tick it is `O id`. UNAVAILABLE as in the
- * lookahead server. Movement, orb, prayer, style and armour-swap heads are masked off (riskfight_deployable). */
+ * lookahead server. Movement, prayer, style and the armour heads other than weapon, shield, ring, body and legs are masked off (riskfight_deployable). */
 #define main gs_lookahead_server_main
 #include "gs_lookahead_server.c"
 #undef main
@@ -218,11 +218,12 @@ static int rt_worn_index(int gear_slot) {
     return -1;
 }
 
-/* Head actions as the plugin's click records, in the order the sim queues them. Bag actions name physical slots (riskfight_bag_to_physical of the net's).
- * Movement, orb, prayer and style heads are masked off by riskfight_deployable. */
+/* Head actions as the plugin's click records, in the order the sim queues them (riskfight_policy_commands): the gear heads in head order (weapon, shield, ring, body,
+ * legs), the meals, the orb or the teleport (the sim clicks the tab when both are chosen), Vengeance, the special toggles, attack or stop. Bag actions name physical
+ * slots (riskfight_bag_to_physical of the net's). Movement, prayer, style and the other armour heads are masked off by riskfight_deployable. */
 static int rt_records(const int* actions, const RiskfightState* s, RtRecord* out) {
     int n = 0;
-    static const int gear_heads[] = {RF_WEAPON, RF_SHIELD, RF_RING};
+    static const int gear_heads[] = {RF_WEAPON, RF_SHIELD, RF_RING, RF_BODY, RF_LEGS};
     for (size_t i = 0; i < sizeof(gear_heads) / sizeof(*gear_heads); i++) {
         int head = gear_heads[i], a = actions[head];
         if (!a) continue;
@@ -234,15 +235,16 @@ static int rt_records(const int* actions, const RiskfightState* s, RtRecord* out
     }
     for (int head = RF_FOOD; head <= RF_COMBO; head++)
         if (actions[head]) out[n++] = (RtRecord){GS_WIRE_CLICK_SLOT, actions[head] - 1};
+    if (actions[RF_ORB] || actions[RF_PRIMARY] == RF_TELEPORT) {
+        /* The first slot holding the tab or the orb (the mask offers either only when the bag holds it); the orb's left-click option is Feel. */
+        OsrsConsumableKind kind = actions[RF_PRIMARY] == RF_TELEPORT ? OSRS_CONSUMABLE_TELEPORT : OSRS_CONSUMABLE_LOCATOR_ORB;
+        int slot = 0;
+        while (slot < OSRS_INVENTORY_SIZE && osrs_inventory_cell_metadata(&s->env.players[0].inventory_cells[slot])->consumable_kind != kind) slot++;
+        assert(slot < OSRS_INVENTORY_SIZE);
+        out[n++] = (RtRecord){GS_WIRE_CLICK_SLOT, slot};
+    }
     if (actions[RF_VENGEANCE]) out[n++] = (RtRecord){GS_WIRE_CAST_VENGEANCE, 0};
     for (int k = 0; k < actions[RF_SPECIAL]; k++) out[n++] = (RtRecord){GS_WIRE_SPEC_TOGGLE, 0};
-    if (actions[RF_PRIMARY] == RF_TELEPORT) {
-        for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
-            if (osrs_inventory_cell_metadata(&s->env.players[0].inventory_cells[slot])->consumable_kind == OSRS_CONSUMABLE_TELEPORT) {
-                out[n++] = (RtRecord){GS_WIRE_CLICK_SLOT, slot};
-                break;
-            }
-    }
     int attacking = osrs_interaction_active(&s->env.players[0].interaction);
     if (actions[RF_PRIMARY] == RF_ATTACK && !attacking) out[n++] = (RtRecord){GS_WIRE_ATTACK, 0};
     if (actions[RF_PRIMARY] == RF_STOP && attacking) out[n++] = (RtRecord){GS_WIRE_STOP_ATTACK, 0};
@@ -260,11 +262,11 @@ static double rt_slot_distance(int a, int b) {
  * see slot geometry, so this is a live-only choice that leaves the net's decision (which item) alone and moves only the click (which copy), over the CLICK_SLOT records
  * of `records` that land on an eat or drink item:
  * - two or more CLICK_SLOT records in the batch: the copies that minimise the summed rt_slot_distance between consecutive CLICK_SLOT records in record order (gear,
- *   hard food, potion, karambwan, teleport), searched exactly; gear and teleport clicks stay where they are and anchor the path; no two clicks share a slot; ties go to
+ *   hard food, potion, karambwan, orb or teleport), searched exactly; gear, orb and teleport clicks stay where they are and anchor the path; no two clicks share a slot; ties go to
  *   the lowest slots;
  * - a single eat click (hard food, karambwan): the copy whose distance to the nearest drink slot (brew, restore, combat, any potion) is largest, keeping the copies next
  *   to the potions for the triple eats; ties go to the lowest slot;
- * - anything else (a lone potion, gear, a teleport, unequips) is unchanged. */
+ * - anything else (a lone potion, gear, the orb, a teleport, unequips) is unchanged. */
 static void rt_choose_copies(const Player* p, RtRecord* records, int count) {
     enum { MOVABLE = 3 };
     const OsrsInventoryCell* cells = p->inventory_cells;

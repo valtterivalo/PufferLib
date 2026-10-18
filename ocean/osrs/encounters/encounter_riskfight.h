@@ -53,9 +53,10 @@ static void riskfight_put_int(EncounterState* state, EncounterContext* context, 
         assert(value == 0 || value == 1); riskfight_deployable = value;
     } else if (strcmp(key, "live_loadout") == 0) {
         /* 0 default kits; 1 both sides carry the live kit with the maul; 2 we carry the VW kit (dragon defender, no two-handed weapon) and he the
-         * live kit; 3 as 2 for half of the training episodes, as 1 for the rest (drawn at every training reset). */
-        assert(value >= 0 && value <= 3);
-        ctx->kit_mix = value == 3;
+         * live kit; 3 as 2, and every training session draws our kit from the three Voidwaker kits (RF_KIT_MIX_VW); 4 as 3, but the draw is the Dharok kit half
+         * the time (RF_KIT_MIX_DHAROK). */
+        assert(value >= 0 && value <= 4);
+        ctx->kit_mix = value == 4 ? RF_KIT_MIX_DHAROK : value == 3 ? RF_KIT_MIX_VW : RF_KIT_MIX_NONE;
         ctx->loadout[0] = value == 0 ? NULL : value >= 2 ? &RISKFIGHT_VW_LOADOUT : &RISKFIGHT_LIVE_LOADOUT;
         ctx->loadout[1] = ctx->opp_default = value ? &RISKFIGHT_LIVE_LOADOUT : NULL;
     } else if (strcmp(key, "opponent_pool") == 0) {

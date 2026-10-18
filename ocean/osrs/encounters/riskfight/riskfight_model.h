@@ -223,7 +223,7 @@ typedef struct {
     OsrsActorRouteCache routes[2];
     HumanInput policy_commands[2];
     RiskfightOpponent opponent;
-    int kit_mix; /* training resets draw our kit between RISKFIGHT_LIVE_LOADOUT and RISKFIGHT_VW_LOADOUT (live_loadout=3) */
+    int kit_mix; /* RiskfightKitMix: what training resets draw our kit from (live_loadout 3 and 4) */
     const RiskfightLoadout* opp_default; /* his kit when he takes no pool kit, as live_loadout set it */
     int opponent_pool; /* a reset draws his kit from the opponent pool (riskfight_kits.h) unless opp_plain; the script, OppFit or a net may play him */
     int opp_ragger;    /* the next new opponent is a ragger: a ranged pool kit (needs opponent_pool) */
@@ -259,7 +259,8 @@ static uint16_t riskfight_supply_code(OsrsConsumableKind kind, int doses) {
     return osrs_inventory_content_code_from_consumable(kind, (uint8_t)doses);
 }
 
-/* Restricts the action mask to what the plugin can click: no prayers, style, orb, armour swaps other than weapon/shield/ring, no movement; the teleport tab stays. Set once at start-up. */
+/* Restricts the action mask to what the plugin can click: no prayers, style or movement, and of the armour only weapon, shield and ring swaps and body and legs off and
+ * back on (riskfight_write_action_mask); the orb and the teleport tab stay. Set once at start-up. */
 static int riskfight_deployable;
 static RiskfightLoadout RISKFIGHT_DEFAULT_LOADOUT;
 /* The bag and gear of the recorded live fights (tape 20261005T193654 KeengCr1mson): Voidwaker, ornate granite maul, anglerfish, karambwan, brews,
@@ -273,6 +274,14 @@ static RiskfightLoadout RISKFIGHT_VW_LOADOUT;
  * 2 bites of 11, a 1-tick eat delay (wiki: Summer pie, a 1-tick fast food), so from 73 a pie to 84 still leaves the next tick for a triple-eat. */
 static RiskfightLoadout RISKFIGHT_VW_PIES_LOADOUT;
 enum { RF_VW_PIES = 4 };
+/* The user's Dharok kit (kit snapshot dharok-20261018): Dharok's helm, platebody and platelegs 100 (raw 4880, 4892, 4898: the engine's Dharok rows), infernal
+ * cape, amulet of strength, Voidwaker wielded, dragon defender, barrows gloves, dragon boots, ring of recoil; the bag in the snapshot's slot order, all 28 full:
+ * 2 summer pies (2 bites), 6 halibut, 10 marlin, 2 blighted super restores, 2 brews, the ornate granite maul (24225), Dharok's greataxe, a super combat, the
+ * locator orb (Feel: 10 self-damage, never below 1), the Vengeance sack (25 casts) and the house tablet. */
+static RiskfightLoadout RISKFIGHT_DHAROK_LOADOUT;
+/* What a training reset draws our kit from (riskfight_training_draw_kit): nothing (the kit live_loadout set stays); the three Voidwaker kits evenly (live_loadout 3);
+ * the Dharok kit half the time, else the three Voidwaker kits evenly (live_loadout 4). */
+typedef enum { RF_KIT_MIX_NONE, RF_KIT_MIX_VW, RF_KIT_MIX_DHAROK } RiskfightKitMix;
 
 __attribute__((constructor)) static void riskfight_build_default_loadout(void) {
     RiskfightLoadout loadout = {.hitpoints = 121, .vengeance_sacks = 100};
@@ -360,6 +369,32 @@ static void riskfight_build_vw_loadout(void) { /* called by riskfight_build_live
         if (osrs_item_content_metadata(loadout.inventory[i])->consumable_kind == OSRS_CONSUMABLE_ANGLERFISH) { with_pies.inventory[i] = riskfight_supply_code(OSRS_CONSUMABLE_SUMMER_PIE, 2); swapped++; }
     assert(swapped == RF_VW_PIES);
     RISKFIGHT_VW_PIES_LOADOUT = with_pies;
+}
+
+__attribute__((constructor)) static void riskfight_build_dharok_loadout(void) {
+    RiskfightLoadout loadout = {.hitpoints = 121, .vengeance_sacks = 25};
+    for (int i = 0; i < NUM_GEAR_SLOTS; i++) loadout.equipment[i] = ITEM_NONE;
+    loadout.equipment[GEAR_SLOT_HEAD] = ITEM_DHAROKS_HELM;
+    loadout.equipment[GEAR_SLOT_CAPE] = ITEM_INFERNAL_CAPE;
+    loadout.equipment[GEAR_SLOT_NECK] = ITEM_AMULET_OF_STRENGTH;
+    loadout.equipment[GEAR_SLOT_WEAPON] = ITEM_VOIDWAKER;
+    loadout.equipment[GEAR_SLOT_BODY] = ITEM_DHAROKS_PLATEBODY;
+    loadout.equipment[GEAR_SLOT_SHIELD] = ITEM_DRAGON_DEFENDER;
+    loadout.equipment[GEAR_SLOT_LEGS] = ITEM_DHAROKS_PLATELEGS;
+    loadout.equipment[GEAR_SLOT_HANDS] = ITEM_BARROWS_GLOVES;
+    loadout.equipment[GEAR_SLOT_FEET] = ITEM_DRAGON_BOOTS;
+    loadout.equipment[GEAR_SLOT_RING] = ITEM_RING_OF_RECOIL;
+    const uint16_t pie = riskfight_supply_code(OSRS_CONSUMABLE_SUMMER_PIE, 2), halibut = riskfight_supply_code(OSRS_CONSUMABLE_HALIBUT, 0),
+        marlin = riskfight_supply_code(OSRS_CONSUMABLE_MARLIN, 0), restore = riskfight_supply_code(OSRS_CONSUMABLE_SUPER_RESTORE, 4),
+        brew = riskfight_supply_code(OSRS_CONSUMABLE_BREW, 4), combat = riskfight_supply_code(OSRS_CONSUMABLE_SUPER_COMBAT, 4),
+        orb = riskfight_supply_code(OSRS_CONSUMABLE_LOCATOR_ORB, 0), sack = riskfight_supply_code(OSRS_CONSUMABLE_VENGEANCE_SACK, 0),
+        tab = riskfight_supply_code(OSRS_CONSUMABLE_TELEPORT, 0),
+        maul = osrs_inventory_content_code_from_item(ITEM_GRANITE_MAUL_ORNATE), axe = osrs_inventory_content_code_from_item(ITEM_DHAROKS_GREATAXE);
+    const uint16_t bag[] = {pie, pie, halibut, halibut, restore, marlin, halibut, halibut, restore, marlin, halibut, halibut, marlin, brew,
+        marlin, brew, marlin, marlin, marlin, marlin, maul, axe, combat, marlin, orb, marlin, sack, tab};
+    _Static_assert(sizeof(bag) == sizeof(loadout.inventory), "the Dharok kit fills all 28 bag cells");
+    memcpy(loadout.inventory, bag, sizeof(bag));
+    RISKFIGHT_DHAROK_LOADOUT = loadout;
 }
 
 #include "riskfight_kits.h"

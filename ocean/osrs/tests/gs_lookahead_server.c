@@ -61,6 +61,11 @@ static const int SIM_IDS[] = {13441, 3144, 3024, 3026, 3028, 3030, 6685, 6687, 6
     22322, 10551, 10828, 21295, 1725, 1079, 4087, 7462, 11840, 2550, 2434, 139, 141, 143, /* prayer potion (4)..(1) */
     27861, 27857, 24617, 27867, 22114, 29280, 29560, 29564, 12904, 8850, 4131, 7460,
     7218, 7220, 2313, /* summer pie, half a summer pie, the pie dish a last bite leaves: content codes 206..208, the cells a native pies kit holds */
+    32336, 32352, 22081, /* halibut, marlin, locator orb: content codes 205, 204, 209 (the Dharok kit, riskfight_model.h RISKFIGHT_DHAROK_LOADOUT) */
+    /* Dharok's helm, greataxe, platebody, platelegs. The degraded variants the item table maps (helm 100 4880, greataxe 4886..4889, platebody 100 4892, platelegs
+     * 100 4898: OSRS_ITEM_RAW_GEAR_ALIAS_ROWS) reach this list as these ids, since canonical() applies osrs_item_canonical_raw_id first; the more degraded helm,
+     * body and legs have no row (worn they resolve as priors, in the bag they are inert filler). */
+    4716, 4718, 4720, 4722,
     -1};
 
 static int canonical(int id) {
