@@ -43,6 +43,17 @@ cc -std=gnu11 -O2 -I. -Isrc -I$RAYLIB_INC -o bench ocean/osrs/tests/bench_riskfi
 RF_OPPFIT_MODEL=ocean/osrs/tests/fixtures/model.fit RF_OPPFIT_EAT=ocean/osrs/tests/fixtures/eat_mixture.fit ./bench 6000 64 script 1
 ```
 
+## Riskfight checkpoint probes
+
+Probes are not tests (`run_suite.sh` runs `test_*.c` only); they play a checkpoint (`rf_net.h`, CPU) in the env and print a table.
+`probe_lowhp_meals.c` is the low-hitpoint meal check: with him below 40 and our hitpoints within his range, the net's greedy meal rate by our hitpoints band,
+the KO and death shares of cloned eat and skip playouts, the break-even price, and how often the greedy choice is the better branch at the fight's price:
+
+```bash
+cc -std=gnu11 -O2 -I. -Isrc -I$RAYLIB_INC -o probe_lowhp_meals ocean/osrs/tests/probe_lowhp_meals.c riskfight_oppfit_bridge.o -lm -lpthread
+./probe_lowhp_meals ~/.light2/rl/a2.bin 512 1 300 1
+```
+
 ## Gear Swapper advisory snapshots
 
 Riskfight snapshots retain both players' committed damage queues. Unresolved PID
