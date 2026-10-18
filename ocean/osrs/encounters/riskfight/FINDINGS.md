@@ -1049,3 +1049,12 @@ Harness: `dh`, both seats on the Dharok script with personas, starts drawn, 6,00
   - The repot table is a sim-side calibration to the spectated potion animations, not a direct fit.
   - Prayer potions, if real fighters run Smite, are not modelled.
 - Tests pass: test_riskfight_dharok_script, _mix, _mechanics, _session and _scripts. The env_trace goldens are not refreshed: the pool bags changed.
+
+## 2026-10-19 night: overnight sweep restarted on the corrected opponents
+
+- **night1** ran on 369fdba02: steps swept 1e8-2e9, at most 1800 s per trial, self-play pinned off. Its 21 trials (anchor 8.64) topped at 8.91 (run 18, 179M steps), 8.84 (runs 6 and 13) and 8.76 (run 4). Protein drew every trial at 1.0-1.8e8 steps, never near the cost cap.
+- **Stopped and restarted as night2 on 31f499eaf** (the rule: restart sweeps when the env changes). Since night1's build, the opponents changed materially:
+  - meals after a miss (1f90982b6);
+  - Dharok fighters keep their strength boost: the greataxe bag and the repot table (dcc97daa0).
+
+  KO share went from .195 to .283 (real .271 uncensored) and escape share from .803 to .716.
