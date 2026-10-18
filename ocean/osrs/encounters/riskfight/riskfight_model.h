@@ -616,25 +616,26 @@ static int riskfight_is_dharok_piece(int item) {
     return item < NUM_ITEMS && (ITEM_DATABASE[item].effect_mask & OSRS_ITEM_EFFECT_DHAROK_PIECE);
 }
 
-/* A fighter carrying (worn or in the bag) at least RF_DHAROK_KIT_PIECES Dharok pieces fights on base Defence RF_DHAROK_KIT_BASE_DEFENCE, boosted and with Piety
- * like everyone else; every other fighter keeps 99. Carried, not worn, so strips and axe swaps never change it and the script reads the same count off its
- * observation (riskfight_observed_self). Measured on the 261 spectated Dharok v Dharok duels (spectator.duels, recordings' hitsplats): non-zero splats per
- * swing into a Dharok-armoured defender greataxe 25.9%, Voidwaker 24.8%, tentacle 28.6% (n 1512 / 3918 / 3446), against 21.3 / 21.9 / 23.0% with 99
- * Defence (118 boosted, Piety: effective 155); base 80 (97 boosted, effective 129) predicts 25.6 / 26.2 / 27.5% at the sim's swing states. Not overheads
- * (Smite 93%, Protect from Melee ~0), gear bonuses or strips (1.3% of real swings). Our own fights into Dharok opponents (12 tapes, 151 swings) land 22.5%,
- * a fully defended population: our kits carry no Dharok piece. */
-enum { RF_DHAROK_KIT_PIECES = 3, RF_DHAROK_KIT_BASE_DEFENCE = 80 };
-
-static int riskfight_base_defence(int dharok_pieces) {
-    return dharok_pieces >= RF_DHAROK_KIT_PIECES ? RF_DHAROK_KIT_BASE_DEFENCE : MAXED_BASE_DEFENCE;
-}
-
 static int riskfight_loadout_dharok_pieces(const RiskfightLoadout* loadout) {
     int pieces = 0;
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) pieces += riskfight_is_dharok_piece(loadout->equipment[slot]);
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
         pieces += loadout->inventory[slot] && riskfight_is_dharok_piece(osrs_item_content_metadata(loadout->inventory[slot])->item_idx);
     return pieces;
+}
+
+/* The opponent seat, played by the script or OppFit with a pool kit carrying (worn or in the bag) at least RF_DHAROK_KIT_PIECES Dharok pieces, fights on base
+ * Defence RF_DHAROK_KIT_BASE_DEFENCE, boosted and with Piety like everyone else. Every other fighter keeps 99: our seat (the user's account, whatever kit it
+ * draws, RISKFIGHT_DHAROK_LOADOUT included) and a net in seat 1. Measured on the 261 spectated Dharok v Dharok duels (spectator.duels, recordings'
+ * hitsplats): non-zero splats per swing into a Dharok-armoured defender greataxe 25.9%, Voidwaker 24.8%, tentacle 28.6% (n 1512 / 3918 / 3446), against
+ * 21.3 / 21.9 / 23.0% with 99 Defence (118 boosted, Piety: effective 155); base 80 (97 boosted, effective 129) predicts 25.6 / 26.2 / 27.5% at the sim's
+ * swing states. Not overheads (Smite 93%, Protect from Melee ~0), gear bonuses or strips (1.3% of real swings). Our own fights into Dharok opponents (12
+ * tapes, 151 swings) land 22.5%: the crater Voidwaker population is fully defended, so only Dharok kits get it. */
+enum { RF_DHAROK_KIT_PIECES = 3, RF_DHAROK_KIT_BASE_DEFENCE = 80 };
+
+static int riskfight_base_defence(const RiskfightContext* ctx, int seat, const RiskfightLoadout* loadout) {
+    int driven = seat == 1 && ctx->opp_kit && (!ctx->self_play || ctx->opp_driven);
+    return driven && riskfight_loadout_dharok_pieces(loadout) >= RF_DHAROK_KIT_PIECES ? RF_DHAROK_KIT_BASE_DEFENCE : MAXED_BASE_DEFENCE;
 }
 
 static void riskfight_reset(EncounterState* state, EncounterContext* context, uint32_t seed) {
@@ -669,7 +670,7 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
         p->is_lunar_spellbook = 1;
         p->veng_active = 1;
         p->current_hitpoints = loadout->hitpoints;
-        p->base_defence = p->current_defence = riskfight_base_defence(riskfight_loadout_dharok_pieces(loadout));
+        p->base_defence = p->current_defence = riskfight_base_defence(ctx, i, loadout);
         encounter_super_combat_boost(p);
         p->x = FIGHT_AREA_BASE_X + FIGHT_AREA_WIDTH / 2 + i;
         p->y = FIGHT_AREA_BASE_Y + FIGHT_AREA_HEIGHT / 2;

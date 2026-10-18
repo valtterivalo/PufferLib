@@ -250,6 +250,36 @@ static void test_server_records(void) {
     puts("server: body off is UNEQUIP_SLOT 4, the orb CLICK_SLOT on its slot, legs back on CLICK_SLOT on the bag piece");
 }
 
+/* Our Dharok kit keeps the account's 99 Defence (118 boosted); a Dharok pool kit fights on 80 (97 boosted) when the script or OppFit plays him, and a net in
+ * seat 1 keeps 99 (riskfight_base_defence). */
+static void test_defence(void) {
+    reset_with(&RISKFIGHT_DHAROK_LOADOUT);
+    assert(state.env.players[0].base_defence == 99 && state.env.players[0].current_defence == 118);
+    const RiskfightKit* kit = NULL;
+    for (int i = 0; i < RISKFIGHT_POOL_COUNT && !kit; i++)
+        if (riskfight_loadout_dharok_pieces(&RISKFIGHT_POOL_LOADOUT[i]) >= RF_DHAROK_KIT_PIECES) kit = &RISKFIGHT_POOL[i];
+    assert(kit);
+    context.opponent_pool = 1;
+    context.keep_opp_kit = 1;
+    context.opp_kit = kit;
+    const int boosted = RF_DHAROK_KIT_BASE_DEFENCE + osrs_super_combat_boost_amount(RF_DHAROK_KIT_BASE_DEFENCE);
+    const struct { int self_play, opp_driven, base; } seats[] = {{0, 0, RF_DHAROK_KIT_BASE_DEFENCE}, {1, 1, RF_DHAROK_KIT_BASE_DEFENCE}, {1, 0, 99}};
+    for (int c = 0; c < 3; c++) {
+        context.self_play = seats[c].self_play;
+        context.opp_driven = seats[c].opp_driven;
+        context.loadout[0] = &RISKFIGHT_DHAROK_LOADOUT;
+        riskfight_reset((EncounterState*)&state, (EncounterContext*)&context, 123);
+        const Player* us = &state.env.players[0];
+        const Player* him = &state.env.players[1];
+        assert(us->base_defence == 99 && us->current_defence == 118);
+        assert(him->base_defence == seats[c].base && him->current_defence == (seats[c].base == 99 ? 118 : boosted));
+    }
+    context.loadout[0] = NULL;
+    context.opponent_pool = context.keep_opp_kit = context.opp_driven = 0;
+    context.opp_kit = NULL;
+    printf("defence: our Dharok kit 99/118, a driven Dharok pool kit %d/%d, a net in seat 1 99/118\n", RF_DHAROK_KIT_BASE_DEFENCE, boosted);
+}
+
 int main(void) {
     riskfight_init_context((EncounterContext*)&context);
     riskfight_finalize_context((EncounterState*)&state, (EncounterContext*)&context);
@@ -257,6 +287,7 @@ int main(void) {
     test_mixed_draw();
     test_strip_and_reequip();
     test_orb_rule();
+    test_defence();
     test_server_records();
     riskfight_destroy_context((EncounterContext*)&context);
     puts("riskfight Dharok kit PASS");
