@@ -101,6 +101,19 @@ static void test_overeat_definition(void) {
         assert(s->overeats[0] == 1);
     }
     destroy();
+    /* A brew at the range is not an overeat: it lowers our stats and with them his Vengeance echo, but the bar is the range the tick began with. */
+    env = make_env(9, 1);
+    s = &env->state;
+    us = &s->env.players[0];
+    s->visible[0].spec_est = 0;
+    range = riskfight_chance_range(s, 0);
+    assert(riskfight_his_veng_up(&s->visible[0]));
+    us->current_hitpoints = range;
+    us->potion_timer = 0;
+    HumanCommand brew_at_range[] = {click(slot_of(us, OSRS_CONSUMABLE_BREW))};
+    tick(brew_at_range, 1);
+    assert(s->drink_brew[0] == 1 && s->tick_range[0] == range && s->overeats[0] == 0);
+    destroy();
 }
 
 /** One tick of what the sim shows of him (riskfight_observe_visible): his cast graphic, his "Taste vengeance!", a hitsplat of `damage` on him (-1: none). */

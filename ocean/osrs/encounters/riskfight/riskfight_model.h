@@ -200,8 +200,9 @@ typedef struct {
     /* A ragger (riskfight_session.h): the pool's ranged kit in seat 1 that swings ragger_limit times and teleports away. */
     int ragger, ragger_limit, ragger_swings;
     /* Over-eating (riskfight_session.h): meals of each side eaten while its hitpoints at the start of the tick were above his chance range, this fight; the hitpoints
-     * each side had when its inputs of the tick began; and the opponent's reaction: annoyed (he has had enough) and the tick he teleports. */
-    int overeats[2], tick_hitpoints[2];
+     * each side had when its inputs of the tick began and his chance range then (the bar of every meal of the tick: a brew it eats lowers our stats, and with them the
+     * echo of his Vengeance, but not the bar it is judged against); and the opponent's reaction: annoyed (he has had enough) and the tick he teleports. */
+    int overeats[2], tick_hitpoints[2], tick_range[2];
     int annoyed, annoyed_leave_tick;
 } RiskfightState;
 typedef struct {

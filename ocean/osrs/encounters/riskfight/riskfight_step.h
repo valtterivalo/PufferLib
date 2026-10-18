@@ -127,10 +127,10 @@ static int riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
                 for (int i = 0; i < 2; i++)
                     s->escape_supplies[agent][i] = osrs_escape_supplies(&s->env.players[i]);
             }
-            /* A meal (food, karambwan, pie or brew) eaten while the hitpoints the tick began with were already above his chance range is an overeat. The tick's
-             * first meal sets the bar for the whole tick: a triple-eat heals as one decision. */
+            /* A meal (food, karambwan, pie or brew) eaten while the hitpoints the tick began with were already above his chance range then is an overeat. The tick's
+             * start sets the bar for every meal of the tick: a triple-eat heals as one decision, and a brew does not shrink the range it is judged against. */
             if (use_result == OSRS_INVENTORY_USE_CONSUMED && (pre_click == OSRS_CLICK_EAT || pre_kind == OSRS_CONSUMABLE_BREW) &&
-                    s->tick_hitpoints[agent] > riskfight_chance_range(s, agent))
+                    s->tick_hitpoints[agent] > s->tick_range[agent])
                 s->overeats[agent]++;
             if (use_result == OSRS_INVENTORY_USE_CONSUMED) {
                 switch (pre_kind) {
@@ -380,6 +380,7 @@ static void riskfight_actor_inputs(RiskfightState* s, RiskfightContext* ctx,
     if (s->env.players[agent].current_hitpoints <= 0 || s->escaped[agent]) return;
     int consumed = 0;
     s->tick_hitpoints[agent] = s->env.players[agent].current_hitpoints;
+    s->tick_range[agent] = riskfight_chance_range(s, agent);
     for (int n = 0; n < queue->count; n++)
         consumed |= riskfight_execute_command(s, ctx, agent, &queue->items[n]);
     s->consume_ticks[agent] += consumed;

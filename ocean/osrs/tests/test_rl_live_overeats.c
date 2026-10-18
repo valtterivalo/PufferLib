@@ -6,7 +6,7 @@
  * Trace part: every request file (default: fixtures/live_swings.requests, plus /tmp/t4.requests when present) is replayed through the server's own path (rt_parse, rt_decide with no
  * net). After each tick an oracle applies the sim's own rule to the same tick: the meals are the bag slots that held a meal and changed (the slotwise reading of
  * scripts/measure_overeats.py, independent of the server's serving totals), they are clicked into a copy of the sim state of the previous request in the order the sim allows
- * (food, brew, karambwan) through riskfight_execute_command with tick_hitpoints = that request's hitpoints, so the sim's own overeat counter is the oracle; the server's count must
+ * (food, brew, karambwan) through riskfight_execute_command with tick_hitpoints and tick_range = that request's hitpoints and range, so the sim's own overeat counter is the oracle; the server's count must
  * equal it per tick and per fight, and the observation's [5] must read it. His Vengeance is in the range while it is up (riskfight_his_veng_up): from the start of a fight
  * until the V lines show it down (a "Taste vengeance!", or a hit landing on him for damage without one), then again after a cast they show (a cast on the tick of a proc
  * while it was down is the cast that proc'd); checked against the V lines read here. */
@@ -188,6 +188,7 @@ static Totals replay(const char* path) {
             int hitpoints_at_start = before.env.players[0].current_hitpoints, range_at_start = riskfight_chance_range(&before, 0);
             sim->overeats[0] = 0;
             sim->tick_hitpoints[0] = hitpoints_at_start;
+            sim->tick_range[0] = range_at_start;
             int slots[3] = {hard_slot, brew_slot, karambwan_slot};
             for (int i = 0; i < 3; i++) {
                 if (slots[i] < 0) continue;
