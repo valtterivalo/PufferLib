@@ -935,3 +935,7 @@ Live candidate a1: anchor hyperparameters, 182.7M steps on 37d061a46. Greedy lad
 - **The live fight priced our death at 2.04 of his kills.** K line: him/us 0.49. We were unskulled, so the 3 most valuable items are kept.
 - **a2 ignores the price there.** On live ticks 169-176, setting the price obs to 0.4, 1.0, 2.04 or 2.5 leaves food use at 0.00-0.09; our HP (4 / 30 / 59) doesn't move it either. Only his bar does.
 - **Reading:** the net learned "he's low, don't eat" from the common case (41-60 HP, where it pays) and didn't separate the rarer ≤ 20 HP / high-price states where it's a losing trade. The sim and observation carry what's needed: our HP, the price, his timer, his spec, his Vengeance. A 182M-step anchor net doesn't use them here, which makes training budget, not fidelity, the next question for this behaviour.
+- **a3** (anchor, 182.7M steps on acd1a9800: meal clock + 1,093-duel refit; ladder 8.64) at live ticks 173-176 (our HP 4, his bar 5):
+  - Food use rises over the 4 ticks: .04, .15, .34, .32 (a2: .00-.05).
+  - It now moves with the price (at tick 175: .14 at price 0.4, .34 at 2.04, .42 at 2.5) and with our HP (≈0 at our HP 30).
+  - It is still below .5, so argmax still skips. The direction is right; the margin isn't there yet.
