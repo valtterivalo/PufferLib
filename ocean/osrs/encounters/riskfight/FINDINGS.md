@@ -282,3 +282,30 @@ Live, s6t0 drank super restores at full prayer with nothing drained (prayer 87-9
 - **Housekeeping:**
   - env_trace goldens refreshed on both platforms (5db4ceb3a);
   - a sweep dir copied from the last one keeps the old `./puffer`. A failed nvcc build then silently ran the old binary once (sweep 13's first launch, killed within seconds); the binary is now deleted before every build.
+- **Dharok kit, sweep 13** (mixed draw, before the opponent fixes below): the nets play the Dharok kit as a VW kit. The per-kit probe (`session_probe ... 4`, 300 sessions, argmax, OppFit 0.5, price table):
+
+  | Run | Dharok net/h | VW net/h | Dharok deaths/session | Orb clicks/fight | Strips/fight | Axe swings/fight |
+  |---|---|---|---|---|---|---|
+  | s13t04 (256x2) | 9.50 | 9.89 | 0.06 | 0 | 0.005 | 0 |
+  | s13t23 (512x1) | 9.00 | 8.93 | 0.17 | 0 | 0.43 | 0 |
+  | s13t36 (512x1) | 9.28 | 9.56 | 0.24 | 0.003 | 0 | 0 |
+
+  **s13t04 installed** (C 85924de10, branch live-s13). Replays of four live sessions pass, and on the four VW live traces it decides like s12t4. Its Dharok play is untested live.
+- **Why no axe:** in that sim the axe earns nothing. A hand rule swinging it below 60 HP got 55 kills per 100 against 54-56 without; the orb raised deaths. The sim's Dharok fights did not match 261 spectated Dharok-vs-Dharok duels:
+
+  | Measure | Real | Sim before | Sim after the fixes |
+  |---|---|---|---|
+  | KOs by axe / Veng reflect / axe+reflect stack | 41 / 10 / 21% | 21 / 16 / 5% | 9.2% by axe |
+  | Hits landed against Dharok armour (axe / VW / tentacle) | 26 / 25 / 29% | 21 / 22 / 23% | 25 / 26 / 27% |
+  | Fighter-ticks at 80+ / 40-79 / <40 HP | 38 / 54 / 8% | 61 / 35 / 4% | 48 / 44 / 8% |
+  | Victim ate in the 2 ticks before a KO | 21% | 2% | |
+
+  Fixes (85924de10), opponent seat only; our seat and nets keep their own levels:
+  - the script swings the axe on its OWN HP (it used ours), at the measured 75/44/15 wields per 1,000 ticks by its bar;
+  - axe-only archetypes now hold a VW;
+  - scripted Dharok opponents fight on defence 80, boosted. Measured hit rates need an effective defence of about 129 against the sim's 155; our live crater opponents look fully defended, so the VW population keeps 99;
+  - their eating follows the spectated rates per HP band (`scripts/measure_dharok_eating.py`), with the real single/combo mix;
+  - with a hidden start bar, they start at the spectated start HP.
+
+  **Still open:** sim Dharok fighters take 1.65 damage per tick against 1.95 real, and the axe KO share is 9% against 41%. The script never stacks an axe hit with a Vengeance reflect or an orb'd low HP the way real KOs do. Sweep 14 trains on this env.
+- **Overeat counting:** most meals the probe counts above the gate are motor-delayed clicks from a chain decided in range. One counting artefact: a brew consumed that tick shrank the range it was judged against. The range is now taken at the tick's start (d747134a6).
