@@ -17,7 +17,7 @@ enum { RF_PRICE_MAX_X10 = 25 };
 typedef enum { RISKFIGHT_HUMAN, RISKFIGHT_HUMAN_HELDOUT, RISKFIGHT_ALL_IN, RISKFIGHT_ESCAPER, RISKFIGHT_OPPONENTS } RiskfightOpponent;
 enum { RISKFIGHT_CONSUME_BANDS = 5, RISKFIGHT_AXE_BANDS = 3, RISKFIGHT_TAB_SUPPLY_BANDS = 3, RISKFIGHT_TAB_SUPPLY_TICKS = 8 };
 /** Per-mille rates of one scripted fighter. Consume bands split own HP at 40, 65, 73 and 90,
- * axe bands split the opponent bar (scale 30) at 12 and 24, tab rates are indexed by
+ * axe rates are greataxe wields per tick without the axe in hand, banded by own HP at 40 and 80 (riskfight_script), tab rates are indexed by
  * [consume ticks this round / 8, capped][own HP below 40]. */
 typedef struct {
     uint16_t consume_pm[RISKFIGHT_CONSUME_BANDS];
@@ -28,7 +28,7 @@ typedef struct {
 } RiskfightProfile;
 #include "riskfight_profiles.h"
 static const RiskfightProfile RISKFIGHT_ALL_IN_PROFILE = {{300, 80, 0, 0, 0}, 1000, 1000, {1000, 1000, 1000}, 1000, 1000, {{0, 0}, {0, 0}, {0, 0}}};
-static const RiskfightProfile RISKFIGHT_ESCAPER_PROFILE = {{500, 300, 200, 100, 100}, 150, 3, {200, 100, 50}, 100, 1000, {{20, 100}, {50, 250}, {100, 500}}};
+static const RiskfightProfile RISKFIGHT_ESCAPER_PROFILE = {{500, 300, 200, 100, 100}, 150, 3, {29, 17, 6}, 100, 1000, {{20, 100}, {50, 250}, {100, 500}}};
 
 /** Profile drawn from an opponent pool by a uniform 32-bit roll. */
 static const RiskfightProfile* riskfight_pick_profile(RiskfightOpponent pool, uint32_t roll) {

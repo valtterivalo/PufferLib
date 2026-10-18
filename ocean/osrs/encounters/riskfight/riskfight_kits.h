@@ -176,9 +176,11 @@ static void riskfight_pool_archetypes(RiskfightKit* out, int* count) {
     riskfight_kit_gear(&k, ITEM_TORVA_FULL_HELM, ITEM_INFERNAL_CAPE, ITEM_AMULET_OF_TORTURE, ITEM_TORVA_PLATEBODY, ITEM_NONE, ITEM_TORVA_PLATELEGS, ITEM_FEROCIOUS_GLOVES, ITEM_PRIMORDIAL_BOOTS, ITEM_ULTOR_RING);
     RF_ARMS(k, ITEM_SOULREAPER_AXE);
     RF_ADD();
+    /* The Dharok's kits fight with the pool's commonest main weapon of its Dharok rows with the axe (Voidwaker 219 fights, tentacle 193) and its defender; the
+     * axe is the switch. */
     k = riskfight_kit_new("dharok's", src, RF_KIT_ARCHETYPE, 4, RF_BAG_MELEE);
-    riskfight_kit_gear(&k, ITEM_DHAROKS_HELM, ITEM_FIRE_CAPE, ITEM_FURY, ITEM_DHAROKS_PLATEBODY, ITEM_NONE, ITEM_DHAROKS_PLATELEGS, ITEM_BARROWS_GLOVES, ITEM_DRAGON_BOOTS, ITEM_RING_OF_RECOIL);
-    RF_ARMS(k, ITEM_DHAROKS_GREATAXE);
+    riskfight_kit_gear(&k, ITEM_DHAROKS_HELM, ITEM_FIRE_CAPE, ITEM_FURY, ITEM_DHAROKS_PLATEBODY, ITEM_AVERNIC_DEFENDER, ITEM_DHAROKS_PLATELEGS, ITEM_BARROWS_GLOVES, ITEM_DRAGON_BOOTS, ITEM_RING_OF_RECOIL);
+    RF_ARMS(k, ITEM_VOIDWAKER, ITEM_DHAROKS_GREATAXE);
     RF_ADD();
     k = riskfight_kit_new("voidwaker mirror", "our own kit (RISKFIGHT_LIVE_LOADOUT), the recorded live fights", RF_KIT_ARCHETYPE, 4, RF_BAG_MELEE);
     riskfight_kit_gear(&k, ITEM_HELM_NEITIZNOT, ITEM_INFERNAL_CAPE, ITEM_AMULET_OF_STRENGTH, ITEM_FIGHTER_TORSO, ITEM_AVERNIC_DEFENDER, ITEM_DRAGON_PLATELEGS, ITEM_BARROWS_GLOVES, ITEM_DRAGON_BOOTS, ITEM_RING_OF_RECOIL);
@@ -226,8 +228,8 @@ static void riskfight_pool_edges(RiskfightKit* out, int* count) {
     RF_ARMS(k, ITEM_WHIP);
     RF_ADD();
     k = riskfight_kit_new("edge: dharok's at 22 hitpoints", src, RF_KIT_EDGE, 1, RF_BAG_MELEE);
-    riskfight_kit_gear(&k, ITEM_DHAROKS_HELM, ITEM_FIRE_CAPE, ITEM_FURY, ITEM_DHAROKS_PLATEBODY, ITEM_NONE, ITEM_DHAROKS_PLATELEGS, ITEM_BARROWS_GLOVES, ITEM_DRAGON_BOOTS, ITEM_RING_OF_RECOIL);
-    RF_ARMS(k, ITEM_DHAROKS_GREATAXE);
+    riskfight_kit_gear(&k, ITEM_DHAROKS_HELM, ITEM_FIRE_CAPE, ITEM_FURY, ITEM_DHAROKS_PLATEBODY, ITEM_AVERNIC_DEFENDER, ITEM_DHAROKS_PLATELEGS, ITEM_BARROWS_GLOVES, ITEM_DRAGON_BOOTS, ITEM_RING_OF_RECOIL);
+    RF_ARMS(k, ITEM_VOIDWAKER, ITEM_DHAROKS_GREATAXE);
     k.hitpoints = 22;
     RF_ADD();
     k = riskfight_kit_new("edge: five-weapon switcher", src, RF_KIT_EDGE, 1, RF_BAG_MELEE);

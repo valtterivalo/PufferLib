@@ -14,8 +14,8 @@ A Dharok fighter is a duel side that, on some tick, wears Dharok's helm, platebo
     and a piece is off. A strip of 1 tick, or one starting on a tick his weapon changes, is a switch artefact (the client drops the body on some weapon switches) and
     is not counted. Reported: starts per eligible fighter-tick (helm, body and legs on), the duration, his bar band at the start, the weapon in hand, and what
     follows: both pieces back on (re-equip) and the greataxe wielded, in which order.
-(b) Greataxe wields: ticks his weapon becomes the axe, per fighter-tick without the axe in hand, by his own bar band and by the opponent's bar band (the profile's
-    axe_pm bands).
+(b) Greataxe wields: ticks his weapon becomes the axe, per fighter-tick without the axe in hand, by his own bar band (the profiles' axe_pm bands, their training
+    mean in mine_riskfight_behavior.py's AXE_WIELD_PM_OWN_BAND) and by the opponent's bar band.
 (c) The orb ("Feel", 10 damage to himself): a single hitsplat of exactly 10 on a tick with no swing of the opponent in the 4 ticks up to it, no Vengeance proc
     from the opponent and no swing of his own in the 2 ticks before (recoil). The same count for every other damage value is the baseline: a spike at 10 is the orb.
     Also reported: axe swings (2066/2067) with a single 10 in the 2 ticks up to them (what mine_riskfight_behavior.py fits orb_axe_pm on), and the share of

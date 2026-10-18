@@ -695,9 +695,6 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     if (actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO]) actions[RF_PRIMARY] = RF_STOP;
     uint8_t generic_spec = plain_spec != ITEM_NONE ? plain_spec : plain_main != ITEM_NONE && osrs_spec_cost(plain_main) > 0 ? plain_main : ITEM_NONE;
     int generic_cost = generic_spec == ITEM_NONE ? 100 : osrs_spec_cost(generic_spec);
-    int axe_band = (opp_bar >= 12) + (opp_bar >= 24);
-    int axe_swing = has_axe && hp < 99 &&
-        riskfight_sample_event(seed, attack_tick, 23, profile->axe_pm[axe_band]);
     int vw_spec = !combo_specs && has_vw && obs[6] >= 0.5f && opponent[0] < 0.65f &&
         riskfight_sample_event(seed, attack_tick, 21, profile->vw_pm);
     int maul_cost = maul_item == ITEM_NONE ? 100 : osrs_spec_cost(maul_item);
@@ -710,6 +707,11 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     int voidwaker_main = plain_main == ITEM_NONE && inventory.main_weapon == ITEM_NONE && (self.weapon == ITEM_VOIDWAKER || inventory.item_slot[ITEM_VOIDWAKER]);
     uint8_t main_weapon = plain_main != ITEM_NONE ? plain_main : !riskfight_is_switch_weapon(self.weapon) ? self.weapon :
         voidwaker_main ? ITEM_VOIDWAKER : inventory.main_weapon != ITEM_NONE ? inventory.main_weapon : self.weapon;
+    /* The greataxe wield: profile->axe_pm is wields per tick without the axe in hand by his own hitpoints (bands at 40 and 80: bar 0-11, 12-23, 24-30, measured
+     * 75 / 44 / 15 per 1,000 by scripts/measure_dharok_play.py (b)). One roll per attack of the main weapon covers that weapon's cycle of ticks. */
+    int main_speed = main_weapon == ITEM_NONE ? 4 : ITEM_DATABASE[main_weapon].attack_speed;
+    int axe_band = (hp >= 40) + (hp >= 80);
+    int axe_swing = has_axe && riskfight_sample_event(seed, attack_tick, 23, profile->axe_pm[axe_band] * main_speed);
     uint8_t weapon = vw_spec ? ITEM_VOIDWAKER : maul_spec ? maul_item : generic_roll ? generic_spec :
         axe_swing ? ITEM_DHAROKS_GREATAXE : main_weapon;
     /* A stripped Dharok fighter puts body and legs back on before he takes the axe: the wield waits for the tick after (its roll is keyed on attack_tick). */

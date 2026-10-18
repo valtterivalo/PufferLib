@@ -232,6 +232,9 @@ class Counts:
 
 EAT_BANDS = [(0, 40), (40, 65), (65, 73), (73, 90), (90, 200)]
 AXE_BAND_UPPER_R30 = [11, 23]
+# Greataxe wields per 1,000 fighter-ticks without the axe in hand, by his OWN bar 0-11, 12-23, 24-30 (scripts/measure_dharok_play.py (b) on spectator.duels).
+# riskfight_script rolls the wield on these bands; a profile's own axe evidence (swing shares by the opponent's bar, below) only sets its level against the pool.
+AXE_WIELD_PM_OWN_BAND = [75, 44, 15]
 TAB_SUPPLY_TICKS, TAB_SUPPLY_BANDS = 8, 3
 TAB_CELLS = [(supply, low) for supply in range(TAB_SUPPLY_BANDS) for low in (False, True)]
 
@@ -375,6 +378,14 @@ def shrunk_profiles(train, players):
     return [[round(1000 * (k + m * p) / (n + m)) for (k, n), (p, m) in zip(e, priors)] for e in players], pooled
 
 
+def axe_wield_profiles(profiles, train_count):
+    """Replace each profile's axe fields (opponent-bar swing shares) by AXE_WIELD_PM_OWN_BAND times its mean share over the training profiles' mean share."""
+    axe = slice(7, 10)
+    pool_mean = sum(sum(p[axe]) for p in profiles[:train_count]) / train_count
+    assert pool_mean > 0
+    return [p[:7] + [round(rate * sum(p[axe]) / pool_mean) for rate in AXE_WIELD_PM_OWN_BAND] + p[10:] for p in profiles]
+
+
 def name_hash(name):
     return hashlib.sha256(name.encode()).hexdigest()
 
@@ -419,7 +430,7 @@ def main():
     names = train_names + heldout_names
     profiles, pool = shrunk_profiles(train, [evidence(players[n]) for n in names])
     tabs, tab_pool = tab_profiles([tab_evidence(players[n]) for n in train_names], [tab_evidence(players[n]) for n in names])
-    profiles = [p + t for p, t in zip(profiles, tabs)]
+    profiles = [p + t for p, t in zip(axe_wield_profiles(profiles, len(train_names)), tabs)]
     with open(args.header, "w") as handle:
         handle.write(header(profiles[:len(train_names)], profiles[len(train_names):], archives))
     print(json.dumps({

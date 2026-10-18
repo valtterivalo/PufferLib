@@ -11,7 +11,8 @@ static void reset(void) {
 }
 
 static const RiskfightProfile QUIET = {{0}, 0, 0, {0}, 0, 0, {{0}}};
-static const RiskfightProfile AXER = {{0}, 0, 0, {1000, 1000, 1000}, 0, 0, {{0}}};
+/* Takes the greataxe on every roll below 80 of his hitpoints, never from 80 up (axe_pm bands his own hitpoints at 40 and 80). */
+static const RiskfightProfile AXER = {{0}, 0, 0, {1000, 1000, 0}, 0, 0, {{0}}};
 static const RiskfightProfile HUNGRY = {{1000, 1000, 1000, 1000, 1000}, 0, 0, {0}, 0, 0, {{0}}};
 
 static void decide(const RiskfightProfile* profile, int* actions) {

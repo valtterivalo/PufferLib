@@ -277,6 +277,8 @@ Live, s6t0 drank super restores at full prayer with nothing drained (prayer 87-9
   - orb: exactly-10 HP drops 441 times against about 3.5 for neighbouring values; 248 per 1,000 axe swings follow an orb; 53-69% of axe fighters carry it.
 
   The script now strips and re-equips at those rates, and 60% of axe kits carry the orb.
+- **The script's axe now rolls on his own hitpoints** (bands at 40 and 80, `axe_pm` = wields per tick without the axe, 75 / 44 / 15 per 1,000 on the training mean). The profiles' old opponent-bar shares only set each profile's level (`axe_wield_profiles` in `mine_riskfight_behavior.py`). The two axe-only Dharok kits now hold a Voidwaker and an avernic defender, the commonest main weapon in the pool's Dharok rows (219 fights against 193 for the tentacle), and the axe is a switch. The 99 HP gate is gone.
+  - On `/tmp/dhsim` (6,000 script fights), the share of axe swings at 75+ HP fell from 66% to 51% (real: 23%). The rest is the HP gap: sim fighters spend 63% of ticks at 80+ HP, real ones 30%.
 - **Housekeeping:**
   - env_trace goldens refreshed on both platforms (5db4ceb3a);
   - a sweep dir copied from the last one keeps the old `./puffer`. A failed nvcc build then silently ran the old binary once (sweep 13's first launch, killed within seconds); the binary is now deleted before every build.
