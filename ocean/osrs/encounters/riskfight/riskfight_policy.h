@@ -729,19 +729,19 @@ static void riskfight_script_consume(const RiskfightObservedSelf* self,
  * 158, 93, 16, 4.4, 0.7 per mille, none from 99 up; single (under 30) / double (anglerfish and karambwan, under 48) / triple (and a brew dose) as
  * RF_DHAROK_MEAL_SINGLE_PM / _DOUBLE_PM, the rest triple. A single is an anglerfish (+7 bar points with no damage between the reads, 316 at 50-79 hitpoints) or a
  * brew dose (+4 and +5, 260; +6, 259, is either): RF_DHAROK_MEAL_BREW_PM of them a brew dose.
- * When he eats is the clock, fitted by scripts/fit_dharok_meals.py on his eat animations, not on bar rises: the spectated bar moves only with a hitsplat (of the
- * eat animations below 60 hitpoints none shows the bar rising before his next hitsplat), so a bar rise times a meal at the next hit, which made the old fit's
- * "meal the tick after his swing" (225-424 per mille) the tick his hit lands, and the bar reads his hitpoints between hits too low. The fit reads his hitpoints
- * between hits as the last hitsplat's bar plus the gap's heal in step with his visible animations, weights each tick by the chance a meal on it shows
- * (RF_MEAL_VISIBLE_*, 0 on his own swing tick), and scales each band so its meals carry the heal the next hitsplats show (the animation is a potion's too:
- * 0.25-0.64 of the animations are meals that heal). By ticks since the other side's swing, 1, 2, 3, 4 up while his weapon is not ready, from its speed on, and
- * before his first swing (too few ticks: the ready rate). Below 60 hitpoints meals are spread over his whole clock (154-301 per mille), not bunched after
- * his swing: real low fighters are healed up before his next hit (p10 of their hitpoints just before it 48-66 by band from 1-20 to 35-50, the next hit
- * killing 0.02-0.04). The old table gave 8-39 and 0.05-0.24 in the sim, this one 15-43 and 0.04-0.15: per-tick tries still leave a few fighters a whole
- * cycle without a meal. RF_DHAROK_MEAL_PM[bar / 6][phase] (RiskfightMealPhase) are the per-tick tries. */
+ * When he eats: scripts/fit_dharok_meals.py, not bar rises. The spectated bar moves only with a hitsplat (of the eat animations below 60 hitpoints none shows the
+ * bar rising before his next hitsplat), so a bar rise times a meal at the next hit: the old fit's "meal the tick after his swing" (225-424 per mille) was the
+ * tick his hit lands. Below 79 hitpoints (bands 0-3) the rate is fitted on current status, which needs no visibility model: after the other side's hit leaves him
+ * in the band, was he healed (bar + damage 8 or more over the read) by the other side's next hit, L ticks of that side's clock later? A constant per-tick rate h
+ * fits P(healed by L) = 1 - (1 - h)^L within its noise at every L (by his next 4-tick swing 0.97 / 0.98 / 0.94 / 0.41 by band, n 38 / 192 / 534 / 529), so
+ * there is no clock shape to keep and no longer memory to add: a fighter low after a hit is all but surely fed before the next one, and the earlier tables
+ * (eat animations weighted by their visibility, 154-301 per mille below 60) left 0.35 of them unfed by a 4-tick swing. That gave the next hit 0.08-0.15 kills
+ * in the sim against 0.03-0.04 spectated. Band 4 (79 up) keeps the animation rates: from there a meal mostly lifts him past 99, which the bar (30 at 99 and up)
+ * hides. By ticks since the other side's swing, 1, 2, 3, 4 up while his weapon is not ready, from its speed on, and before his first swing. RF_DHAROK_MEAL_PM[bar / 6][phase]
+ * (RiskfightMealPhase) are the per-tick tries. */
 typedef enum { RF_MEAL_SINCE_1, RF_MEAL_SINCE_2, RF_MEAL_SINCE_3, RF_MEAL_LATE, RF_MEAL_READY, RF_MEAL_NONE, RF_MEAL_PHASES } RiskfightMealPhase;
 static const uint16_t RF_DHAROK_MEAL_PM[5][RF_MEAL_PHASES] = {
-    {301, 178, 200, 138, 194, 194}, {265, 192, 269, 196, 179, 179}, {269, 174, 299, 154, 184, 184}, {58, 39, 57, 60, 35, 35}, {22, 20, 25, 37, 10, 10},
+    {589, 589, 589, 589, 589, 589}, {572, 572, 572, 572, 572, 572}, {468, 468, 468, 468, 468, 468}, {115, 115, 115, 115, 115, 115}, {22, 20, 25, 37, 10, 10},
 };
 static const uint16_t RF_DHAROK_MEAL_SINGLE_PM[10] = {150, 130, 100, 170, 310, 790, 970, 970, 920, 1000};
 static const uint16_t RF_DHAROK_MEAL_DOUBLE_PM[10] = {40, 140, 280, 540, 650, 210, 20, 30, 80, 0};

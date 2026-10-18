@@ -522,3 +522,28 @@ Measured on the 261 spectated Dharok v Dharok duels against 6000 sim fights (`ri
   - **Victim HP before a KO:** 46 (carried bar) is a stale-bar lower bound. 15 of 63 victims show an eat animation after their last hitsplat. Victims read within 2 ticks of the KO give a median of 50 (n 25). KO hitsplats exceed the last read in 49 of 63 (hitsplats are not capped at HP), so the KO tick cannot give his HP.
   - **Time in HP bands:** < 40 / 40-79 / 80+ is 0.050 / 0.631 / 0.319 with meals placed between hitsplats. The carried bar gave 0.089 / 0.637 / 0.273, so real fighters spend about half as much time below 40 as the bar said.
 - Tests: test_riskfight_mix, _dharok_kit, _mechanics, _session, _dharok_script and _scripts pass. The env_trace goldens are not refreshed.
+
+## 2026-10-18 night, later: the Dharok meal rate below 79 HP refitted on current status
+
+- **The gap was the level, not memory.** Current status (`scripts/fit_dharok_meals.py`): after the other side's hit leaves him in a band, is he healed (next hitsplat's bar + damage 8+ over the read) by that side's next hit, L ticks of its clock later? It needs no visibility model. Spectated, by his next 4-tick swing:
+
+  | Band | Healed | n | Fitted h (per mille per tick) |
+  |---|---|---|---|
+  | 0-20 | 0.97 | 38 | 589 |
+  | 20-40 | 0.98 | 192 | 572 |
+  | 40-60 | 0.94 | 534 | 468 |
+  | 60-79 | 0.41 | 529 | 115 |
+
+  A constant per-tick rate h fits P(healed by L) = 1 - (1 - h)^L within noise at every L. Hazards by ticks since his last hit and since entering the band are both flat within noise. The previous animation-weighted table (154-301 per mille) left about 0.35 unfed by his next 4-tick swing. Bands 0-3 now take h on every phase. Band 4 keeps the animation rates, since the bar hides heals past 99.
+- **Sim, both `dh_eat` seats on the Dharok script** (6,000 fights; the Dharok meal rule is now forced on seat 0 too). HP just before the opponent's next hit:
+
+  | Band | Real p10 / < 30 / next hit kills | Sim |
+  |---|---|---|
+  | 1-20 | 48 / 0.07 / 0.043 | 50 / 0.03 / 0.035 |
+  | 20-35 | 56 / 0.02 / 0.032 | 55 / 0.01 / 0.018 |
+  | 35-50 | 66 / 0.00 / 0.023 | 60 / 0.00 / 0.012 |
+
+  - **Healed by a 4-tick swing:** sim 0.96 / 0.93 / 0.88 (bands 0-20 / 20-40 / 40-60).
+  - **Meal clock**, ticks 0..7 since his swing: sim .18, .29, .30, .17, .04, .02, .01, 0; real (visible animations) 0, .16, .19, .29, .12, .08, .09, .06.
+  - **Knockouts:** KO share 0.16 against real 0.24 (63 of 261); KO by axe 0.33 against 0.43. The sim now slightly under-kills low fighters.
+- Six tests pass (mix, dharok_kit, mechanics, session, dharok_script, scripts). The env_trace goldens are not refreshed.

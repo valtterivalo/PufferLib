@@ -24,9 +24,17 @@ and his hitpoints between hits are the last read plus meals not yet shown. This 
   rates from the animations give the shape over the phases; each band is scaled so its meals carry the heal the gaps show: a gap's heal H counts H / size meals,
   size the mean of the script's meal sizes at that hitpoints (RF_DHAROK_MEAL_SINGLE_PM / _DOUBLE_PM: single 22, double 40, triple 56), split over the gap's
   ticks in proportion to their animation rates. NONE cells under NONE_MIN ticks take the band's READY rate.
+
+The rates of bands 0-3 (below 79 hitpoints) come from the heal the next hitsplat shows instead, a current-status fit that needs no visibility model: after a hit
+of the other side leaves him in a band (a fresh read, the swing animation of the other side on that tick or the one before), his next hit lands L ticks of
+the other side's clock later (swing to swing); he was healed by then when bar + damage on that hit is 8 or more over the read. With a meal per tick at rate h,
+P(healed by L) = 1 - (1 - h)^L; h is the maximum likelihood fit per band (a grid of 1/1000), the same on every phase. The animation rates put too few meals
+in the first ticks after his hit (by his next 4-tick swing 0.65 healed in the sim against 0.92-0.98 spectated), and the constant hazard fits the spectated
+P(healed by L) within its noise (printed). Band 4 keeps the animation rates: from 80 up a meal mostly lifts him past 99, which the bar (30 at 99 and up) hides.
 """
 import argparse
 import collections
+import math
 import os
 import sys
 
@@ -40,6 +48,7 @@ SWING_SPEED = {1658: 4, 11275: 4, 7045: 6, 426: 4, 10172: 5, 10173: 5, 440: 7, 2
 INSTANT_ANIMS = {1667}
 PHASES = ("1", "2", "3", "late", "ready", "none")
 BANDS = 5
+STATUS_BANDS, STATUS_L, HEALED_MIN = 4, 11, 8  # bands fitted on current status; L cap; heal that counts as a meal
 NONE_MIN = 100  # ticks under which the NONE cell takes the band's READY rate
 VISIBLE_SWING, VISIBLE_HIT, VISIBLE_CARRY, VISIBLE_QUIET = 0.0, 0.49, 0.45, 0.89
 SINGLE_PM = [150, 130, 100, 170, 310, 790, 970, 970, 920, 1000]  # riskfight_policy.h RF_DHAROK_MEAL_SINGLE_PM / _DOUBLE_PM, by hitpoints / 10
@@ -123,7 +132,44 @@ def main():
     for b in range(BANDS):
         cells = [f"{PHASES[p]} {1000 * rate.get((b, p), 0):.0f} ({shown[(b, p)]}/{count[(b, p)]})" for p in range(len(PHASES))]
         print(f"| bar {6 * b}-{6 * b + 5} | hp {6 * b * 99 / 30:.0f}-{(6 * b + 6) * 99 / 30:.0f} | " + " | ".join(cells) + " |")
+    status = current_status(parse(args.duels))
+    for b in range(STATUS_BANDS):
+        rows = [(L, status[(b, L)]) for L in range(1, STATUS_L + 1) if status[(b, L)][1]]
+        h = max(range(1, 1000), key=lambda i: status_loglik(rows, i / 1000)) / 1000
+        print(f"band {b} current status n {sum(n for _, (_, n) in rows)}, h {1000 * h:.0f} per mille; P(healed by L) seen / fitted: " +
+              " ".join(f"{L}: {y / n:.2f} / {1 - (1 - h) ** L:.2f} ({n})" for L, (y, n) in rows if L <= 7))
+        for p in range(len(PHASES)): rate[(b, p)] = h
+    print("RF_DHAROK_MEAL_PM:")
     print("{" + ", ".join("{" + ", ".join(f"{round(1000 * rate.get((b, p), 0))}" for p in range(len(PHASES))) + "}" for b in range(BANDS)) + "}")
+
+
+def status_loglik(rows, h):
+    return sum(y * math.log(1 - (1 - h) ** L) + (n - y) * L * math.log(1 - h) for L, (y, n) in rows)
+
+
+def current_status(duels):
+    """(band, L) -> [healed, gaps]: see the docstring. L is capped at STATUS_L."""
+    out = collections.defaultdict(lambda: [0, 0])
+    for d in duels:
+        if not (Side(d, 0).is_dharok() and Side(d, 1).is_dharok()):
+            continue
+        rows_all = d["rows"]
+        for side in (0, 1):
+            mine, his = [r[2 + side] for r in rows_all], [r[3 - side] for r in rows_all]
+            swing = [any(x in SWING_ANIMS for x in anims(r[ANIMS])) for r in his]
+            fresh = [t for t in range(1, len(mine)) if int(mine[t][NHIT]) > 0 and int(mine[t][BAR]) >= 0 and not rows_all[t][1]]
+            for a, b in zip(fresh, fresh[1:]):
+                if mine[a][11] == "1" or int(mine[a][DMG]) <= 0: continue
+                sa = a if swing[a] else a - 1 if swing[a - 1] else None
+                sb = b if swing[b] else b - 1 if swing[b - 1] else None
+                hp = int(mine[a][BAR]) * 99 / 30
+                if sa is None or sb is None or sb <= sa or hp <= 0: continue
+                band = min(BANDS - 1, int(hp * 30 / 99) // 6)
+                if band >= STATUS_BANDS: continue
+                cell = out[(band, min(sb - sa, STATUS_L))]
+                cell[0] += int(mine[b][BAR]) * 99 / 30 + int(mine[b][DMG]) - hp >= HEALED_MIN
+                cell[1] += 1
+    return out
 
 
 if __name__ == "__main__":
