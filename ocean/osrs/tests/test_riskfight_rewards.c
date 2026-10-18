@@ -5,7 +5,7 @@
 static Env* env;
 static float observations[2][RF_OBS_SIZE];
 static float actions[2][RF_HEADS];
-static float rewards[2], terminals[2];
+static float rewards[2], terminals[2], resets[2];
 static unsigned char masks[2][RF_MASK_SIZE];
 
 static void reset(float damage_coeff) {
@@ -248,7 +248,7 @@ int main(void) {
     assert(env->context.damage_reward_coeff == 0);
     for (int i = 0; i < 2; i++) env->agents[i] = (Agent){
         .observations = observations[i], .actions = actions[i], .rewards = &rewards[i],
-        .terminals = &terminals[i], .action_mask = masks[i], .policy = i};
+        .terminals = &terminals[i], .resets = &resets[i], .action_mask = masks[i], .policy = i};
     test_default_reward_and_tick_reset();
     test_orb_and_passive_excluded();
     test_terminal_shaping_keeps_raw_scores();

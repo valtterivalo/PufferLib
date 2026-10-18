@@ -7,7 +7,7 @@
 static Env* env;
 static float observations[2][RF_OBS_SIZE];
 static float actions[2][RF_HEADS];
-static float rewards[2], terminals[2];
+static float rewards[2], terminals[2], resets[2];
 static unsigned char masks[2][RF_MASK_SIZE];
 
 static Env* make_pool_env(int session_ticks, double price, unsigned rng, int pool) {
@@ -20,7 +20,7 @@ static Env* make_pool_env(int session_ticks, double price, unsigned rng, int poo
     puf_init(e, &kwargs);
     for (int i = 0; i < 2; i++) e->agents[i] = (Agent){
         .observations = observations[i], .actions = actions[i], .rewards = &rewards[i],
-        .terminals = &terminals[i], .action_mask = masks[i], .policy = i};
+        .terminals = &terminals[i], .resets = &resets[i], .action_mask = masks[i], .policy = i};
     puf_reset(e);
     e->training.rep = 0; /* a session that starts with a reputation is tested below */
     riskfight_native_observe(e);
@@ -283,7 +283,7 @@ static void test_rep_keys_reach_session_rules(void) {
     puf_init(env, &kwargs);
     for (int i = 0; i < 2; i++) env->agents[i] = (Agent){
         .observations = observations[i], .actions = actions[i], .rewards = &rewards[i],
-        .terminals = &terminals[i], .action_mask = masks[i], .policy = i};
+        .terminals = &terminals[i], .resets = &resets[i], .action_mask = masks[i], .policy = i};
     puf_reset(env);
     const RiskfightRepRules* rules = &env->training.config.rep;
     assert(rules->search == 2.0f && rules->rag == 0.3f);
@@ -475,12 +475,17 @@ static void test_session_of_n_ticks_ends(void) {
     destroy();
 }
 
-/* A wait is real ticks: a 256-tick restock is 256 steps of zero reward, and a session takes as many steps as it has ticks. */
+/* A wait is real ticks: a 256-tick restock is 256 steps of zero reward, and a session takes as many steps as it has ticks. The state reset (the trainer zeroes
+ * the net's recurrent state, no terminal) is set exactly on the step whose observation is a fight's first: never mid-fight, never in a wait. */
 static void test_waits_are_steps(void) {
     env = make_env(6000, 1, 51);
+    assert(resets[0] == 1 && resets[1] == 1); /* the session's first fight */
+    puf_step(env);
+    assert(resets[0] == 0 && resets[1] == 0 && terminals[0] == 0 && env->wait_left == 0);
     actions[0][RF_PRIMARY] = RF_TELEPORT;
     puf_step(env);
     assert(env->wait_left > 0);
+    assert(resets[0] == 0 && resets[1] == 0);
     env->wait_left = env->wait_transition.delay = 256;
     int before = env->session_elapsed, steps = 0;
     memset(actions, 0, sizeof(actions));
@@ -488,6 +493,7 @@ static void test_waits_are_steps(void) {
         puf_step(env);
         steps++;
         assert(rewards[0] == 0 && rewards[1] == 0 && terminals[0] == 0 && terminals[1] == 0);
+        assert(resets[0] == (env->wait_left == 0) && resets[1] == resets[0]); /* the next fight's first observation */
         assert(env->session_elapsed == before + steps);
         assert(env->wait_left == 0 ? observations[0][RF_SESSION_START + 2] == 0 : observations[0][RF_SESSION_START + 2] == 1);
     }
@@ -497,19 +503,26 @@ static void test_waits_are_steps(void) {
     /* A whole session of teleports and waits: one step per tick, the last of them terminal. */
     const int budget = 3000;
     env = make_env(budget, 0, 52);
-    int total = 0;
+    int total = 0, fight_resets = 0;
     float reward_in_waits = 0;
     while (!terminals[0]) {
         actions[0][RF_PRIMARY] = RF_TELEPORT;
-        int waiting = env->wait_left > 0;
+        int waiting = env->wait_left > 0, fights = env->session_fights;
         puf_step(env);
         total++;
         if (waiting) reward_in_waits += fabsf(rewards[0]) + fabsf(rewards[1]);
+        if (!terminals[0]) {
+            fight_resets += resets[0] == 1;
+            assert(resets[0] == (waiting || env->session_fights != fights) * (env->wait_left == 0)); /* a reset only where a wait or a fight ended into a fresh fight */
+        }
         assert(total <= budget);
     }
+    assert(resets[0] == 1 && resets[1] == 1); /* the terminal step's observation is the next session's first fight */
+    /* every fight after the first began with a reset; the last one may still have been running when the budget ran out */
+    assert(fight_resets == env->log.rounds || fight_resets == env->log.rounds - 1);
     assert(total == budget && reward_in_waits == 0 && env->log.n == 1);
     assert(env->log.wait_ticks > 0 && env->log.wait_ticks + env->log.episode_length >= budget - 1);
-    printf("waits: a session of %d ticks is %d steps, %.0f of them waiting between %.0f fights\n", budget, total, env->log.wait_ticks, env->log.rounds);
+    printf("waits: a session of %d ticks is %d steps, %.0f of them waiting between %.0f fights, %d fight-start resets\n", budget, total, env->log.wait_ticks, env->log.rounds, fight_resets);
     destroy();
 }
 

@@ -26,6 +26,10 @@ typedef struct Agent {
     float* actions;
     float* rewards;
     float* terminals;
+    // Recurrent-state reset without a terminal: the trainer zeroes this agent's
+    // policy state before encoding the observation written with resets = 1;
+    // GAE still bootstraps across it. Envs that never write it leave it 0.
+    float* resets;
     unsigned char* action_mask;
     int policy;
 } Agent;

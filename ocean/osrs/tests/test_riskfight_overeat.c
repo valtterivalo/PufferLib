@@ -7,7 +7,7 @@
 #include <stdio.h>
 
 static Env* env;
-static float observations[RF_OBS_SIZE], actions[RF_HEADS], rewards, terminals;
+static float observations[RF_OBS_SIZE], actions[RF_HEADS], rewards, terminals, resets;
 static unsigned char masks[RF_MASK_SIZE];
 
 static Env* make_env(unsigned rng, int live_loadout) {
@@ -18,7 +18,7 @@ static Env* make_env(unsigned rng, int live_loadout) {
     Env* e = (Env*)calloc(1, sizeof(*e));
     e->rng = rng;
     puf_init(e, &kwargs);
-    e->agents[0] = (Agent){.observations = observations, .actions = actions, .rewards = &rewards, .terminals = &terminals, .action_mask = masks, .policy = 0};
+    e->agents[0] = (Agent){.observations = observations, .actions = actions, .rewards = &rewards, .terminals = &terminals, .resets = &resets, .action_mask = masks, .policy = 0};
     puf_reset(e);
     memset(actions, 0, sizeof(actions));
     return e;

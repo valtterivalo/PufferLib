@@ -21,6 +21,7 @@ typedef struct {
     float* actions;
     float* rewards;
     float* terminals;
+    float* resets;
     unsigned char* mask;
     uint32_t* action_rng; /* one xorshift stream per env, for the random policy */
 } HarnessVec;
@@ -53,6 +54,7 @@ static void harness_vec_create_variant(HarnessVec* v, int count, int rng_base, i
     v->actions = calloc((size_t)v->agents * RF_HEADS, sizeof(float));
     v->rewards = calloc(v->agents, sizeof(float));
     v->terminals = calloc(v->agents, sizeof(float));
+    v->resets = calloc(v->agents, sizeof(float));
     v->mask = malloc((size_t)v->agents * RF_MASK_SIZE);
     memset(v->mask, 1, (size_t)v->agents * RF_MASK_SIZE);
     v->action_rng = calloc(count, sizeof(uint32_t));
@@ -67,6 +69,7 @@ static void harness_vec_create_variant(HarnessVec* v, int count, int rng_base, i
             a->actions = v->actions + (size_t)phys * RF_HEADS;
             a->rewards = v->rewards + phys;
             a->terminals = v->terminals + phys;
+            a->resets = v->resets + phys;
             a->action_mask = v->mask + (size_t)phys * RF_MASK_SIZE;
         }
     }
@@ -77,7 +80,7 @@ static void harness_vec_create(HarnessVec* v, int count, int rng_base) { harness
 
 static void harness_vec_destroy(HarnessVec* v) {
     for (int i = 0; i < v->count; i++) puf_close(&v->envs[i]);
-    free(v->envs); free(v->obs); free(v->actions); free(v->rewards); free(v->terminals); free(v->mask); free(v->action_rng);
+    free(v->envs); free(v->obs); free(v->actions); free(v->rewards); free(v->terminals); free(v->resets); free(v->mask); free(v->action_rng);
 }
 
 typedef enum { POLICY_RANDOM, POLICY_SCRIPT, POLICY_MIXED } HarnessPolicy;

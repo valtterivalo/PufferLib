@@ -10,14 +10,14 @@ int main(void) {
         {.key = "session_ticks", .value = 100000}, {.key = "curveball_probability", .value = 0}};
     Dict kwargs = {.items = items, .size = sizeof(items) / sizeof(*items)};
     env = (Env*)calloc(1, sizeof(*env));
-    float obs[2][RF_OBS_SIZE], actions[2][RF_HEADS] = {{0}}, rewards[2], terminals[2];
+    float obs[2][RF_OBS_SIZE], actions[2][RF_HEADS] = {{0}}, rewards[2], terminals[2], resets[2];
     unsigned char masks[2][RF_MASK_SIZE];
     env->rng = 123;
     puf_init(env, &kwargs);
     assert(env->num_agents == 2 && env->agents[0].policy == 0 && env->agents[1].policy == 1);
     for (int i = 0; i < 2; i++) env->agents[i] = (Agent){
         .observations = obs[i], .actions = actions[i], .rewards = &rewards[i],
-        .terminals = &terminals[i], .action_mask = masks[i], .policy = i};
+        .terminals = &terminals[i], .resets = &resets[i], .action_mask = masks[i], .policy = i};
     puf_reset(env);
     actions[0][RF_PRIMARY] = RF_TELEPORT;
     puf_step(env);
@@ -85,7 +85,7 @@ int main(void) {
     puf_init(env, &kwargs);
     assert(env->num_agents == 1 && env->agents[0].policy == 0);
     env->agents[0] = (Agent){.observations = obs[0], .actions = actions[0],
-        .rewards = &rewards[0], .terminals = &terminals[0], .action_mask = masks[0]};
+        .rewards = &rewards[0], .terminals = &terminals[0], .resets = &resets[0], .action_mask = masks[0]};
     for (int bot = 0; bot < RISKFIGHT_OPPONENTS; bot++) {
         puf_set_bot_policy(env, bot);
         puf_reset(env);
@@ -102,7 +102,7 @@ int main(void) {
     puf_init(env, &kwargs);
     for (int i = 0; i < 2; i++) env->agents[i] = (Agent){
         .observations = obs[i], .actions = actions[i], .rewards = &rewards[i],
-        .terminals = &terminals[i], .action_mask = masks[i], .policy = i};
+        .terminals = &terminals[i], .resets = &resets[i], .action_mask = masks[i], .policy = i};
     puf_reset(env);
     memset(actions, 0, sizeof(actions));
     /* Three teleports in one session: our side is refilled every time, the session never ends on them. */

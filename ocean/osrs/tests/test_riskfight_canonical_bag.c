@@ -7,7 +7,7 @@
 
 static float observations[2][RF_OBS_SIZE];
 static float actions[2][RF_HEADS];
-static float rewards[2], terminals[2];
+static float rewards[2], terminals[2], resets[2];
 static unsigned char masks[2][RF_MASK_SIZE];
 
 /** The content code of the slot every bag action of `actions` (net entries) clicks, through riskfight_bag_to_physical and riskfight_policy_commands as riskfight_step
@@ -45,7 +45,7 @@ int main(void) {
         e->rng = seed;
         puf_init(e, &kwargs);
         for (int i = 0; i < 2; i++) e->agents[i] = (Agent){
-            .observations = observations[i], .actions = actions[i], .rewards = &rewards[i], .terminals = &terminals[i], .action_mask = masks[i], .policy = i};
+            .observations = observations[i], .actions = actions[i], .rewards = &rewards[i], .terminals = &terminals[i], .resets = &resets[i], .action_mask = masks[i], .policy = i};
         puf_reset(e);
         RiskfightState* s = &e->state;
         OsrsInventoryCell* cells = s->env.players[0].inventory_cells;

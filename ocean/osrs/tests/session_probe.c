@@ -35,9 +35,9 @@ int main(int argc, char** argv) {
     env->rng = seed;
     puf_init(env, &kwargs);
     RfNet* net = rf_net_load(argv[1], RF_OBS_SIZE, atoi(argv[2]), atoi(argv[3]), RF_ACTION_DIMS, RF_HEADS);
-    static float obs[RF_OBS_SIZE], actions[RF_HEADS], reward, terminal;
+    static float obs[RF_OBS_SIZE], actions[RF_HEADS], reward, terminal, reset;
     static unsigned char mask[RF_MASK_SIZE];
-    env->agents[0] = (Agent){.observations = obs, .actions = actions, .rewards = &reward, .terminals = &terminal, .action_mask = mask, .policy = 0};
+    env->agents[0] = (Agent){.observations = obs, .actions = actions, .rewards = &reward, .terminals = &terminal, .resets = &reset, .action_mask = mask, .policy = 0};
     uint32_t rng = 0x9e3779b9u ^ seed;
     puf_reset(env);
     rf_net_reset(net);
@@ -102,7 +102,7 @@ int main(int argc, char** argv) {
             for (size_t i = 0; i < sizeof(Log) / sizeof(float); i++) dst[i] += now[i] - then[i];
             session_start = env->log;
         }
-        if (terminal) rf_net_reset(net);
+        if (terminal || reset) rf_net_reset(net); /* every fight starts from a zeroed state, as live and in training */
     }
     Dict out = {0};
     puf_log(&env->log, &out);

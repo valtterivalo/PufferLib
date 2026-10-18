@@ -11,7 +11,7 @@
 static Env* env;
 static float observations[2][RF_OBS_SIZE];
 static float actions[2][RF_HEADS];
-static float rewards[2], terminals[2];
+static float rewards[2], terminals[2], resets[2];
 static unsigned char masks[2][RF_MASK_SIZE];
 
 static Env* make_env(int self_play, unsigned rng) {
@@ -24,7 +24,7 @@ static Env* make_env(int self_play, unsigned rng) {
     puf_init(e, &kwargs);
     for (int i = 0; i < e->num_agents; i++) e->agents[i] = (Agent){
         .observations = observations[i], .actions = actions[i], .rewards = &rewards[i],
-        .terminals = &terminals[i], .action_mask = masks[i], .policy = i};
+        .terminals = &terminals[i], .resets = &resets[i], .action_mask = masks[i], .policy = i};
     puf_reset(e);
     e->training.rep = 0;
     riskfight_native_observe(e);

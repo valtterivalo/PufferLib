@@ -235,6 +235,7 @@ void puf_reset(Env* env) {
     for (int i = 0; i < env->num_agents; i++) {
         env->agents[i].rewards[0] = 0;
         env->agents[i].terminals[0] = 0;
+        env->agents[i].resets[0] = 1;
     }
 }
 /** Adds one finished fight's tallies to the log; the session totals (n, rounds, net_stake) are added when the session ends. */
@@ -325,7 +326,7 @@ static void riskfight_native_next_fight(Env* env) {
     riskfight_native_opponent_hooks(env, !t->rematch);
     riskfight_native_fight_begins(env);
 }
-/** The end of a step of either kind: the terminals, and the session's totals and a fresh session when its budget is spent. */
+/** The end of a step of either kind: the terminals, the state resets, and the session's totals and a fresh session when its budget is spent. */
 static void riskfight_native_finish_step(Env* env, int wait_step) {
     env->training.rep = riskfight_rep_decay(&env->training.config.rep, env->training.rep);
     const int budget = env->training.config.session_ticks;
@@ -346,6 +347,9 @@ static void riskfight_native_finish_step(Env* env, int wait_step) {
     }
     if (wait_step && !session_over && env->wait_left > 0 && env->wait_obs_valid) riskfight_native_observe_wait_tick(env);
     else riskfight_native_observe(env);
+    /* A fight began on this step (next fight or new session) when none of its steps has run: the net meets it with a zeroed state, as the live server
+     * (rt_fight_reset) does, while the session's value still bootstraps across the fight. */
+    for (int i = 0; i < env->num_agents; i++) env->agents[i].resets[0] = env->wait_left == 0 && env->fight_steps == 0;
 }
 
 void puf_step(Env* env) {
@@ -354,6 +358,7 @@ void puf_step(Env* env) {
         for (int i = 0; i < env->num_agents; i++) {
             env->agents[i].rewards[0] = 0;
             env->agents[i].terminals[0] = 1;
+            env->agents[i].resets[0] = 0;
         }
         riskfight_native_observe(env);
         return;
