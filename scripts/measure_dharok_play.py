@@ -21,6 +21,10 @@ A Dharok fighter is a duel side that, on some tick, wears Dharok's helm, platebo
     Also reported: axe swings (2066/2067) with a single 10 in the 2 ticks up to them (what mine_riskfight_behavior.py fits orb_axe_pm on), and the share of
     Dharok fighters with >= LONG_WIELDS axe wields carrying an orb, bounded below by an unexplained 10 and above by any single 10: its midpoint is the pool's
     RF_KIT_ORB_PM (riskfight_kits.h). The strip numbers are riskfight_policy.h's RF_STRIP_* constants.
+(d) Greataxe swings: of a Dharok fighter's swings without a special, the share with the axe anim, by his own bar band, his Vengeance up (a cast seen and no
+    proc of his since) and the opponent's bar the tick before (riskfight_policy.h's RF_AXE_SWING_PM). Then the knockouts of the Dharok v Dharok duels: the
+    killer's state at his axe swing (Vengeance up, an orb drop or a strip in the 5 ticks up to it, the opponent swinging the tick before, both bars) against
+    all axe swings and all Dharok ticks, and the axe swings carrying his own reflect on the knockout.
 """
 import argparse
 import collections
@@ -36,12 +40,13 @@ DHAROK_HELM = {4716, 4880, 4881, 4882, 4883}
 DHAROK_BODY = {4720, 4892, 4893, 4894, 4895}
 DHAROK_LEGS = {4722, 4898, 4899, 4900, 4901}
 HEAD, WEAPON, BODY, LEGS = 0, 3, 4, 7
-BAR, DMG, NHIT, VENG_PROC, ANIMS = 0, 5, 6, 8, 12
+BAR, SPEC, DMG, NHIT, VENG_CAST, VENG_PROC, DEAD, ANIMS = 0, 4, 5, 6, 7, 8, 11, 12
 FOLLOW = 20       # ticks after a strip's start in which its outcome is read
 OPP_SWING_WINDOW = 4
 OWN_SWING_WINDOW = 2
 LONG_WIELDS = 8   # axe wields that make a fighter's orb share readable (the share of fighters showing the orb levels off from about here)
 DH_SWINGS = {2066, 2067}
+AXE_POOL_MIN = 60  # swings under which an RF_AXE_SWING_PM cell takes its Vengeance pair's pooled share
 
 
 def die(message):
@@ -108,6 +113,12 @@ class Side:
         self.axe_swing = [r[ANIMS] != "-" and any(int(a) in DH_SWINGS for a in r[ANIMS].split("|")) for r in mine]
         self.dmg, self.nhit = [int(r[DMG]) for r in mine], [int(r[NHIT]) for r in mine]
         self.opp_veng_proc = [int(r[VENG_PROC]) for r in his]
+        self.veng_proc, self.special = [int(r[VENG_PROC]) for r in mine], [r[SPEC] != "-" for r in mine]
+        self.veng_up, up = [], 0  # his Vengeance: a cast seen, no proc of his since
+        for r in mine:
+            up = up or r[VENG_CAST] != "0"
+            self.veng_up.append(up)
+            if int(r[VENG_PROC]): up = 0
 
     def worn(self, i, slot, ids):
         return self.kit[i] is not None and self.kit[i][slot] in ids
@@ -274,7 +285,90 @@ def measure(duels):
                    f"({lower:.0f} per mille, a lower bound: an orb under the opponent's swing hides), {any_ten} took any single 10 "
                    f"({upper:.0f} per mille, an upper bound: real hits of 10 count); pool orb share, the midpoint to 50: "
                    f"{50 * round((lower + upper) / 2 / 50)} per mille")
+    out.append("")
+    out.append(measure_axe_swings(duels, dh))
     return "\n".join(out)
+
+
+def opp_band(bar):
+    return (bar >= 10) + (bar >= 20)
+
+
+def measure_axe_swings(duels, dh):
+    """(d), see the module docstring."""
+    out = []
+    swings, axes = collections.Counter(), collections.Counter()
+    for s in dh:
+        for i in range(1, len(s.ticks)):
+            if s.third[i] or not s.swing[i] or s.special[i]: continue
+            key = (band(s.bar[i]), s.veng_up[i], opp_band(s.opp_bar[i - 1]))
+            swings[key] += 1
+            axes[key] += s.axe_swing[i]
+    out.append(f"(d) greataxe share of a Dharok fighter's swings without a special ({sum(swings.values())} swings), per mille (swings), by his own bar band, "
+               f"his Vengeance up (cast seen, not yet proc'd) and the opponent's bar the tick before (<10, 10-19, 20+); a cell under {AXE_POOL_MIN} swings "
+               "pools with its Vengeance pair (riskfight_policy.h's RF_AXE_SWING_PM)")
+    rows = []
+    for b in range(3):
+        for up in (0, 1):
+            cells = []
+            for o in range(3):
+                n, a = swings[(b, up, o)], axes[(b, up, o)]
+                if n < AXE_POOL_MIN or swings[(b, 1 - up, o)] < AXE_POOL_MIN:
+                    n, a = swings[(b, 0, o)] + swings[(b, 1, o)], axes[(b, 0, o)] + axes[(b, 1, o)]
+                cells.append(f"{pm(a, n)} ({swings[(b, up, o)]})")
+            rows.append([BAND_NAMES[b], up] + cells)
+    out.append(table(["his bar", "veng up", "opp bar <10", "opp bar 10-19", "opp bar 20+"], rows))
+    for name, axis in (("his bar", 0), ("veng up", 1), ("opp bar", 2)):
+        marg = [(sum(axes[k] for k in swings if k[axis] == v), sum(swings[k] for k in swings if k[axis] == v)) for v in range(3 if axis != 1 else 2)]
+        out.append(f"by {name} alone: " + ", ".join(f"{pm(a, n)} ({n})" for a, n in marg))
+    # The knockouts of the Dharok v Dharok duels: the killer's state at his axe swing against all axe swings and all Dharok ticks.
+    ko, stack, axe_all, base = collections.Counter(), 0, collections.Counter(), collections.Counter()
+    kos = 0
+    for d in duels:
+        sides = [Side(d, 0), Side(d, 1)]
+        if not (sides[0].is_dharok() and sides[1].is_dharok()): continue
+        rows_ = d["rows"]
+        for s in sides:
+            for i in range(1, len(s.ticks)):
+                if s.third[i]: continue
+                f = setup(s, i)
+                base["ticks"] += 1
+                for k in ("veng", "orb", "stripped", "opp swung"): base[k] += f[k]
+                if s.axe_swing[i]:
+                    axe_all["n"] += 1
+                    for k in f: axe_all[k] += f[k]
+        dead = [(i, v) for i in range(len(rows_)) for v in (0, 1) if rows_[i][2 + v][DEAD] == "1"]
+        if not dead: continue
+        i, v = dead[0]
+        killer, victim = sides[1 - v], sides[v]
+        t = next((j for j in range(i, max(-1, i - 3), -1) if victim.dmg[j] > 0), None)
+        if t is None: continue
+        kos += 1
+        reflect = killer.veng_proc[t] or (t > 0 and killer.veng_proc[t - 1])
+        if reflect:
+            stack += any(killer.axe_swing[j] for j in (t - 2, t - 1, t) if j >= 0)
+            continue
+        sw = next((j for j in (t - 1, t) if j >= 0 and killer.swing[j] and (j == t or victim.nhit[t - 1] == 0)), None)
+        if sw is None: sw = next((j for j in (t, t - 1) if j >= 0 and killer.swing[j]), None)
+        if sw is None or not killer.axe_swing[sw]: continue
+        ko["n"] += 1
+        for k, val in setup(killer, sw).items(): ko[k] += val
+    def share(c, k, n): return f"{c[k] / c[n]:.2f}" if c[n] else "-"
+    out.append(f"axe knockouts (no reflect) of {kos} Dharok v Dharok knockouts: {ko['n']}; an axe swing in the 3 ticks to a knockout carrying his reflect: {stack}")
+    out.append(table(["at his axe swing", "axe knockouts", "all axe swings", "all Dharok ticks"],
+                     [("Vengeance up", share(ko, "veng", "n"), share(axe_all, "veng", "n"), share(base, "veng", "ticks")),
+                      ("orb drop in swing-5..swing", share(ko, "orb5", "n"), share(axe_all, "orb5", "n"), f"{5 * base['orb'] / base['ticks']:.2f} (5 x per tick)"),
+                      ("stripped in swing-5..swing", share(ko, "strip5", "n"), share(axe_all, "strip5", "n"), share(base, "stripped", "ticks")),
+                      ("opponent swung the tick before", share(ko, "opp swung", "n"), share(axe_all, "opp swung", "n"), share(base, "opp swung", "ticks")),
+                      ("his hitpoints, mean", f"{ko['hp'] / max(1, ko['n']):.0f}", f"{axe_all['hp'] / max(1, axe_all['n']):.0f}", "-"),
+                      ("opponent's bar the tick before, mean", f"{ko['opp bar'] / max(1, ko['n']):.1f}", f"{axe_all['opp bar'] / max(1, axe_all['n']):.1f}", "-")]))
+    return "\n".join(out)
+
+
+def setup(s, i):
+    window = range(max(0, i - 5), i + 1)
+    return {"veng": s.veng_up[i - 1], "orb": unexplained_ten(s, i), "orb5": any(unexplained_ten(s, j) for j in window), "stripped": s.stripped(i),
+            "strip5": any(s.stripped(j) for j in window), "opp swung": s.opp_swing[i - 1], "hp": s.bar[i] * 99 / 30, "opp bar": s.opp_bar[i - 1]}
 
 
 def unexplained_ten(s, i):

@@ -17,7 +17,8 @@ enum { RF_PRICE_MAX_X10 = 25 };
 typedef enum { RISKFIGHT_HUMAN, RISKFIGHT_HUMAN_HELDOUT, RISKFIGHT_ALL_IN, RISKFIGHT_ESCAPER, RISKFIGHT_OPPONENTS } RiskfightOpponent;
 enum { RISKFIGHT_CONSUME_BANDS = 5, RISKFIGHT_AXE_BANDS = 3, RISKFIGHT_TAB_SUPPLY_BANDS = 3, RISKFIGHT_TAB_SUPPLY_TICKS = 8 };
 /** Per-mille rates of one scripted fighter. Consume bands split own HP at 40, 65, 73 and 90,
- * axe rates are greataxe wields per tick without the axe in hand, banded by own HP at 40 and 80 (riskfight_script), tab rates are indexed by
+ * axe rates are a profile's greataxe wields per tick without the axe in hand by own HP at 40 and 80: over the training mean they scale riskfight_script's
+ * per-attack RF_AXE_SWING_PM (his propensity), tab rates are indexed by
  * [consume ticks this round / 8, capped][own HP below 40]. dharok_eating: meals on the spectated Dharok rates (riskfight_script_dharok_meal) instead of the
  * consume bands' thresholds, which then repot only; never set in a profile table, the step sets it for a Dharok pool opponent (riskfight_opponent_script). */
 typedef struct {

@@ -137,23 +137,23 @@ static void test_orb_takes_ten(void) {
     printf("orb: 60 -> %d hitpoints before the axe swing\n", p->current_hitpoints);
 }
 
-/* The greataxe wield by his own hitpoints, over the training profiles and many seeds: one decision per tentacle attack, counted per tick without the axe in hand
- * as scripts/measure_dharok_play.py (b) counts it. Below 40 he takes the axe far more often than from 80 up, in the measured ratio (75 / 15 per 1,000 ticks)
- * within 30%. No energy, so no special or combo takes the attack. */
-static void test_axe_wields_by_own_hitpoints(void) {
-    enum { AXE_SEEDS = 25, CYCLES = 100, LOW_HP = 30, HIGH_HP = 90 };
-    static const int MEASURED[3] = {75, 44, 15};
+/* The greataxe per attack, over the training profiles and many seeds: one decision per tentacle attack, the share that takes the axe against RF_AXE_SWING_PM
+ * (scripts/measure_dharok_play.py (d)) by his own hitpoints, his Vengeance up and the other side's bar, within 15% (the profiles' own axe propensity averages
+ * out to 1 over the training profiles). No energy, so no special or combo takes the attack. */
+static void test_axe_swings_by_state(void) {
+    enum { AXE_SEEDS = 25, CYCLES = 100 };
+    static const struct { int hp, veng, bar; } CELLS[] = {{30, 0, 30}, {60, 0, 30}, {60, 1, 30}, {60, 0, 5}, {90, 0, 30}, {90, 0, 15}};
     reset(3);
     Player* p = &state.env.players[0];
     p->special_energy = 0;
     uint8_t main = p->equipped[GEAR_SLOT_WEAPON];
     assert(main == ITEM_ABYSSAL_TENTACLE && in_bag(ITEM_DHAROKS_GREATAXE));
     int speed = ITEM_DATABASE[main].attack_speed;
-    const int hps[2] = {LOW_HP, HIGH_HP};
-    double per_mille[2];
-    for (int h = 0; h < 2; h++) {
-        p->current_hitpoints = hps[h];
-        long wields = 0, ticks = 0;
+    for (size_t c = 0; c < sizeof(CELLS) / sizeof(CELLS[0]); c++) {
+        p->current_hitpoints = CELLS[c].hp;
+        p->veng_active = CELLS[c].veng;
+        state.visible[0].health_bar = CELLS[c].bar;
+        long axes = 0, attacks = 0;
         for (int profile = 0; profile < RISKFIGHT_HUMAN_TRAIN_PROFILES; profile++)
             for (uint32_t seed = 1; seed <= AXE_SEEDS; seed++)
                 for (int cycle = 0; cycle < CYCLES; cycle++) {
@@ -161,22 +161,22 @@ static void test_axe_wields_by_own_hitpoints(void) {
                     p->attack_timer = 2;
                     int actions[RF_HEADS];
                     decide(&RISKFIGHT_HUMAN_PROFILES[profile], seed * 7919u + (uint32_t)profile, actions);
-                    wields += actions[RF_WEAPON] && osrs_inventory_cell_metadata(&p->inventory_cells[actions[RF_WEAPON] - 1])->item_idx == ITEM_DHAROKS_GREATAXE;
-                    ticks += speed;
+                    axes += actions[RF_WEAPON] && osrs_inventory_cell_metadata(&p->inventory_cells[actions[RF_WEAPON] - 1])->item_idx == ITEM_DHAROKS_GREATAXE;
+                    attacks++;
                 }
-        per_mille[h] = 1000.0 * wields / ticks;
+        double per_mille = 1000.0 * axes / attacks;
+        int measured = RF_AXE_SWING_PM[(CELLS[c].hp >= 40) + (CELLS[c].hp >= 80)][CELLS[c].veng][(CELLS[c].bar >= 10) + (CELLS[c].bar >= 20)];
+        printf("axe per 1,000 attacks at %d hitpoints, veng %d, his bar %d: %.1f (measured %d)\n", CELLS[c].hp, CELLS[c].veng, CELLS[c].bar, per_mille, measured);
+        assert(fabs(per_mille / measured - 1) < 0.15);
     }
-    double ratio = per_mille[0] / per_mille[1], measured = (double)MEASURED[0] / MEASURED[2];
-    printf("axe wields per 1,000 ticks: %.1f at %d hitpoints, %.1f at %d (measured %d, %d); ratio %.2f, measured %.2f\n",
-        per_mille[0], LOW_HP, per_mille[1], HIGH_HP, MEASURED[0], MEASURED[2], ratio, measured);
-    assert(per_mille[1] > 0 && fabs(ratio / measured - 1) < 0.3);
+    p->veng_active = 0;
 }
 
 int main(void) {
     test_strip_then_reequip_before_axe();
     test_full_bag_never_strips();
     test_orb_takes_ten();
-    test_axe_wields_by_own_hitpoints();
+    test_axe_swings_by_state();
     printf("riskfight dharok script: passed\n");
     return 0;
 }
