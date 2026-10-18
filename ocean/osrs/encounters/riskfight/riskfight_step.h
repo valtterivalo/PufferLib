@@ -490,7 +490,7 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
             else if (weapon == ITEM_VOIDWAKER) s->ticks_voidwaker[i]++;
             else if (pvp_is_maul(weapon)) s->ticks_maul[i]++;
             int drained = p->current_attack < 110 || p->current_strength < 110 ||
-                p->current_defence < 110;
+                p->current_defence < p->base_defence + 11; /* the script's repot rule (riskfight_script_consume) */
             if (drained && p->potion_timer == 0) {
                 int has_combat = 0;
                 for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {

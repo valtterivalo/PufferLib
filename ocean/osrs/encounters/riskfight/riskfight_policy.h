@@ -519,16 +519,24 @@ static RiskfightObservedInventory riskfight_observed_inventory(const float* obs)
 typedef struct {
     int hitpoints, prayer, attack, strength, defence, magic;
     int attack_timer, food_timer, potion_timer, karambwan_timer;
+    int base_defence; /* riskfight_base_defence of the Dharok pieces he carries, as riskfight_reset set it */
     uint8_t weapon;
 } RiskfightObservedSelf;
 
 static RiskfightObservedSelf riskfight_observed_self(const float* obs) {
+    int dharok_pieces = 0;
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
+        dharok_pieces += riskfight_is_dharok_piece((int)lroundf(obs[RF_EQUIPPED_START + slot] * RF_OBSERVATION_ITEM_SCALE));
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
+        dharok_pieces += riskfight_is_dharok_piece(osrs_item_content_metadata(
+            osrs_inventory_cell_obs_code_decode(obs[RF_INVENTORY_START + slot * RF_INVENTORY_WIDTH]))->item_idx);
     return (RiskfightObservedSelf){
         .hitpoints = (int)lroundf(obs[0] * 121), .prayer = (int)lroundf(obs[1] * 99),
         .attack = (int)lroundf(obs[2] * 118), .strength = (int)lroundf(obs[3] * 118),
         .defence = (int)lroundf(obs[4] * 120), .magic = (int)lroundf(obs[5] * 99),
         .attack_timer = (int)lroundf(obs[7] * 10), .food_timer = (int)lroundf(obs[8] * 3),
         .potion_timer = (int)lroundf(obs[9] * 3), .karambwan_timer = (int)lroundf(obs[10] * 3),
+        .base_defence = riskfight_base_defence(dharok_pieces),
         .weapon = (uint8_t)lroundf(obs[RF_EQUIPPED_START + GEAR_SLOT_WEAPON] * RF_OBSERVATION_ITEM_SCALE),
     };
 }
@@ -559,12 +567,13 @@ static void riskfight_script_consume(const RiskfightObservedSelf* self,
     if (self->potion_timer != 0) return;
     if (hp < 65) actions[RF_DRINK] = inventory->kind_slot[OSRS_CONSUMABLE_BREW];
     if (actions[RF_DRINK]) return;
+    /* Defence is judged against his own base (riskfight_base_defence): drained below it, repotted 11 above it, as attack and strength are at 99 and 110. */
     int drained = self->prayer <= 40 || self->attack < 99 || self->strength < 99 ||
-        self->defence < 99 || self->magic < 99;
+        self->defence < self->base_defence || self->magic < 99;
     if (drained) {
         actions[RF_DRINK] = inventory->kind_slot[OSRS_CONSUMABLE_SANFEW];
         if (!actions[RF_DRINK]) actions[RF_DRINK] = inventory->kind_slot[OSRS_CONSUMABLE_SUPER_RESTORE];
-    } else if (hp >= 65 && (self->attack < 110 || self->strength < 110 || self->defence < 110)) {
+    } else if (hp >= 65 && (self->attack < 110 || self->strength < 110 || self->defence < self->base_defence + 11)) {
         actions[RF_DRINK] = inventory->kind_slot[OSRS_CONSUMABLE_SUPER_COMBAT];
     }
 }
@@ -606,10 +615,6 @@ static int riskfight_script_combo(const float* obs, const RiskfightObservedSelf*
  * and 10 swung stripped. Each piece needs a free cell (the game's rule, the action mask's too): a full bag cannot strip. */
 static const int RF_STRIP_PER_100K[3] = {153, 210, 281};
 enum { RF_STRIP_BOTH_PM = 684, RF_STRIP_BODY_UPTO_PM = 914, RF_STRIP_REEQUIP_PM = 251 };
-
-static int riskfight_is_dharok_piece(uint8_t item) {
-    return item < NUM_ITEMS && (ITEM_DATABASE[item].effect_mask & OSRS_ITEM_EFFECT_DHAROK_PIECE);
-}
 
 static int riskfight_script_strip_roll(uint32_t seed, uint32_t tick, int bar) {
     return (int)(riskfight_sample_hash(seed, tick, 28) % 100000u) < RF_STRIP_PER_100K[(bar >= 12) + (bar >= 24)];
