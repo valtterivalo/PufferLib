@@ -280,8 +280,10 @@ static void riskfight_write_observation_core(const RiskfightState* s, int agent,
     }
     float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
     opponent[0] = v->health_bar / 30.0f;
-    opponent[1] = (float)(v->x - p->x) / RF_OBSERVATION_TILE_SCALE;
-    opponent[2] = (float)(v->y - p->y) / RF_OBSERVATION_TILE_SCALE;
+    /* His distance along each axis, not its sign: which side he stands on means nothing in this arena (the sim's seats start a tile apart east-west, live fights
+     * any way round), so the net sees one fight, not two mirrored ones. */
+    opponent[1] = (float)abs(v->x - p->x) / RF_OBSERVATION_TILE_SCALE;
+    opponent[2] = (float)abs(v->y - p->y) / RF_OBSERVATION_TILE_SCALE;
     opponent[3] = v->interacting;
     opponent[4] = v->last_attack_tick >= 0;
     opponent[5] = v->last_attack_tick >= 0 ?

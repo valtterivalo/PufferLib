@@ -31,18 +31,20 @@ int main(void) {
     assert(raw_id_to_content(HALF_SUMMER_PIE) == osrs_inventory_content_code_from_consumable(OSRS_CONSUMABLE_SUMMER_PIE, 1));
     assert(canonical(SUMMER_PIE) == SUMMER_PIE && canonical(HALF_SUMMER_PIE) == HALF_SUMMER_PIE && canonical(PIE_DISH) == PIE_DISH);
 
-    /* The wire bag of the native pies kit: every slot's raw id, then one pie bitten (half a pie) and one finished (the dish). */
+    /* The wire bag of the native pies kit: every slot's raw id, then one pie bitten (half a pie) and, in the first anglerfish slot, the dish a finished pie leaves. */
     static Request q;
     RtSeen seen;
     feed(&q, &seen);
     const RiskfightLoadout* kit = &RISKFIGHT_VW_PIES_LOADOUT;
-    int pie_slots[TAPE_BAG], pies = 0;
+    int pie_slots[3], pies = 0, fish = -1;
     for (int i = 0; i < TAPE_BAG; i++) {
         const OsrsItemContentMetadata* m = osrs_item_content_metadata(kit->inventory[i]);
         q.bag[i] = kit->inventory[i] == 0 ? -1 : m->raw_osrs_id;
-        if (kit->inventory[i] != 0 && m->consumable_kind == OSRS_CONSUMABLE_SUMMER_PIE) pie_slots[pies++] = i;
+        if (kit->inventory[i] != 0 && m->consumable_kind == OSRS_CONSUMABLE_SUMMER_PIE) { assert(pies < 2); pie_slots[pies++] = i; }
+        if (kit->inventory[i] != 0 && m->consumable_kind == OSRS_CONSUMABLE_ANGLERFISH && fish < 0) fish = i;
     }
-    assert(pies == RF_VW_PIES && pies >= 3);
+    assert(pies == RF_VW_PIES && pies == 2 && fish >= 0);
+    pie_slots[2] = fish;
     q.bag[pie_slots[1]] = HALF_SUMMER_PIE;
     q.bag[pie_slots[2]] = PIE_DISH;
     q.ours.hp = 60; /* wounded: a pie heals */

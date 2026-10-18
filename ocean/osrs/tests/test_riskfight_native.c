@@ -28,7 +28,7 @@ int main(void) {
     assert(env->log.self_teleports == 1 && env->log.opponent_teleports == 0);
     assert(env->log.self_escape_healing[OSRS_ESCAPE_TRIPLE_EATS] == 1);
     assert(obs[0][RF_OPPONENT_START + NUM_GEAR_SLOTS + 1] * RF_OBSERVATION_TILE_SCALE == 1);
-    assert(obs[1][RF_OPPONENT_START + NUM_GEAR_SLOTS + 1] * RF_OBSERVATION_TILE_SCALE == -1);
+    assert(obs[1][RF_OPPONENT_START + NUM_GEAR_SLOTS + 1] * RF_OBSERVATION_TILE_SCALE == 1); /* the distance, not the side: seat 1 sees him a tile west as 1 too */
     for (int i = 0; i < 2; i++) {
         unsigned char expected[RF_MASK_SIZE];
         riskfight_write_action_mask(&env->state, i, expected);

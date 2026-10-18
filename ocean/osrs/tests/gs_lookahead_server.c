@@ -665,9 +665,11 @@ static void snapshot_of(Request* q, RiskfightSnapshot* snap) {
     snap->side[0].attack_history = q->attack_history;
     snap->side[0].attack_timer = q->attack_timer;
     snap->side[0].attack_timer_uncapped = q->attack_clock_low;
-    snap->side[0].food_timer = q->food_timer;
-    snap->side[0].potion_timer = q->potion_timer;
-    snap->side[0].karambwan_timer = q->karambwan_timer;
+    /* The O line's meal clocks are ready - tick (Consumable.readyAfter: the first legal tick, the meal's tick + 3) at the request of tick N, which carries the state
+     * after tick N. The sim lowers its clock at the end of the step that ate (riskfight_step.h), so after tick N it reads ready - N - 1, as la_food_timer does for him. */
+    snap->side[0].food_timer = q->food_timer > 0 ? q->food_timer - 1 : 0;
+    snap->side[0].potion_timer = q->potion_timer > 0 ? q->potion_timer - 1 : 0;
+    snap->side[0].karambwan_timer = q->karambwan_timer > 0 ? q->karambwan_timer - 1 : 0;
     snap->side[0].spec_armed = q->armed;
     snap->side[1].seen_health_bar = q->belief.bar_ratio;
     for (int side = 0; side < 2; side++) {

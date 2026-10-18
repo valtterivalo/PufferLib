@@ -331,9 +331,10 @@ static RiskfightLoadout RISKFIGHT_LIVE_LOADOUT;
  * until the first meal. His side keeps RISKFIGHT_LIVE_LOADOUT (the opponent is observed to carry the maul). */
 static RiskfightLoadout RISKFIGHT_VW_LOADOUT;
 /* The VW kit with RF_VW_PIES summer pies in place of as many anglerfish (the training kit draw includes it, so the policy learns pies when it carries them): a pie is
- * 2 bites of 11, a 1-tick eat delay (wiki: Summer pie, a 1-tick fast food), so from 73 a pie to 84 still leaves the next tick for a triple-eat. */
+ * 2 bites of 11, a 1-tick eat delay (wiki: Summer pie, a 1-tick fast food), so from 73 a pie to 84 still leaves the next tick for a triple-eat. The count is the live
+ * kit's: 8 of the 9 fight starts of the 2026-10-17 traces carry 2 summer pies and 12 anglerfish (G lines), the ninth the plain VW kit's 14 anglerfish. */
 static RiskfightLoadout RISKFIGHT_VW_PIES_LOADOUT;
-enum { RF_VW_PIES = 4 };
+enum { RF_VW_PIES = 2 };
 /* The user's Dharok kit (kit snapshot dharok-20261018): Dharok's helm, platebody and platelegs 100 (raw 4880, 4892, 4898: the engine's Dharok rows), infernal
  * cape, amulet of strength, Voidwaker wielded, dragon defender, barrows gloves, dragon boots, ring of recoil; the bag in the snapshot's slot order, all 28 full:
  * 2 summer pies (2 bites), 6 halibut, 10 marlin, 2 blighted super restores, 2 brews, the ornate granite maul (24225), Dharok's greataxe, a super combat, the
