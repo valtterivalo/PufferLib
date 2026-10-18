@@ -516,7 +516,7 @@ static void test_waits_are_steps(void) {
 static void test_session_observation(void) {
     env = make_env(6000, 1, 41);
     float* block = observations[0] + RF_SESSION_START;
-    assert(RF_TIMING_START == RF_SESSION_START + RF_SESSION_SIZE && RF_OBS_SIZE == RF_TIMING_START + RF_TIMING_SIZE);
+    assert(RF_TIMING_START == RF_SESSION_START + RF_SESSION_SIZE && RF_TACTICS_START == RF_TIMING_START + RF_TIMING_SIZE && RF_OBS_SIZE == RF_TACTICS_START + RF_TACTICS_SIZE);
     assert(block[0] == 1 && block[1] == 1 && block[2] == 0 && block[3] == 0 && block[4] == 0);
     env->session_elapsed = 6000 - RF_SESSION_HORIZON_TICKS / 2;
     puf_step(env);
