@@ -472,6 +472,13 @@ static int riskfight_spec_clicks(const RiskfightState* s, int agent, const int* 
     return k * spec_max + riskfight_in_flight_max(s, agent) >= riskfight_threat_his_hp_lower(v->health_bar) ? k : 0;
 }
 
+/** Whether RF_ATTACK clicks the target: when we are not attacking him already (a weapon switch keeps the interaction, so there is nothing to re-click), or when the
+ * decision clicks the special (`specials` toggles, riskfight_spec_clicks): the target click releases a granite maul's prepared specials (osrs_granite_maul.h) and
+ * is how a player double-specs. The sim's step and gs_rl_server's records both go through this. */
+static int riskfight_attack_click(const Player* p, int specials) {
+    return !osrs_interaction_active(&p->interaction) || specials > 0;
+}
+
 /** The mask of a tick of waiting between fights, or of a decision our hand cannot click on (RiskfightState.hand_busy): the no-op of every head and nothing else
  * (the tick is a step of no choice). */
 static void riskfight_write_wait_mask(unsigned char* mask) {

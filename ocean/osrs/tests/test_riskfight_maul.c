@@ -159,8 +159,11 @@ static void test_switch_clears_preparation(void) {
     assert(!state.env.players[0].used_special_this_tick);
 }
 
+/* His bar low in both runs: two maul specials reach him, so riskfight_spec_clicks keeps the toggles of the wield + special decision. */
 static void test_policy_and_human_command_equivalence(void) {
     reset();
+    state.visible[0].health_bar = 3;
+    assert(riskfight_threat_his_hp_lower(3) <= 2 * riskfight_threat_our_maxes(&state.env.players[0], ITEM_GRANITE_MAUL, 3).spec_max);
     int actions[2 * RF_HEADS] = {0};
     actions[RF_WEAPON] = 25;
     actions[RF_SPECIAL] = 2;
@@ -169,6 +172,7 @@ static void test_policy_and_human_command_equivalence(void) {
     static RiskfightState expected;
     expected = state;
     reset();
+    state.visible[0].health_bar = 3;
     HumanCommand commands[] = {inventory(24),
         {.kind = HUMAN_COMMAND_OFFENSIVE_PRAYER, .offensive_prayer = 0},
         {.kind = HUMAN_COMMAND_FIGHT_STYLE, .fight_style = 0},

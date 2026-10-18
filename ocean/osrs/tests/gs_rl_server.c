@@ -220,7 +220,7 @@ static int rt_worn_index(int gear_slot) {
 
 /* Head actions as the plugin's click records, in the order the sim queues them (riskfight_policy_commands): the gear heads in head order (weapon, shield, ring, body,
  * legs), the meals, the orb or the teleport (the sim clicks the tab when both are chosen), Vengeance, the special toggles (riskfight_spec_clicks: none when the
- * decision wields a granite maul whose knockout gate is shut, as in the sim's step), attack or stop. Bag actions name physical slots (riskfight_bag_to_physical of
+ * decision wields a granite maul whose knockout gate is shut, as in the sim's step), attack (riskfight_attack_click) or stop. Bag actions name physical slots (riskfight_bag_to_physical of
  * the net's). Movement, prayer, style and the other armour heads are masked off by riskfight_deployable. */
 static int rt_records(const int* actions, const RiskfightState* s, RtRecord* out) {
     int n = 0;
@@ -248,7 +248,7 @@ static int rt_records(const int* actions, const RiskfightState* s, RtRecord* out
     const int specials = riskfight_spec_clicks(s, 0, actions);
     for (int k = 0; k < specials; k++) out[n++] = (RtRecord){GS_WIRE_SPEC_TOGGLE, 0};
     int attacking = osrs_interaction_active(&s->env.players[0].interaction);
-    if (actions[RF_PRIMARY] == RF_ATTACK && !attacking) out[n++] = (RtRecord){GS_WIRE_ATTACK, 0};
+    if (actions[RF_PRIMARY] == RF_ATTACK && riskfight_attack_click(&s->env.players[0], specials)) out[n++] = (RtRecord){GS_WIRE_ATTACK, 0};
     if (actions[RF_PRIMARY] == RF_STOP && attacking) out[n++] = (RtRecord){GS_WIRE_STOP_ATTACK, 0};
     assert(n <= GS_WIRE_MAX_RECORDS);
     return n;
