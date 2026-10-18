@@ -946,3 +946,63 @@ Live candidate a1: anchor hyperparameters, 182.7M steps on 37d061a46. Greedy lad
   - The counterfactual probe now prints the chosen food/combo/drink action and the best slot's probability against none.
   - a3 at live ticks 173-176 in the actual state: no meal; best slot .03-.31 against none .66-.96. At price 2.5, .05-.42 against .57-.94: still no meal.
   - It eats on the same ticks once his bar reads 13+, and at 177 in every variant.
+
+## 2026-10-19: the escape gap is a knockout gap; meals after a miss (branch escape-gap)
+
+Harness: `dh` (both seats on the Dharok script, personas on, starts drawn, 6,000 fights, 3 seeds), against the 510 Dharok v Dharok duels. The sim rows are also written out as `spectator.duels` (bar = the server ratio, the sim's eat-animation visibility, swing and tab animations), so the real readers run on both unchanged. Scripts are in /tmp/eg (`classify.py` on the raw recordings, `sim2duels.py`, `gaps.py`, `ko.py`, `ends.py`, `occ.py`).
+
+- **The harness under-counted damage.** It logged `damage_applied_this_tick`, which leaves out the orb's 10 (0.25 per tick). With `hit_damage`, damage between reads is 1.7-2.0 per tick in the sim against 1.8-2.4 real.
+- **How real windows end** (raw recordings: view events, spot animations):
+
+  | | Share of 510 |
+  |---|---|
+  | KO | .251 |
+  | Tab animation seen | .580 |
+  | Despawn showing the tab graphic (678) without the animation: missed tabs | .014 |
+  | Despawn next to him, no teleport graphic (mostly short windows at full HP) | .049 |
+  | Both still in view, targeting stopped | .031 |
+  | Recording ended (censored) | .075 |
+
+  - Leaving out the censored windows, real is KO .271, escape .642, or .695 if the bare despawns are tabs.
+  - Windows that open before any swing (n 123) end like mid-fight ones (KO .244 / tab .569 / unseen .187), so the entry point doesn't matter.
+- **The escape hazard matches; the knockout hazard doesn't.** Read the same way on both, per 10,000 fighter-ticks:
+
+  | | Tabs | KOs |
+  |---|---|---|
+  | Real | 22.8 | 9.9 |
+  | Sim before | 22.0 | 5.0 |
+  | Sim after | 22.3 | 6.2 |
+
+  - By HP before the KO (0-19 / 20-39 / 40-59 / 60-79 / 80+), the after sim has 92 / 47 / 17 / 2.3 / 0.5 against 117 / 47 / 32 / 4.6 / 2.1 real. The missing KOs come from 40 HP up.
+- **The out-of-heals rule follows from fight length, not from extra leaving.**
+  - 0.22-0.25 of sim fighters run out of food (first at tick 250, median); the rule then gives 0.39-0.41 of escapes at a median of 267 ticks.
+  - Real fighters also leave when supplies run out:
+    - No real window heals more than 479. 5% heal 400 or more, against 34% in the sim.
+    - Real windows that run 250+ ticks from the first swing end by tab in 28 of 31.
+    - Leavers had healed more than stayers (median 309 against 247).
+  - The sim runs out because its fights run long, since its knockouts are rare. The sim kit holds about 520 HP of heal against a real ceiling near 450-480 `[INFERENCE: real bags aren't observed]`.
+  - Who leaves: the lower fighter makes .74 of real tabs and .85 in the sim, read the same way.
+- **Occupancy:**
+  - **Bars 0-17:** heal per tick between reads matches.
+  - **Bars 18-26:** the sim healed 1.4-2.5 times as much.
+  - **By the hit that opened the gap:**
+    - After damage, sim and real agree.
+    - After a miss (0), the sim fed .46 / .15 / .05 of gaps at bars 18-20 / 21-23 / 24-26, against .24 / .05 / .01 real.
+  - **Cause:** `fit_dharok_meals.py` fitted only gaps opened by damage, and the script applied the rate after misses too.
+- **Change:** `RF_DHAROK_MEAL_PM[band][his last hit did 0]`.
+  - The table is {589, 589}, {572, 572}, {468, 199}, {205, 57}, {36, 9}, {10, 12}. Below 40 there are only 13 and 40 misses, so those cells take the damage column.
+  - The state is `RiskfightVisibleOpponent.last_hit_zero`, read by the script as `RF_SCRIPT_LAST_HIT_ZERO`.
+  - The dead phase column (all six equal) and `riskfight_meal_phase` are removed. `fit_dharok_meals.py` now fits both columns and drops its animation-phase printout.
+  - Sim after misses: .20 / .05 / .05.
+- **The gap list,** real / before / after (3 seeds for the endings):
+  - Escape share: .580 (.642-.695 uncensored) / .803 / .777.
+  - KO: .251 (.271 uncensored) / .195 / .221.
+  - Opponent's median HP when the low fighter (1-20) is ready:
+    - Same reader on both: 59 / 66 / 66.
+    - The old 74 used the sim's true HP against a bar read, so half the gap was the reading.
+  - Time at 80+ after both have been below 80, gap estimate on both: .21 / .44 / .38. True HP: .48 / .41.
+  - Fight length, median: 205 → 190 sim (real windows aren't comparable).
+- **Open:**
+  - Knockouts from 40 HP up: 2-4 times rarer in the sim.
+  - The rest of the 80+ time: at bar 27+ the closing hit is 0-9 in .71 of sim gaps against .64 real.
+- Tests pass: test_riskfight_dharok_script, _mix, _mechanics, _session and _scripts. The env_trace goldens are not refreshed.

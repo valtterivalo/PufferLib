@@ -188,6 +188,9 @@ typedef struct {
     /* His Vengeance as the viewer knows it (riskfight_veng_seen, riskfight_his_veng_up): up from the fight's start (fighters cast it before), down after a proc or a
      * hit landing on him for damage without one (a hit proves no Vengeance was up), up again after a seen cast. */
     int veng_up;
+    /* The viewer's last hit landing on him did 0 damage (a miss): his Dharok meal rule's state (RF_DHAROK_MEAL_PM), which his script reads through this view
+     * (RF_SCRIPT_LAST_HIT_ZERO). 0 before any hit. */
+    int last_hit_zero;
     float events[RF_HISTORY_TICKS][RF_EVENT_WIDTH];
     RiskfightThreat threat; /* his weapons as the viewer knows them: the swings seen, the slots of riskfight_threat.h */
     /* His special energy as a player counts it: starts at 100, loses the cost of every special swing seen, regenerates 10 every 50 ticks once below 100. */
@@ -652,6 +655,7 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
     if (!reset) {
         riskfight_veng_seen(v, s->env.tick, opponent->cast_veng_this_tick, opponent->said_taste_vengeance_this_tick,
             opponent->hit_landed_this_tick ? opponent->hit_damage : 0);
+        if (opponent->hit_landed_this_tick && opponent->hit_attacker_idx == viewer) v->last_hit_zero = opponent->hit_damage == 0;
     }
     if (reset) {
         v->last_cast_tick = v->last_proc_tick = -1000; v->veng_up = 1;
@@ -664,6 +668,7 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
         v->pending_damage_since = 0;
         v->meal_delay_lo = v->meal_delay_hi = 0;
         v->pending_meals = v->pending_meals_since_swing = 0;
+        v->last_hit_zero = 0;
         return;
     }
     if (v->consume_food_est > 0) v->consume_food_est--;

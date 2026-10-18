@@ -317,14 +317,17 @@ static void riskfight_write_observation_core(const RiskfightState* s, int agent,
 /** What the scripts read: the observation without its appended blocks (they read nothing from them), at the cost of the base. The bag in physical slot order: scripts
  * click physical slots. */
 /* The script observation's own health bar (scale 30) as the other side last saw it: it moves only with a hitsplat on him, so it leaves out the meals he ate
- * since (RF_AXE_SWING_PM's band). The script observation carries no threat features, so the bar sits in the threat block's first float. */
-enum { RF_SCRIPT_OWN_BAR = RF_THREAT_START };
+ * since (RF_AXE_SWING_PM's band). RF_SCRIPT_LAST_HIT_ZERO: the other side's last hit landing on him did 0 (RF_DHAROK_MEAL_PM's column). The script observation
+ * carries no threat features, so both sit in the threat block's first floats. */
+enum { RF_SCRIPT_OWN_BAR = RF_THREAT_START, RF_SCRIPT_LAST_HIT_ZERO = RF_THREAT_START + 1 };
 
-/** The scripts' observation: the base with the bag in physical slot order; of the threat block only the Soulreaper stacks and RF_SCRIPT_OWN_BAR. */
+/** The scripts' observation: the base with the bag in physical slot order; of the threat block only the Soulreaper stacks, RF_SCRIPT_OWN_BAR and
+ * RF_SCRIPT_LAST_HIT_ZERO. */
 static void riskfight_write_script_observation(const RiskfightState* s, int agent, float* obs) {
     riskfight_write_observation_core(s, agent, obs, &RF_BAG_PHYSICAL, NULL);
     riskfight_threat_write_stacks(&s->env.players[agent], &s->visible[agent].threat, obs + RF_THREAT_START); /* the Soulreaper stacks are the one thing a script reads there */
     obs[RF_SCRIPT_OWN_BAR] = (float)s->visible[1 - agent].health_bar / OSRS_PLAYER_HEALTH_BAR_SCALE;
+    obs[RF_SCRIPT_LAST_HIT_ZERO] = (float)s->visible[1 - agent].last_hit_zero;
 }
 
 /** The full observation, the net's: the base with the bag in canonical order (riskfight_bag.h), then the appended blocks in order (threat features, session, timing,
@@ -754,15 +757,13 @@ static void riskfight_script_consume(const RiskfightObservedSelf* self,
  * Dharok v Dharok duels of 2026-10-18, n 881; 241 on 261 duels, 4 standard errors off; the other bands moved within their noise and are kept, so the
  * meal clock's base hazard stays), into 69-79 at 36 (0.13, n 264), from 79 up at 10. One 20-hitpoint band at 115 fed him from 70-79 past 80 three times as
  * often per tick as spectated fighters (up-crossings 84 against 27 per mille), and he sat at 80 up 0.55 of the time against 0.20 once both had been below 80.
- * From 80 up the eat animations are nearly all potions (0.95 of single-animation gaps show no heal). By ticks since the other side's swing, 1, 2, 3, 4 up
- * while his weapon is not ready, from its speed on, and before his first swing. RF_DHAROK_MEAL_PM[riskfight_dharok_meal_band][phase] (RiskfightMealPhase)
- * are the per-tick tries. */
-typedef enum { RF_MEAL_SINCE_1, RF_MEAL_SINCE_2, RF_MEAL_SINCE_3, RF_MEAL_LATE, RF_MEAL_READY, RF_MEAL_NONE, RF_MEAL_PHASES } RiskfightMealPhase;
+ * From 80 up the eat animations are nearly all potions (0.95 of single-animation gaps show no heal). The rate is flat over the other side's attack clock.
+ * The second column: after a hit of his that did 0 (a miss) he eats much less at 40-79 (spectated 199 / 57 / 9 per mille in bands 2-4, n 236 / 695 / 4,249,
+ * against 464 / 205 / 37 after damage). Below 40 too few misses are read (n 13, 40): those cells take the damage column. A single rate per band fed sim
+ * fighters after misses 2-3 times as often as spectated ones, which kept them at 80 up 0.44 of the time against 0.21 once both had been below 80.
+ * RF_DHAROK_MEAL_PM[riskfight_dharok_meal_band][his last hit on him did 0 (RF_SCRIPT_LAST_HIT_ZERO)] are the per-tick tries. */
 enum { RF_DHAROK_MEAL_BANDS = 6 };
-static const uint16_t RF_DHAROK_MEAL_PM[RF_DHAROK_MEAL_BANDS][RF_MEAL_PHASES] = {
-    {589, 589, 589, 589, 589, 589}, {572, 572, 572, 572, 572, 572}, {468, 468, 468, 468, 468, 468}, {205, 205, 205, 205, 205, 205}, {36, 36, 36, 36, 36, 36},
-    {10, 10, 10, 10, 10, 10},
-};
+static const uint16_t RF_DHAROK_MEAL_PM[RF_DHAROK_MEAL_BANDS][2] = {{589, 589}, {572, 572}, {468, 199}, {205, 57}, {36, 9}, {10, 12}};
 /** His band in RF_DHAROK_MEAL_PM: bar (of 30) 0-5, 6-11, 12-17, 18-20, 21-23, 24 up (scripts/fit_dharok_meals.py band_of). */
 static int riskfight_dharok_meal_band(int hp) {
     int bar = hp * OSRS_PLAYER_HEALTH_BAR_SCALE / 99;
@@ -794,17 +795,6 @@ static int riskfight_script_escape(const RiskfightProfile* profile, int dharok, 
  * (2: 22, 3: 63, 4: 48, 5: 38, 6 up: 34, the ready tick: 37 per mille), so no tick of his clock is singled out. */
 static const uint16_t RF_DHAROK_ORB_PM[2][5] = {{74, 109, 102, 30, 62}, {32, 59, 78, 55, 45}};
 
-/** The phase of the other side's attack clock a meal decided now lands in: ticks since his swing (opponent[5]) 1, 2 or 3, 4 up while his weapon is not ready,
- * from its speed on (READY), or before his first swing (NONE). `opponent` the opponent block of the script observation. */
-static RiskfightMealPhase riskfight_meal_phase(const float* obs, const float* opponent) {
-    if (opponent[4] < 0.5f) return RF_MEAL_NONE;
-    int since = (int)lroundf(opponent[5] * RF_OBSERVATION_ATTACK_AGE_SCALE);
-    uint8_t weapon = (uint8_t)lroundf(obs[RF_OPPONENT_START + GEAR_SLOT_WEAPON] * RF_OBSERVATION_ITEM_SCALE);
-    int speed = weapon != ITEM_NONE ? ITEM_DATABASE[weapon].attack_speed : 4;
-    if (since >= speed) return RF_MEAL_READY;
-    return since <= 1 ? RF_MEAL_SINCE_1 : since == 2 ? RF_MEAL_SINCE_2 : since == 3 ? RF_MEAL_SINCE_3 : RF_MEAL_LATE;
-}
-
 /** A per mille rate with its odds times a persona's per mille multiplier (RF_DHAROK_PERSONA); 0 and 1000 up stay. */
 static int riskfight_persona_odds(int pm, int mult) {
     if (pm <= 0 || pm >= 1000) return pm;
@@ -831,9 +821,8 @@ static void riskfight_script_dharok_meal(const float* obs, const RiskfightObserv
     const uint16_t* persona, uint32_t seed, uint32_t tick, int* actions) {
     int hp = self->hitpoints;
     if (hp >= 99) return;
-    const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
     int band = riskfight_dharok_meal_band(hp);
-    int meal_pm = RF_DHAROK_MEAL_PM[band][riskfight_meal_phase(obs, opponent)];
+    int meal_pm = RF_DHAROK_MEAL_PM[band][obs[RF_SCRIPT_LAST_HIT_ZERO] > 0.5f];
     if (band <= 1) meal_pm = riskfight_hazard_power(meal_pm, RF_DHAROK_MEAL_CLOCK[min_int(RF_DHAROK_MEAL_CLOCKS - 1, max_int(0, self->attack_timer))]);
     if (persona && band <= 4) meal_pm = riskfight_hazard_power(meal_pm, persona[RF_PERSONA_EAT]);
     if (!riskfight_sample_event(seed, tick, 32, meal_pm)) return;
