@@ -942,3 +942,7 @@ Live candidate a1: anchor hyperparameters, 182.7M steps on 37d061a46. Greedy lad
 - **Fast sweep 6** (369fdba02, 20 min): the anchor (run 0, 182.7M steps, 8.64, identical to a3) is best again.
   - The five other trials are Protein's random warm-up draws, all at 5.2-5.9e7 steps, so the sweep never tested longer training.
   - Run 4 (512x1, 5.9e7 steps) scores 8.10 in 53 s. At the live 4-HP ticks it eats at .00-.02 and ignores price and our HP: worse than a3.
+- **The acceptance gate is the greedy meal action, not summed eat probability.** rl_explain's "use" sums every food slot, but argmax picks the single best slot against none (`rf_net.h:97-100`).
+  - The counterfactual probe now prints the chosen food/combo/drink action and the best slot's probability against none.
+  - a3 at live ticks 173-176 in the actual state: no meal; best slot .03-.31 against none .66-.96. At price 2.5, .05-.42 against .57-.94: still no meal.
+  - It eats on the same ticks once his bar reads 13+, and at 177 in every variant.
