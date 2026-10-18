@@ -702,3 +702,14 @@ Open, not bugs:
 - The Vengeance spam seen in replays is a replay artefact: the replay can't carry out the net's clicks.
 
 Live candidate a1: anchor hyperparameters, 182.7M steps on 37d061a46. Greedy ladder 8.88; argmax probe 7.85 per hour in the Dharok kit, 8.65 in VW. No axe, orb or maul use. Body or legs come off on 0.55 steps per fight. Installed with the parity fixes; replays of 4 live sessions run clean.
+
+## 2026-10-19: armour strips stay allowed (the user's call)
+
+- **a1's strips don't pay.** a1 takes off Dharok body or legs on 0.55 steps per fight in the sim; live it unequipped the legs, worn slot 7, at ticks 179-182. A paired counterfactual (65a6d7335, reverted: clone at each strip, strip vs never strip for the rest of the fight) gave:
+  - return −0.009 ± 0.010 against the script and −0.022 ± 0.010 against OppFit;
+  - more damage taken: 16.3 to 17.9 over the next 10 steps;
+  - no reaction from him, and no channel through the price or the observation.
+
+  a1 never swings the axe, so these strips are thrashing on an action it never found a use for.
+- **The user rejected the mask that would have blocked strips with no spare piece in the bag.** Stripping is a real top-player tactic: take more damage on purpose to feed Vengeance or recoil, lower your own HP for the axe, bait the opponent, even drop Piety. The fix belongs in the world: opponents and observations under which the payoff exists and can be seen. A ban would remove the tactic.
+- **Low-HP non-eating, by the same principle:** risking HP is valid when he truly can't threaten us (no spec energy, no Vengeance, on his attack timer). The bug is learning it as a blanket rule because sim opponents at low HP are harmless. LowHpThreat found the sim mechanic behind that: an eat clears the attack interaction, so a meal costs the tick's swing. Being checked against data.
