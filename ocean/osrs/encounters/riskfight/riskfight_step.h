@@ -21,6 +21,9 @@ static void riskfight_record_attack(RiskfightState* s, int agent, int hits, int 
     event[1] = weapon;
     event[2] = p->attack_style_this_tick;
     riskfight_threat_note_swing(&visible->threat, (uint8_t)weapon, s->env.tick, p->used_special_this_tick);
+    visible->last_swing_item = weapon;
+    visible->last_swing_tick = s->env.tick;
+    if (p->used_special_this_tick) visible->last_spec_tick = s->env.tick;
     if (agent == 1) s->ragger_swings++;
     if (!instant) riskfight_his_swing_seen(visible, s->env.tick, get_slot_gear_bonuses(p)->attack_speed);
 }
@@ -513,6 +516,7 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         s->anim_now[i] = p->attack_style_this_tick != ATTACK_STYLE_NONE || p->ate_food_this_tick || p->ate_karambwan_this_tick ||
             s->inventory_use[i].potion_animation_tick_plus_one == s->env.tick + 1 || p->hit_landed_this_tick || p->cast_veng_this_tick;
     }
+    s->pid_played = s->env.pid_holder;
     s->env.tick++;
     pvp_tick_priority(&s->env);
     riskfight_finish(s);

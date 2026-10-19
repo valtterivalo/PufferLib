@@ -1116,3 +1116,22 @@ Harness: `dh`, both seats on the Dharok script with personas, starts drawn, 6,00
   - Live 4-HP ticks: eats at 173 and 176, skips at 174 and 175 (.47 against .52 at 175), and reacts to the price.
   - Neither net dominates on these tests. n3r33 stays installed: a better ladder score and probe, no strips, eats on all four live ticks.
   - The break-even price differs by net (≤20: 1.17 for run 52, 0.83 for run 33, 2.40 for the 8e8 net). The probe's playouts continue with the net under test, so "the better branch" depends on how well that net finishes either branch.
+
+## 2026-10-19: reacting to his swing on PID; the PID block (branch pid-obs)
+
+- **The mechanic holds in the sim** (`test_riskfight_pid_react`). We hold PID and he swings a greataxe or a Voidwaker special on tick T: his hit lands on T + 1. A Vengeance cast on T + 1 resolves before that hit lands (Fact 3), so it reflects the hit. If he holds PID, the hit lands on T, before any decision of ours sees the swing, and a cast on T + 1 reflects nothing.
+- **What the net saw on the decision tick before this change:**
+  - The history row of T: his swing, its weapon and its style.
+  - His energy estimate (session [1]), which drops on the swing's tick for a special. Live it drops when `swing_spec` arrives, which can be a tick late.
+  - Not whether the hit is still in the air, and not who holds PID: no observation writer read PID.
+  - Timing [2] `his_next_tick_max` never counts the swing already started. After a swing `his_ready_min` is the weapon's speed, so the opening hit is dropped and only instant maul specials and his echo remain.
+- **The PID block** (4 floats, `RF_PID_START` = 492, `RF_OBS_SIZE` 492 → 496; nets of 492 inputs, n3r33 included, do not load). It is written by the shared writer for the sim and the live server:
+  - [0] the chance we hold PID;
+  - [1] the chance his melee swing of the tick just played lands on the next tick (equal to [0] when there is such a swing, else 0);
+  - [2] that swing's max, or its spec max when it was a special (threat-block scale);
+  - [3] 1 when it was a special.
+- **The PID reading follows the plugin's rule (light `Pid.java`).** The latest melee pairing of an attack animation with its hitsplat sets the owner: on the same tick, the attacker holds PID; on the next tick, the target does. Flip odds come from the age of the reading: .119 up to 3 ticks, .178 for 4-7, .221 beyond (measured on 33 recorded fights). The reading is UNKNOWN until the first melee pairing. Instant maul specials and anything that could be an echo don't pair.
+  - The sim's viewer reads its own swings by the same rule (`riskfight_pid_seen`).
+  - The live server reads the `B` line's owner and flip. Before this change the live state's PID was a coin flip: `snapshot_of` sends '?'.
+- **Limits.** A swing that landed on its own tick reads .119 on [1], not 0, because the wire doesn't say whether his hitsplat on us came on the swing's tick. An optional `V` field for that would make [1] exact. A `swing_spec` that arrives a tick late leaves [3] at 0 on the decision tick.
+- **Parity** (`test_rl_pid_obs_parity`): sim fights are replayed into `rt_observe` as `V` and `B` lines. Over 6 fights, every tick has the same PID block, the same newest history row and the same energy estimate live and in the sim.

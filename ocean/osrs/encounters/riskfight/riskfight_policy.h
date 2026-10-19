@@ -240,6 +240,27 @@ static void riskfight_write_tactics_observation(const RiskfightState* s, int age
     out[RF_TACTICS_HAND_BUSY] = s->hand_busy[agent] != 0;
 }
 
+/** The PID block (RF_PID_START, layout in riskfight_model.h), written by the sim and the live server alike (riskfight_write_observation) from the viewer's PID
+ * reading and his swing of the tick just played. Reads the threat block (the swung weapon's max and spec_max), so it comes after it. */
+static void riskfight_write_pid_observation(const RiskfightState* s, int agent, float* obs) {
+    const RiskfightVisibleOpponent* v = &s->visible[agent];
+    float* out = obs + RF_PID_START;
+    memset(out, 0, RF_PID_SIZE * sizeof(float));
+    const float ours = riskfight_pid_ours(v);
+    out[RF_PID_OURS] = ours;
+    const int played = s->env.tick - 1;
+    const uint8_t item = (uint8_t)v->last_swing_item;
+    if (v->last_attack_tick != played || v->last_swing_tick != played || osrs_threat_style_of_weapon(item) != ATTACK_STYLE_MELEE) return;
+    int slot = 0;
+    while (slot < v->threat.count && v->threat.slots[slot].item != item) slot++;
+    assert(slot < v->threat.count && "his swing of the tick just played has no threat slot");
+    const float* row = obs + RF_THREAT_START + slot * RF_THREAT_HIS_WIDTH;
+    const int spec = v->last_spec_tick == played;
+    out[RF_PID_IN_FLIGHT] = ours;
+    out[RF_PID_IN_FLIGHT_MAX] = spec ? row[9] : row[2];
+    out[RF_PID_IN_FLIGHT_SPEC] = spec;
+}
+
 /** The observation up to the price, and the weapons of the agent's bag when `bag_weapons` is given (the threat block needs them). The bag rows follow `order`. */
 static void riskfight_write_observation_core(const RiskfightState* s, int agent, float* obs, const RiskfightBagOrder* order, RiskfightBagWeapons* bag_weapons) {
     const Player* p = &s->env.players[agent];
@@ -331,7 +352,7 @@ static void riskfight_write_script_observation(const RiskfightState* s, int agen
 }
 
 /** The full observation, the net's: the base with the bag in canonical order (riskfight_bag.h), then the appended blocks in order (threat features, session, timing,
- * tactics). */
+ * tactics, PID). */
 static void riskfight_write_observation(const RiskfightState* s, int agent, float* obs) {
     RiskfightBagWeapons bag_weapons = {{0}, 0};
     const RiskfightBagOrder order = riskfight_bag_order(&s->env.players[agent]);
@@ -340,6 +361,7 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
     riskfight_write_session_observation(s, agent, obs);
     riskfight_write_timing_observation(s, agent, obs);
     riskfight_write_tactics_observation(s, agent, &bag_weapons, obs);
+    riskfight_write_pid_observation(s, agent, obs);
 }
 
 /** Head offsets into the mask, and the mask every state starts from: action 0 of every head and all

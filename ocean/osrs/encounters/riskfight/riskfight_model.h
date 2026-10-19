@@ -93,7 +93,7 @@ enum {
     RF_OPPONENT_START = RF_EQUIPPED_START + NUM_GEAR_SLOTS,
     RF_HISTORY_START = RF_OPPONENT_START + NUM_GEAR_SLOTS + 14,
     RF_PRICE = RF_HISTORY_START + RF_HISTORY_TICKS * RF_EVENT_WIDTH,   /* death price: what our death costs us over what his kill wins us, scaled by 1 / RF_PRICE_MAX */
-    /* Appended blocks, in order: threat features (riskfight_threat.h), then the session block, then the timing block, then the tactics block. */
+    /* Appended blocks, in order: threat features (riskfight_threat.h), then the session block, then the timing block, then the tactics block, then the PID block. */
     RF_THREAT_START = RF_PRICE + 1,
     /* Session block (riskfight_write_session_observation): [0] session ticks left over RF_SESSION_HORIZON_TICKS, capped at 1;
      * [1] his special energy as a player counts it (100 minus the specs seen, plus the regeneration since), over 100; [2] 1 while the session is waiting between
@@ -141,7 +141,20 @@ enum {
     RF_TACTICS_KO = RF_TACTICS_CAN_WIELD_2H + 1, RF_TACTICS_KO_COUNT = 5,
     RF_TACTICS_HIS_VENG = RF_TACTICS_KO + RF_TACTICS_KO_COUNT, RF_TACTICS_ORB, RF_TACTICS_HP_ABOVE_1, RF_TACTICS_SAFE_WINDOW, RF_TACTICS_HAND_BUSY,
     RF_TACTICS_SIZE,
-    RF_OBS_SIZE = RF_TACTICS_START + RF_TACTICS_SIZE,
+    /* PID block (riskfight_write_pid_observation), who acts first and his swing still in the air, from what a viewer reads (riskfight_pid_ours):
+     *   0 pid_ours           the chance we hold PID: the reading of the latest melee pairing (an attack animation and its hitsplat on the same tick: the attacker
+     *                        holds it; on the next: the target), 1 - its flip odds when it named us, its flip odds when it named him (RF_PID_FLIPPED over
+     *                        RF_PID_PAIRED by the reading's age), 0.5 before any pairing. Sim: the pairings of the sim's swings (riskfight_pid_seen); live: the
+     *                        B line's PID owner and flip odds (the plugin's Pid.java, the same rule and table)
+     *   1 in_flight          his melee swing (not an instant special) of the tick just played lands on the next tick: the chance he did not hold PID on
+     *                        that tick, which is pid_ours (a swing that landed at once has just paired, naming him); 0 without such a swing
+     *   2 in_flight_max      that swing's most damage: its weapon's spec_max in the threat block when the swing was a special, else its max; 0 without one.
+     *                        / RF_THREAT_DAMAGE_SCALE, the threat block's scale (timing [2] his_next_tick_max does not count this hit: it is his next swing's)
+     *   3 in_flight_spec     1 when that swing was a special attack (sim: the swing's own flag; live: the V line's swing_spec on the swing's tick) */
+    RF_PID_START = RF_TACTICS_START + RF_TACTICS_SIZE,
+    RF_PID_OURS = 0, RF_PID_IN_FLIGHT, RF_PID_IN_FLIGHT_MAX, RF_PID_IN_FLIGHT_SPEC,
+    RF_PID_SIZE,
+    RF_OBS_SIZE = RF_PID_START + RF_PID_SIZE,
 };
 /* Ticks left beyond which the end of the session no longer changes what is worth doing: several fight cycles. */
 enum { RF_SESSION_HORIZON_TICKS = 1500 };
@@ -195,8 +208,13 @@ typedef struct {
     RiskfightThreat threat; /* his weapons as the viewer knows them: the swings seen, the slots of riskfight_threat.h */
     /* His special energy as a player counts it: starts at 100, loses the cost of every special swing seen, regenerates 10 every 50 ticks once below 100. */
     int spec_est, spec_regen_phase;
-    /* The live server's memory of his last swing (weapon item index, fight tick): a special count can arrive a tick after its swing and is charged to that weapon. */
-    int last_swing_item, last_swing_tick;
+    /* His last swing (weapon item index, fight tick, any swing, the instant maul specials too; sim: riskfight_record_attack, live: the V line) and the tick of the
+     * last swing seen to be a special (live: a special count can arrive a tick after its swing and is charged to that weapon). */
+    int last_swing_item, last_swing_tick, last_spec_tick;
+    /* The viewer's PID reading (riskfight_pid_seen): -1 before any melee pairing, 0 the viewer holds it, 1 he does; the fight tick it was read on, its flip odds
+     * (riskfight_pid_flip), and a pairing still due on the next tick (a swing whose attacker did not hold PID lands then: pid_due_tick, -1 none). */
+    int pid_reading, pid_seen_tick, pid_due_tick, pid_due_owner;
+    float pid_flip;
 } RiskfightVisibleOpponent;
 
 /* How a seat leaves (RiskfightState.data_escapes): by its own actions (the script's rule, OppFit's or a net's own teleport), or, a net, by the scripts' escape
@@ -265,6 +283,8 @@ typedef struct {
      * block's hand_busy reads 1). Sim: riskfight_motor_filter, the motor's chain not finished (every seat a net plays; 0 with the motor off). Live: gs_rl_server
      * sets it on an `OBS` request, the tick the plugin does not decide (ENGINE_WIRE.md: committed run, unlanded clicks). */
     int hand_busy[2];
+    /* The PID holder of the tick just stepped (env.pid_holder moves at the end of the step, riskfight_step_queues), which the viewers' PID readings pair with. */
+    int pid_played;
     /* Per seat: a net whose teleports are the scripts' data-fitted escape (riskfight_data_escape), RiskfightDataEscapes: set at the reset from
      * RiskfightContext.data_escapes and the kit the seat wears, for both seats when both are nets (self-play with seat 1 not driven: pure self-play or a frozen
      * checkpoint). Its own teleport is masked, and on the tick the escape fires its mask is the no-op (the tick is a step of no choice) and the step teleports it. */
@@ -638,6 +658,46 @@ static inline void riskfight_spec_est_seen(RiskfightVisibleOpponent* v, int cost
     v->spec_est = v->spec_est > cost ? v->spec_est - cost : 0;
 }
 
+/* The plugin's PID flip odds (light platform/interaction Pid.java FLIPPED / PAIRED): per age of the last reading (up to 3, 4 to 7, 8 or more ticks), the ticks of 33
+ * recorded fights spent without a newer reading, and how many of those ended in a reading naming the other fighter. */
+enum { RF_PID_AGE_BIN0 = 3, RF_PID_AGE_BIN1 = 7 };
+static const int RF_PID_FLIPPED[3] = {228, 175, 222}, RF_PID_PAIRED[3] = {1916, 982, 1004};
+
+/** The chance a PID reading `age` ticks old names the wrong fighter by now (Pid.State.flipOddsAt). */
+static inline float riskfight_pid_flip(int age) {
+    int bin = age <= RF_PID_AGE_BIN0 ? 0 : age <= RF_PID_AGE_BIN1 ? 1 : 2;
+    return (float)RF_PID_FLIPPED[bin] / RF_PID_PAIRED[bin];
+}
+
+/** The chance the viewer holds PID, from his reading (PID block [0]). */
+static inline float riskfight_pid_ours(const RiskfightVisibleOpponent* v) {
+    if (v->pid_reading < 0) return 0.5f;
+    return v->pid_reading == 0 ? 1.0f - v->pid_flip : v->pid_flip;
+}
+
+/** A melee swing (an attack animation of a melee weapon, not an instant special: Pid.counts) on fight tick `tick`, `attacker_viewer` 1 when the viewer swung, while
+ * `holder_viewer` 1 when the viewer held PID on that tick: the attacker holding it lands on the swing's tick and the pairing reads him at once, else the hit lands
+ * and pairs on the next tick (riskfight_pid_seen applies it). */
+static inline void riskfight_pid_swing(RiskfightVisibleOpponent* v, int tick, int attacker_viewer, int holder_viewer) {
+    int owner = holder_viewer ? 0 : 1;
+    if (attacker_viewer == holder_viewer) { v->pid_reading = owner; v->pid_seen_tick = tick; }
+    else { v->pid_due_tick = tick + 1; v->pid_due_owner = owner; }
+}
+
+/** The sim's viewer reads PID as the plugin does (Pid.java: the latest melee pairing counts) from the melee swings of the tick just stepped, `tick`
+ * (riskfight_record_attack noted them: last_attack_tick moves for a swing, not for an instant special), and the holder of that tick (RiskfightState.pid_played). */
+static void riskfight_pid_seen(RiskfightState* s, int viewer, int tick) {
+    RiskfightVisibleOpponent* v = &s->visible[viewer];
+    const RiskfightVisibleOpponent* other = &s->visible[1 - viewer]; /* what he sees of the viewer: the viewer's own swings */
+    if (v->pid_due_tick == tick) { v->pid_reading = v->pid_due_owner; v->pid_seen_tick = tick; v->pid_due_tick = -1; }
+    const int holder_viewer = s->pid_played == viewer;
+    if (other->last_attack_tick == tick && osrs_threat_style_of_weapon((uint8_t)other->last_swing_item) == ATTACK_STYLE_MELEE)
+        riskfight_pid_swing(v, tick, 1, holder_viewer);
+    if (v->last_attack_tick == tick && osrs_threat_style_of_weapon((uint8_t)v->last_swing_item) == ATTACK_STYLE_MELEE)
+        riskfight_pid_swing(v, tick, 0, holder_viewer);
+    v->pid_flip = v->pid_reading < 0 ? 0 : riskfight_pid_flip(tick - v->pid_seen_tick);
+}
+
 static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) {
     const Player* opponent = &s->env.players[1 - viewer];
     RiskfightVisibleOpponent* v = &s->visible[viewer];
@@ -669,12 +729,17 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
         v->meal_delay_lo = v->meal_delay_hi = 0;
         v->pending_meals = v->pending_meals_since_swing = 0;
         v->last_hit_zero = 0;
+        v->last_swing_item = ITEM_NONE;
+        v->last_swing_tick = v->last_spec_tick = -1000;
+        v->pid_reading = -1; v->pid_seen_tick = v->pid_due_tick = -1000; v->pid_due_owner = 0;
+        v->pid_flip = 0;
         return;
     }
     if (v->consume_food_est > 0) v->consume_food_est--;
     if (v->consume_potion_est > 0) v->consume_potion_est--;
     if (v->consume_karam_est > 0) v->consume_karam_est--;
     if (v->consume_delay_est > 0) v->consume_delay_est--;
+    riskfight_pid_seen(s, viewer, s->env.tick - 1);
     int index = (s->env.tick - 1) % RF_HISTORY_TICKS;
     float* event = v->events[index];
     event[3] = opponent->hit_landed_this_tick;

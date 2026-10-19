@@ -194,7 +194,7 @@ static void test_observation_block(void) {
     float obs[RF_OBS_SIZE];
     riskfight_write_observation(&state, 0, obs);
     assert(RF_SESSION_START == RF_THREAT_START + RF_THREAT_SIZE && RF_TIMING_START == RF_SESSION_START + RF_SESSION_SIZE &&
-        RF_TACTICS_START == RF_TIMING_START + RF_TIMING_SIZE && RF_OBS_SIZE == RF_TACTICS_START + RF_TACTICS_SIZE);
+        RF_TACTICS_START == RF_TIMING_START + RF_TIMING_SIZE && RF_PID_START == RF_TACTICS_START + RF_TACTICS_SIZE && RF_OBS_SIZE == RF_PID_START + RF_PID_SIZE);
     const float* t = obs + RF_THREAT_START;
     /* Default kits: he wields the Abyssal tentacle (speed 4); the Dharok's set is worn but the axe is in the bag. */
     assert(t[0] == 1 && t[1] == 0 && t[5] == 1 && near(t[4], 0.4f, 1e-6f));

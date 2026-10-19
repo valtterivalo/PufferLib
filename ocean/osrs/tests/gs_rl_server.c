@@ -69,6 +69,9 @@ static void rt_fight_reset(RtFight* f, int start_tick, const RtSeen* seen) {
     RiskfightVisibleOpponent* v = &f->vis;
     v->last_cast_tick = v->last_proc_tick = -1000; v->veng_up = 1;
     v->last_attack_tick = -1;
+    v->last_swing_item = ITEM_NONE;
+    v->last_swing_tick = v->last_spec_tick = -1000;
+    v->pid_reading = -1;
     v->pending_consume_tick = -1;
     v->spec_est = 100;
     v->health_bar = seen->bar_scale == OSRS_PLAYER_HEALTH_BAR_SCALE && seen->bar_ratio >= 0 ? seen->bar_ratio : OSRS_PLAYER_HEALTH_BAR_SCALE;
@@ -155,7 +158,8 @@ static void rt_note_spec(RtFight* f, int spec_us, int n) {
     f->previous_spec = spec_us;
 }
 
-/* What riskfight_observe_visible does after a sim tick, from what the client showed instead of the sim's players. `n` is the fight tick after this one. */
+/* What riskfight_observe_visible does after a sim tick, from what the client showed instead of the sim's players. `n` is the fight tick after this one. The PID
+ * reading is the plugin's (B line: owner and flip odds, Pid.java), which pairs melee animations with hitsplats as riskfight_pid_seen does in the sim. */
 static void rt_observe(RiskfightVisibleOpponent* v, const RtSeen* seen, int n, const Request* q) {
     int bar_before = v->health_bar;
     riskfight_spec_est_regen(v);
@@ -179,7 +183,10 @@ static void rt_observe(RiskfightVisibleOpponent* v, const RtSeen* seen, int n, c
             riskfight_threat_note_swing(&v->threat, (uint8_t)v->last_swing_item, v->last_swing_tick, 1);
         if (v->last_swing_item != ITEM_NONE)
             for (int i = 0; i < seen->swing_spec; i++) riskfight_spec_est_seen(v, osrs_spec_cost(v->last_swing_item));
+        v->last_spec_tick = v->last_swing_tick;
     }
+    v->pid_reading = q->belief.pid == GS_PID_LOCAL ? 0 : q->belief.pid == GS_PID_OPPONENT ? 1 : -1;
+    v->pid_flip = v->pid_reading < 0 ? 0 : (float)q->belief.flip;
     if (seen->hit_landed && seen->bar_scale == OSRS_PLAYER_HEALTH_BAR_SCALE && seen->bar_ratio >= 0) v->health_bar = seen->bar_ratio;
     riskfight_veng_seen(v, n, seen->veng_cast, seen->veng_text, seen->hit_landed ? seen->hit_damage : 0);
     if (v->consume_food_est > 0) v->consume_food_est--;
