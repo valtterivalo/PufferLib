@@ -1547,8 +1547,8 @@ p2's config, 150M steps, seeds 81-83. Argmax `session_probe` (300 sessions, `liv
 | 103 | 9.03 | 8.34 (.32) | 8.52 | 8.31 | 5.67 | 9.13 | .22 / +.024 (268) [−.056, +.106] |
 
 - **Seed 101:**
-  - Best ladder of the three, and the fewest Dharok-kit deaths of any candidate so far.
-  - At ≤ 20 HP it eats greedily .42 of the time, and where it skips, an extra meal shows no gain.
+  - Best ladder of the three. Dharok-kit deaths .04 per session, among the lowest so far (p4 seed 93 had .03).
+  - At ≤ 20 HP it eats greedily .42 of the time. Where it skips, an extra meal's gain is unresolved: +.008, 90% interval −.12 to +.16 over 86 decisions, which allows a real benefit or harm. A monitored live candidate, not a fix for low-HP eating. (Correction of an advisory: an earlier wording said "shows no gain" and "fewest deaths of any candidate".)
   - No orb, axe or maul. Strips .08 per fight in the Dharok kit.
 - **Live 4-HP ticks (session 20261018T185228, factual state):** it eats at 173 (food), drinks at 174, and takes neither at 175-176. n3r33 ate at all four. In the real fight the HP stayed at 4 there, so those states don't follow its own meals.
 - **Installed:** `engine-install --checkpoint p5s101`, C 01a94b697 (the same env code as f32837f1c plus FINDINGS and probe commits).
