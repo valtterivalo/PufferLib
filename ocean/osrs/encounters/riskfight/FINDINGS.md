@@ -1670,3 +1670,19 @@ p6 (seeds 111-113, fb12299a3) has the same env except for the old motor clock, s
   - `engine-replay --local` of 20261018T185228, 20261017T211452, 20261015T203026, 20261017T230732 and 20261019T190858 is clean.
   - Without `--local`, the replay runs pufferbox's own engine install, not the release on this Mac.
   - The live hand must be light main with #360. On an older client the engine clicks at ~111 ms, against a net trained for 280.
+
+## 2026-10-20: the brew cap (the user's rule), branch brew-cap
+
+- **Live, p7s121, session 20261019T212039** (2 fights, ticks 430-503 and 610-764):
+  - 9 brew decisions:
+    - one alone at 105 HP (436, to 120);
+    - marlin + brew at 70 twice (448, 472, to 110);
+    - marlin + brew (+ halibut) at 31-71 four times;
+    - brew alone at 46.
+  - Each overheal drained attack and strength. A restore followed (14 restore decisions) and then a super combat (8 combat decisions), until the combats ran out.
+  - His chance range (`range`) sat at 86-119, so the meal gate was open at almost every HP.
+- **The rule (the user's):** in this fighting a brew is never drunk to overheal.
+  - **Mask:** `riskfight_consumable_useful` offers a brew only while its heal leaves hitpoints below base, i.e. 82 or less at 99. Before, the cap was base + heal.
+  - **Execution:** `riskfight_drink_click` drops a brew whose decision's food-head meal, eaten first, lifts hitpoints to where the brew would reach base. Behind a marlin (24) the brew survives only at 58 or less. The same rule runs in the sim's step for both net seats and in gs_rl_server before its records.
+  - Combo food (halibut, karambwan) is clicked after the drink and doesn't count.
+- **Tests:** `test_riskfight_useful_consumables` checks both boundaries (`test_brew`, `test_brew_after_food`), and the goldens are refreshed.

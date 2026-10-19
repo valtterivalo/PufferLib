@@ -594,9 +594,11 @@ static void riskfight_step(EncounterState* state, EncounterContext* context, con
             memcpy(opponent_actions, s->opp_ring[s->opp_lag], sizeof(opponent_actions));
         }
     }
-    /* The special toggles of a decision that wields a granite maul follow the maul's knockout gate (riskfight_spec_clicks), for the seats a net plays. */
+    /* The special toggles of a decision that wields a granite maul follow the maul's knockout gate (riskfight_spec_clicks), and a brew after the same decision's
+     * food is dropped when that food lifts us to where the brew would reach base (riskfight_drink_click), for the seats a net plays. */
     int ours[RF_HEADS], his[RF_HEADS];
     memcpy(ours, actions, sizeof(ours));
+    ours[RF_DRINK] = riskfight_drink_click(s, 0, ours);
 #ifdef RF_SPEC_CLICKS_OVERRIDE /* a probe's diagnostic (probe_maul_chain.c): never defined in the env or the server */
     ours[RF_SPECIAL] = RF_SPEC_CLICKS_OVERRIDE(s, 0, ours);
 #else
@@ -608,6 +610,7 @@ static void riskfight_step(EncounterState* state, EncounterContext* context, con
     if (seat_agent) {
         memcpy(his, actions + RF_HEADS, sizeof(his));
         his[RF_SPECIAL] = riskfight_spec_clicks(s, 1, his);
+        his[RF_DRINK] = riskfight_drink_click(s, 1, his);
         if (his_escape) his[RF_PRIMARY] = RF_TELEPORT;
     } else memcpy(his, opponent_actions, sizeof(his));
     riskfight_policy_commands(s, 0, ours, &ctx->policy_commands[0]);

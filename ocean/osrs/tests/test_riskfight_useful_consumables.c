@@ -106,19 +106,40 @@ static void test_boosts(void) {
 static void test_brew(void) {
     reset();
     Player* p = us();
-    const int hp_cap = p->base_hitpoints + osrs_brew_heal_amount(p->base_hitpoints);
+    const int hp_cap = p->base_hitpoints - osrs_brew_heal_amount(p->base_hitpoints); /* 83 at 99: its heal would reach base */
     const int def_cap = p->base_defence + osrs_brew_defence_boost_amount(p->base_defence);
     p->current_hitpoints = hp_cap;
     p->current_defence = def_cap;
-    assert(!offered(SLOT_BREW));
+    assert(hp_cap == 83 && !offered(SLOT_BREW));
     p->current_attack = p->current_strength = 50; /* drained levels are no reason to brew */
     assert(!offered(SLOT_BREW));
+    p->current_defence = def_cap - 1;
+    assert(!offered(SLOT_BREW)); /* defence below its cap alone is no reason */
     p->current_hitpoints = hp_cap - 1;
     assert(offered(SLOT_BREW));
-    p->current_hitpoints = hp_cap;
-    p->current_defence = def_cap - 1;
-    assert(!offered(SLOT_BREW)); /* defence below its cap alone is no reason: it heals nothing there */
-    puts("brew: not offered at its hitpoints cap, drained levels or defence below its cap notwithstanding; offered one hitpoint below");
+    puts("brew: not offered at 83 hitpoints or more (its heal would reach base), drained levels or defence below its cap notwithstanding; offered at 82");
+}
+
+/** A brew after the same decision's food (riskfight_drink_click): kept while the food's heal and the brew's leave hitpoints below base, dropped from there on;
+ * a brew alone, or after a combo food only (clicked after the drink), is the mask's business. */
+static void test_brew_after_food(void) {
+    reset();
+    Player* p = us();
+    int actions[RF_HEADS] = {0};
+    actions[RF_DRINK] = SLOT_BREW + 1;
+    actions[RF_FOOD] = SLOT_SHARK + 1;
+    const int edge = p->base_hitpoints - osrs_food_heal_amount(FOOD_SHARK) - osrs_brew_heal_amount(p->base_hitpoints); /* 99 - 20 - 16 = 63 */
+    p->current_hitpoints = edge - 1;
+    assert(riskfight_drink_click(&state, 0, actions) == SLOT_BREW + 1);
+    p->current_hitpoints = edge;
+    assert(riskfight_drink_click(&state, 0, actions) == 0);
+    actions[RF_FOOD] = 0;
+    actions[RF_COMBO] = SLOT_KARAMBWAN + 1;
+    assert(riskfight_drink_click(&state, 0, actions) == SLOT_BREW + 1);
+    actions[RF_DRINK] = SLOT_COMBAT + 1;
+    actions[RF_FOOD] = SLOT_SHARK + 1;
+    assert(riskfight_drink_click(&state, 0, actions) == SLOT_COMBAT + 1); /* not a brew */
+    puts("brew after food: kept at 62 hitpoints behind a shark, dropped at 63 (20 + 16 reach base); a brew without food and a non-brew drink are kept");
 }
 
 static void test_meals(void) {
@@ -146,6 +167,7 @@ int main(void) {
     test_restores();
     test_boosts();
     test_brew();
+    test_brew_after_food();
     test_meals();
     puts("test_riskfight_useful_consumables: ok");
     return 0;

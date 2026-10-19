@@ -400,6 +400,7 @@ static double rt_decide(Request* q, const RtSeen* seen, int new_fight, int fight
     if (f->net) rf_net_act(f->net, obs, mask, &f->rng, f->hard, RF_ACTION_DIMS, RF_HEADS, actions);
     else memset(actions, 0, sizeof(actions));
     riskfight_bag_to_physical(us, actions); /* the net picks entries of the canonical bag; the client clicks the slot that holds it */
+    actions[RF_DRINK] = riskfight_drink_click(s, 0, actions); /* a brew after a meal that lifts us near base is not clicked, as in the sim's step */
     *count = rt_records(actions, s, records);
     rt_choose_copies(us, records, *count); /* which copy of that item the client clicks: rt_choose_copies */
     return (la_seconds() - started) * 1e6;

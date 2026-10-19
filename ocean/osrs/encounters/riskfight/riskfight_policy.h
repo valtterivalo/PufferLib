@@ -404,8 +404,9 @@ __attribute__((constructor)) static void riskfight_build_mask_template(void) {
  * - super restore, sanfew: a level it restores (attack, strength, defence, ranged, magic: encounter_apply_stat_restore) below base, or prayer missing at least the dose's prayer restore;
  *   prayer potion: that prayer rule alone (osrs_consumable_prayer_restore_amount, the amount osrs_player_inventory_drink_effect adds);
  * - super combat, divine super combat, ranging: a level it boosts below base + its boost (encounter_super_combat_boost, encounter_ranging_boost);
- * - brew: hitpoints below base + its heal (encounter_apply_brew_heal). Its defence boost alone is no reason: a brew above the heal cap drains attack and strength
- *   for at most a few points of defence, and the user counts it as over-eating (live, s15t85 sipped brews at 120 HP to lift defence 118 to 120);
+ * - brew: only while its whole heal leaves hitpoints below base (at 99, hitpoints 82 or less; the user's rule of 2026-10-20: in this fighting a brew is never drunk
+ *   to overheal, and p7s121 live brewed at 91-105 to 107-120, then spent a restore and a super combat dose on the drain until the combats ran out). Its defence
+ *   boost alone is no reason either (live, s15t85 sipped brews at 120 HP to lift defence 118 to 120);
  * - food, karambwan: a heal above 0 (osrs_eat_food: below base, an anglerfish outside the overheal lock below base + 22); a partial heal counts.
  * A drink the riskfight engine gives no effect (osrs_player_inventory_drink_effect aborts on it) is never useful. */
 static int riskfight_consumable_useful(const Player* p, OsrsConsumableKind kind) {
@@ -425,7 +426,7 @@ static int riskfight_consumable_useful(const Player* p, OsrsConsumableKind kind)
         case OSRS_CONSUMABLE_RANGING:
             return p->current_ranged < p->base_ranged + osrs_ranging_boost_amount(p->base_ranged);
         case OSRS_CONSUMABLE_BREW:
-            return p->current_hitpoints < p->base_hitpoints + osrs_brew_heal_amount(p->base_hitpoints);
+            return p->current_hitpoints + osrs_brew_heal_amount(p->base_hitpoints) < p->base_hitpoints;
         case OSRS_CONSUMABLE_MARLIN:
         case OSRS_CONSUMABLE_HALIBUT:
         case OSRS_CONSUMABLE_SUMMER_PIE:
@@ -522,6 +523,20 @@ static int riskfight_spec_clicks(const RiskfightState* s, int agent, const int* 
     const RiskfightVisibleOpponent* v = &s->visible[agent];
     int spec_max = riskfight_threat_our_maxes(p, item, v->health_bar).spec_max;
     return k * spec_max + riskfight_in_flight_max(s, agent) >= riskfight_threat_his_hp_lower(v->health_bar) ? k : 0;
+}
+
+/** The drink a decision clicks (`actions` on physical slots). The mask offers a brew only while its heal leaves our hitpoints below base (riskfight_consumable_useful),
+ * but the food head's meal of the same decision is eaten first (riskfight_policy_commands clicks food, drink, combo in that order): a brew after it is dropped when
+ * that meal lifts our hitpoints to where the brew would reach base (marlin + brew at 70 went to 110 live). The sim's step and gs_rl_server's records both go
+ * through this. */
+static int riskfight_drink_click(const RiskfightState* s, int agent, const int* actions) {
+    int drink = actions[RF_DRINK], food = actions[RF_FOOD];
+    if (!drink || !food) return drink;
+    const Player* p = &s->env.players[agent];
+    if (osrs_inventory_cell_metadata(&p->inventory_cells[drink - 1])->consumable_kind != OSRS_CONSUMABLE_BREW) return drink;
+    OsrsConsumableKind meal = (OsrsConsumableKind)osrs_inventory_cell_metadata(&p->inventory_cells[food - 1])->consumable_kind;
+    int healed = osrs_eat_food(osrs_consumable_food_type(meal), p->current_hitpoints, p->base_hitpoints, 0, p->pvp_overheal_block > 0).hp_healed;
+    return p->current_hitpoints + healed + osrs_brew_heal_amount(p->base_hitpoints) < p->base_hitpoints ? drink : 0;
 }
 
 /** Whether RF_ATTACK clicks the target: when we are not attacking him already, when the decision clicks the special (`specials` toggles,
