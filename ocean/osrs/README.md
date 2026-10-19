@@ -55,7 +55,9 @@ cc -std=gnu11 -O2 -I. -Isrc -I$RAYLIB_INC -o probe_lowhp_meals ocean/osrs/tests/
 ```
 
 `probe_maul_chain.c` checks the granite maul. At each decision where a maul special can be sent, it plays out the net's own choice and forced lines: two maul
-specials (D), one special (S), and the opener special followed by the maul (C). It reports KO, death and stake per line, by kit and by his bar:
+specials (D), one special (S), the opener special followed by the maul (C), and C with the maul's knockout gate skipped (Cu, a diagnostic through
+`RF_SPEC_CLICKS_OVERRIDE`). Per kit and his bar, each line is paired with the net's own outcome on the same clones (stake difference and SE), with the reasons a
+line could not be sent:
 
 ```bash
 cc -std=gnu11 -O2 -I. -Isrc -I$RAYLIB_INC -o probe_maul_chain ocean/osrs/tests/probe_maul_chain.c riskfight_oppfit_bridge.o -lm -lpthread
