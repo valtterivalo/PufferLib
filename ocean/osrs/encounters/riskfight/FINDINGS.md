@@ -1266,3 +1266,28 @@ Harness: `dh` (both seats on the Dharok script, personas on, starts drawn, 6,000
   The existing `maul2` (ko [25]) is two maul specials on one tick (100 energy) and no opener. `riskfight_ko_chance`'s two-attack path is now `riskfight_ko_chain` of an attack with itself, the same arithmetic.
 - **Example** (`test_riskfight_tactics_obs`, his bar 12: hitpoints 38-40, our HP 99). User's kit and tentacle+VW+maul: VW special 0.432, maul 0, maul2 0.019, **VW + maul 0.518**. Tentacle+AGS+maul: AGS special 0.202, **AGS + maul 0.236**. Hand-checked against `riskfight_ko_chain(1, 2, 3, .5, 0, 1, 4, 4)` = 0.125 and an enumeration of both rolls.
 - **Tests:** test_riskfight_dharok_spectated (new), test_riskfight_tactics_obs, _mix, _session, _mechanics, _dharok_kit, _unequip, _pid_react, _threat_masks, test_rl_pid_obs_parity, test_threat_live, test_threat_features, test_rl_live_pies all pass on the Mac. The `test_riskfight_env_trace` goldens are left to refresh (the observation grew).
+
+## 2026-10-19 midday: candidate p1 (PID block, spec-chain floats, tentacle kits, eat-first personas)
+
+p1 = night3 trial 33's hyperparameters, 150M steps on 4f8d314cb, `live_loadout` 5. Ladder 8.98, scored on `live_loadout` 4; not comparable with earlier envs.
+
+- **Per-kit `session_probe` (argmax):**
+
+  | Kit | Net per hour | Opener specials per fight |
+  |---|---|---|
+  | Dharok (the user's) | 9.39 | 1.65 |
+  | Tentacle + VW + maul | 9.25 | 1.71 |
+  | Tentacle + VW | 8.79 | 1.75 |
+  | Tentacle + AGS + maul | 5.83 | 1.32 |
+  | VW | 9.37 | 1.69 |
+
+  Maul specials, chains, axe swings and orb clicks are 0 in every kit. Strips ≤ 0.04.
+- **`probe_lowhp_meals` (we're low, he's < 40):**
+
+  | Our HP | p1 greedy eats | Eating vs skipping | p1 matches the better branch |
+  |---|---|---|---|
+  | ≤ 20 | .31 | eat always (KO .39 / death .03 against .38 / .12) | .31 |
+  | 21-40 | .19 | skip below price 1.71 | .75 |
+  | 41-60 | .11 | eat always | .11 |
+- **Live 4-HP ticks:** eats at 175 and 176, not at 173 or 174 (best slot .15 / .07 against none .57 / .87). n3r33 ate on all four.
+- **persona-cells** (e12af34e2): per-band persona factors at gain 1, so they change nothing yet. The branch stays unmerged until a per-band and per-clock eat factor keeps feeding, eat-first and KO together.
