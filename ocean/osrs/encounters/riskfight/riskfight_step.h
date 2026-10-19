@@ -597,7 +597,11 @@ static void riskfight_step(EncounterState* state, EncounterContext* context, con
     /* The special toggles of a decision that wields a granite maul follow the maul's knockout gate (riskfight_spec_clicks), for the seats a net plays. */
     int ours[RF_HEADS], his[RF_HEADS];
     memcpy(ours, actions, sizeof(ours));
+#ifdef RF_SPEC_CLICKS_OVERRIDE /* a probe's diagnostic (probe_maul_chain.c): never defined in the env or the server */
+    ours[RF_SPECIAL] = RF_SPEC_CLICKS_OVERRIDE(s, 0, ours);
+#else
     ours[RF_SPECIAL] = riskfight_spec_clicks(s, 0, ours);
+#endif
     /* A seat under data_escapes leaves when the scripts' rule says so: its mask was the no-op this tick, and the tab is clicked as a script clicks it. */
     const int our_escape = riskfight_data_escape(s, 0), his_escape = seat_agent && riskfight_data_escape(s, 1);
     if (our_escape) ours[RF_PRIMARY] = RF_TELEPORT;
