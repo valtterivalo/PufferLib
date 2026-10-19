@@ -1355,7 +1355,7 @@ Corpora:
 | | Real v real | Scripts v scripts | Scripts v n3r33 | n3r33 |
 |---|---|---|---|---|
 | Fighter-ticks at D ≥ .25 | .058 | .050 | .094 | .027 |
-| At D ≥ .25, decision points: swing / meal / none first | .70 / .21 / .08 | .65 / .19 / .14 | .64 / .16 / .18 | .71 / .17 / .13 |
+| At D ≥ .25, decision points: swing / meal / none first | .70 / .21 / .08 | .65 / .19 / .14 | .64 / .16 / .18 | .72 / .16 / .12 |
 | At D ≥ .25 and own K ≥ .10: swing first | .65 (n 387) | .62 (n 3,755) | .49 (none .31) | .76 |
 | Per fighter, swing first at D ≥ .10: p10 / median / p90 | .54 / .68 / .84 | .62 / .69 / .75 | .58 / .70 / .79 | .73 |
 | Per fighter: SD beyond sampling noise | .067 (57 fighters) | .019 (168 personas) | .019 | - |
