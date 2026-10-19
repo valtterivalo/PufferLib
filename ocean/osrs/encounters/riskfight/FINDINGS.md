@@ -1410,3 +1410,19 @@ Corpora:
 - **Fight outcomes, script v script:** KO share .288 → .294, tab .712 → .706. Fights end the same way; the axe now comes when the swinger is truly low.
 - **Personas:** the axe trait (`fit_dharok_personas.py`) is a fighter's odds within the old cells. The script applies it to the new table as a propensity, so it was not refitted.
 - Tests: `test_riskfight_dharok_script` waits for the axe roll after a strip (the odds are never certain) and checks the new cells. Goldens refreshed.
+
+## 2026-10-19: seed spread at a fixed config, and p1 on p2's environment
+
+Same config and env (p2: the 2026-10-19 bag), 150M steps, five seeds. Argmax `session_probe` (300 sessions, `live_loadout` 5), net stake per hour, and `probe_lowhp_meals` at ≤ 20 HP:
+
+| Net | Ladder | Dharok | tentacle+VW+maul | tentacle+VW | tentacle+AGS+maul | VW | ≤ 20 greedy eats / matches better branch |
+|---|---|---|---|---|---|---|---|
+| p2 (seed 73) | 8.93 | 8.33 | 8.17 | 8.26 | 4.52 | 7.77 | .13 / .62 |
+| seed 74 | 8.94 | 9.01 | 9.52 | 10.07 | 5.15 | 9.31 | .31 / .46 |
+| seed 75 | 9.20 | 8.96 | 10.37 | 8.50 | 6.63 | 9.20 | .37 / .45 |
+| seed 76 | 8.25 | 7.93 | 8.21 | 8.01 | 5.29 | 8.17 | .49 / .51 |
+| seed 77 | 7.64 | 6.59 | 5.59 | 8.22 | 4.30 | 7.08 | .49 / .49 |
+| p1 (bag full) on p2's env | - | 8.86 | 8.23 | 9.78 | 5.99 | 8.49 | .33 / .41 |
+
+- Seeds alone move the Dharok kit's probe from 6.6 to 9.0 and the ladder from 7.6 to 9.2. p1 measured on p2's environment sits inside that range, so the bag change and p1 against p2 are not separable from seed noise at one seed each.
+- Low-HP greedy eating varies .13-.49 by seed alone. Picking a net on one gate selects a seed's luck: candidates need several seeds, judged together on the gates.
