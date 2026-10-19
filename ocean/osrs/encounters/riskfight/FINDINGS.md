@@ -1100,11 +1100,16 @@ Harness: `dh`, both seats on the Dharok script with personas, starts drawn, 6,00
   | 57 | 8.59 / 8.84 | 0.94 | .20 | .48 |
 
 - **Live 4-HP ticks (173-176), greedy actions in the actual state:**
-  - Run 33 eats on all four, best slot .36-.55 against none .00-.22. It also eats when our HP is set to 4 at ticks 169 and 172. It doesn't eat at 59 HP, where the sim says skipping pays below price 1.74.
+  - Run 33 eats on all four, best slot .36-.55 against none .00-.22.
+  - With our HP set to 4 on the earlier ticks it is mixed: it eats at 169 and 172, but not at 170 (.16 against .64) or 171 (.09 against .76).
+  - It doesn't eat at the actual 59 HP on 169-172, where the sim says skipping pays below price 1.74.
   - Run 52 skips all four.
 - **Installed: n3r33** (512x1, 150M steps, C 467413f58). Replays of 4 live sessions run clean.
 - **Timestep-only sweep night4** (run 52's other hyperparameters fixed, steps 1.4e8-1.5e9) was started after the advisory rejected a hand-picked 600M run. Its random draws also stay at 1.4-1.8e8. Scores range 8.79-9.69 at fixed hyperparameters, so trial-to-trial noise is about ±0.4: single-trial gaps under about 0.5 don't rank nets.
-- **Why sweeps never test long training:** Protein samples candidates as center ± scale·U(−1,1) in normalized space around observed points (`protein.cu:455`). Its search is local to the anchor and the best trials, and its random warm-up draws didn't change with `--sweep.train.total_timesteps.scale=1` (night5: identical step draws to night4). With an anchor at 1.4-1.8e8, every trial stays there. To ask "does more training help", the anchor itself has to sit at the long end. **night6:** timestep-only, run 52's other hyperparameters, anchor 8e8, range 1.4e8-1.5e9.
+- **Correction (the user's): the claim that sweeps "never test long training" because Protein searches locally is retracted.** What the evidence supports:
+  - The random warm-up draws are fixed by the sweep seed: night4, night5 and night6 drew identical step counts whatever the anchor or `scale`.
+  - In its model-guided phase, Protein chose 1.0-2.1e8 steps over about 50 trials across night3 and night4. night6's 8e8 anchor scored 9.44, inside the 8.8-9.8 noise of the short runs, so longer training didn't pay and Protein's choice of short runs is consistent with that.
+  - Nothing here shows a structural limit. **night6:** timestep-only, run 52's other hyperparameters, anchor 8e8, range 1.4e8-1.5e9.
 - **night6 result: more training doesn't clearly help.** Protein's random warm-up draws were the same step counts as night4's whatever the anchor, so only the anchor ran long.
   - Anchor at 8e8 steps (956 s): ladder 9.44, against 8.79-9.80 for the same hyperparameters at 1.4-1.9e8. Probe 8.24 Dharok / 9.08 VW, strips 0.01.
   - `probe_lowhp_meals` at ≤20 HP: greedy eats .37, picks the better branch .66. n3r33: .40 / .54.
