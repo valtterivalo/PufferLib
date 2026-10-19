@@ -1330,3 +1330,42 @@ p1 = night3 trial 33's hyperparameters, 150M steps on 4f8d314cb, `live_loadout` 
   - .38 of Dharok-kit tabs come in the forced state, not the .50 the eat-item column suggested. The rule tabs at once in that state, so those are its tabs `[INFERENCE: the per-tick roll could fire on the same tick]`.
   - All our tabs under 40 HP (.19) had heals left, so n3r33 does tab at low HP with food left. Every death under 40 HP had heals left.
 - Real duels between players end by KO .25-.27 (either side). The net KOs .67 of its sim opponents: the net's edge over the fitted scripts is the sim's claim, still unmeasured live.
+
+## 2026-10-19: the risk ledger, real against sim (how much death chance fighters accept for a kill chance)
+
+Tools:
+- `scripts/measure_risk_ledger.py`, one reader for real and sim duels.
+- `ocean/osrs/tests/risk_laws.c`: the engine's viewer threat math (`osrs_pvp_threat.h`) per weapon and composition.
+- `probe_risk_duels.c`: a net against the env's opponents, written as duels.
+- `probe_script_duels.c`: the Dharok script on both seats, with personas and recorded starts; the dh harness.
+- Both probes share `riskfight_duel_writer.h`. The env's new `Env.fight_end` hook lets them read a fight's last tick before the env moves on (NULL in training).
+
+How it's read:
+- Per fighter-tick, **K** is his best one-attack knockout chance over the weapons he is seen with: normal hits, plus single-hit specials while his estimated energy allows. **D** is the other side's K against him.
+- Hitpoints come from `gap_hitpoints`.
+- Not counted: Vengeance, recoil, two hits landing on one tick.
+- A decision point is the tick his clock frees after a swing; the reader records what he does first in the next 4 ticks.
+
+Corpora:
+- Real: 510 Dharok v Dharok duels.
+- Scripts v scripts: 5,995 fights, 3 seeds, c-main.
+- n3r33 against the env's opponents: 1,950 Dharok v Dharok fights, 6 seeds, night3 env.
+  - All of these are script opponents. The oppfit model never appears in a Dharok v Dharok fight.
+
+| | Real v real | Scripts v scripts | Scripts v n3r33 | n3r33 |
+|---|---|---|---|---|
+| Fighter-ticks at D ≥ .25 | .058 | .050 | .094 | .027 |
+| At D ≥ .25, decision points: swing / meal / none first | .70 / .21 / .08 | .65 / .19 / .14 | .64 / .16 / .18 | .71 / .17 / .13 |
+| At D ≥ .25 and own K ≥ .10: swing first | .65 (n 387) | .62 (n 3,755) | .49 (none .31) | .76 |
+| Per fighter, swing first at D ≥ .10: p10 / median / p90 | .54 / .68 / .84 | .62 / .69 / .75 | .58 / .70 / .79 | .73 |
+| Per fighter: SD beyond sampling noise | .067 (57 fighters) | .019 (168 personas) | .019 | - |
+| Mean D / K at a swing | .038 / .045 | .036 / .042 | .051 / .019 | .018 / .066 |
+| Axe swings per 1,000 ticks at own HP < 20 | 87 | 62 | 31 | 0 |
+
+- **On average the scripts take about real risk.** Under threat they swing first .65 against .70 real, and the death and kill chances at their swings match (.036 / .042 against .038 / .045).
+- **The spread is missing.** Real fighters differ in risk appetite about 3.5 times as much as the personas, beyond sampling noise. Both the aggressive tail (p90 .84 against .75) and the cautious one (p10 .54 against .62) are thin in the sim. The personas' traits (eat, big meal, axe, eat-first) don't carry this.
+- **Desperate axe swings:** the scripts swing the axe at HP < 20 at 62 per 1,000 ticks, against 87 real.
+- **Against n3r33 the scripts barely threaten.** Their kill chance at a swing is .019, against .042 against each other. In mutual danger with a kill chance they swing first only .49, with .31 "none" (no swing, shown meal or tab within 4 ticks).
+  - The net keeps its own D low: .018 at its swings, and .027 of its ticks at D ≥ .25.
+  - What the scripts do in those "none" windows is not yet known (hidden meals, a clock pushed back by a meal, the net out of reach).
+- Side observation: degraded Dharok pieces (helm/body/legs 75: 4881, 4893, 4899) and a few cosmetic items have no item row. They are 0.7% of worn slot-ticks in the corpus. A viewer reading an opponent in them misses his set effect, live too.

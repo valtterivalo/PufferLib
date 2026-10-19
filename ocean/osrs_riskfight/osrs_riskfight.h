@@ -70,6 +70,10 @@ struct Env {
     float oppfit_probability;
     int oppfit_active;
     uint32_t oppfit_seed;
+    /* Probes only (NULL in training): called on the step that ends a fight, with the state of its last tick, before the round is logged and the next fight or
+     * a new session replaces it. */
+    void (*fight_end)(void* context, const struct Env* env);
+    void* fight_end_context;
 #ifdef OSRS_PUFFER_RENDER
     void* renderer;
 #endif
@@ -417,6 +421,7 @@ void puf_step(Env* env) {
     const int budget = env->training.config.session_ticks;
     env->session_elapsed++;
     if (env->state.env.episode_over) {
+        if (env->fight_end) env->fight_end(env->fight_end_context, env);
         riskfight_native_log_round(env);
         env->session_fights++;
         if (env->session_elapsed < budget) {
