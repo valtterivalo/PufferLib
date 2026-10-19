@@ -1674,15 +1674,40 @@ p6 (seeds 111-113, fb12299a3) has the same env except for the old motor clock, s
 ## 2026-10-20: the brew cap (the user's rule), branch brew-cap
 
 - **Live, p7s121, session 20261019T212039** (2 fights, ticks 430-503 and 610-764):
-  - 9 brew decisions:
+  - 8 brew decisions:
     - one alone at 105 HP (436, to 120);
     - marlin + brew at 70 twice (448, 472, to 110);
     - marlin + brew (+ halibut) at 31-71 four times;
     - brew alone at 46.
-  - Each overheal drained attack and strength. A restore followed (14 restore decisions) and then a super combat (8 combat decisions), until the combats ran out.
+  - Each overheal drained attack and strength. Restores followed (9 restore decisions), then super combats (4 decisions, the potion's 4 doses), until the combats ran out.
   - His chance range (`range`) sat at 86-119, so the meal gate was open at almost every HP.
 - **The rule (the user's):** in this fighting a brew is never drunk to overheal.
   - **Mask:** `riskfight_consumable_useful` offers a brew only while its heal leaves hitpoints below base, i.e. 82 or less at 99. Before, the cap was base + heal.
   - **Execution:** `riskfight_drink_click` drops a brew whose decision's food-head meal, eaten first, lifts hitpoints to where the brew would reach base. Behind a marlin (24) the brew survives only at 58 or less. The same rule runs in the sim's step for both net seats and in gs_rl_server before its records.
   - Combo food (halibut, karambwan) is clicked after the drink and doesn't count.
 - **Tests:** `test_riskfight_useful_consumables` checks both boundaries (`test_brew`, `test_brew_after_food`), and the goldens are refreshed.
+
+## 2026-10-20: p8, the first nets with the brew cap (5f64f400f, seeds 131-133)
+
+Same probes as p7 (p7 differs only in the cap). Brew and combat drinks are per session, all kits.
+
+| | ladder | Dharok net/h | Dharok deaths/session | overeats/fight | brews | combats | low opponents dead in 10 ticks [90%] |
+|---|---|---|---|---|---|---|---|
+| p7 s121/122/123 | 8.87 / 8.99 / 8.98 | 8.50 / 8.48 / 7.96 | .06 / .17 / .16 | .12 / .12 / .13 | 19.5 / 3.8 / 21.3 | 14.7 / 3.6 / 14.8 | .21 / .23 / .22 |
+| p8 s131/132/133 | 8.59 / 8.83 / 8.48 | 8.76 / 8.38 / 8.47 | .03 / .22 / .19 | .08 / .10 / .17 | 14.4 / 3.7 / 7.4 | 11.2 / 3.4 / 6.3 | .21 [.18, .24] / .24 / .21 |
+
+- The cap cuts brews and combats in two of three seeds. Kills, net/h and the low-opponent kill rate don't move beyond seed noise. The ladder dips by .1-.5.
+- d where greedy skips a low-HP meal: +.050 [-.055, +.164], -.076 [-.163, +.017], -.011 [-.084, +.071]. Unresolved, as in p7.
+- **On the live states of 20261019T212039** (factual states, each net's choice at p7s121's states):
+
+  | net | brews | brew HPs | combats | restores |
+  |---|---|---|---|---|
+  | p7s121 | 8 | 105, 70, 70, 52, 46, 31, 55, 71 | 4 | 9 |
+  | p8 s131 | 4 | 52, 46, 31, 55 | 5 | 9 |
+  | p8 s132 | 0 | | 0 | 12 |
+  | p8 s133 | 3 | 52, 55, 71 | 3 | 9 |
+
+  Brew HPs list the HP at each brew decision. No p8 net brews above 82.
+- **Installed:** `engine-install --checkpoint p8s131` from c-main 5f64f400f. It has the lowest Dharok deaths (.03) and the best Dharok net/h (8.76) of p8.
+  - `engine-replay --local` of 20261019T212039, 20261019T190858, 20261018T185228, 20261017T211452, 20261015T203026 and 20261017T230732 is clean.
+  - The server's brew drop is covered by `test_brew_after_food` (the same function) only; the replay lines don't name the items clicked.
