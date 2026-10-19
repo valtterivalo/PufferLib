@@ -1680,7 +1680,7 @@ p6 (seeds 111-113, fb12299a3) has the same env except for the old motor clock, s
     - marlin + brew (+ halibut) at 31-71 four times;
     - brew alone at 46.
   - Each overheal drained attack and strength. Restores followed (9 restore decisions), then super combats (4 decisions, the potion's 4 doses), until the combats ran out.
-  - His chance range (`range`) sat at 86-119, so the meal gate was open at almost every HP.
+  - His chance range (`range`) was 86-119 through fight 1 and 45-100 in fight 2. At most of the brew and meal decisions the meal gate was open, but an open gate doesn't explain why the net chose to eat.
 - **The rule (the user's):** in this fighting a brew is never drunk to overheal.
   - **Mask:** `riskfight_consumable_useful` offers a brew only while its heal leaves hitpoints below base, i.e. 82 or less at 99. Before, the cap was base + heal.
   - **Execution:** `riskfight_drink_click` drops a brew whose decision's food-head meal, eaten first, lifts hitpoints to where the brew would reach base. Behind a marlin (24) the brew survives only at 58 or less. The same rule runs in the sim's step for both net seats and in gs_rl_server before its records.
@@ -1711,3 +1711,16 @@ Same probes as p7 (p7 differs only in the cap). Brew and combat drinks are per s
 - **Installed:** `engine-install --checkpoint p8s131` from c-main 5f64f400f. It has the lowest Dharok deaths (.03) and the best Dharok net/h (8.76) of p8.
   - `engine-replay --local` of 20261019T212039, 20261019T190858, 20261018T185228, 20261017T211452, 20261015T203026 and 20261017T230732 is clean.
   - The server's brew drop is covered by `test_brew_after_food` (the same function) only; the replay lines don't name the items clicked.
+- **Boosts in our Dharok-kit fights** (throwaway probe; 400 sessions per net at argmax with the probe_risk_duels env, our Dharok-kit fight ticks only; session-clustered 90% intervals):
+
+  | | str >= 110 share of ticks | ticks with no super combat dose left | fights that run out of combats | combat / brew doses per fight |
+  |---|---|---|---|---|
+  | p7 s121 | .73 [.70, .75] | .31 [.29, .33] | .32 [.29, .34] | 1.98 / 2.67 |
+  | p7 s122 | .85 [.83, .87] | .17 [.15, .19] | .17 [.15, .20] | 1.11 / 1.39 |
+  | p7 s123 | .73 [.71, .75] | .31 [.28, .33] | .28 [.26, .30] | 1.86 / 2.33 |
+  | p8 s131 | .84 [.83, .86] | .16 [.14, .18] | .18 [.16, .20] | 1.48 / 1.92 |
+  | p8 s132 | .92 [.90, .93] | .11 [.09, .13] | .13 [.11, .15] | .87 / 1.01 |
+  | p8 s133 | .89 [.87, .90] | .13 [.11, .14] | .15 [.13, .18] | 1.16 / 1.38 |
+
+  - With the cap, every p8 seed keeps strength boosted longer and runs out of combats less often than the p7 seeds. The seeds differ between arms, so this isn't a paired comparison, but all three p8 seeds beat the two worst p7 seeds with no overlap.
+  - The installed seed moves from .73 to .84 str>=110 uptime and from .32 to .18 of fights running out.
