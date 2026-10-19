@@ -1519,3 +1519,21 @@ p2's config, 150M steps, seeds 81-83. Argmax `session_probe` (300 sessions, `liv
   - KOs by a Voidwaker special with his reflect: .07 → .14 (real .20). Such bursts: .03 → .06 (real .08).
   - KO total per 10,000 fighter-ticks: 11.0 (real 9.9). At 40-59 HP: 24.6 (real 32).
 - Tests pass; goldens refreshed.
+
+## 2026-10-19: the low-HP meal probe with session-clustered intervals (correction)
+
+- **Correction (advisories):** the per-decision SE treated decisions as independent, but consecutive eligible ticks share a fight. The "clearly above zero in four seeds" claim is withdrawn.
+  - The probe now resamples sessions for 90% intervals and reports d where greedy skips. There the skip branch is greedy's own play, so it is the direct test of whether an extra meal pays.
+- **≤ 20 HP, 300 sessions, seed 2, 6 rolls per branch:**
+
+  | Net | Greedy eats | Mean d [90%] | d where greedy skips (n) [90%] |
+  |---|---|---|---|
+  | p3 s81 | .26 | +.014 [−.038, +.072] | +.010 (232) [−.056, +.084] |
+  | p3 s82 | .19 | +.022 [−.070, +.120] | +.032 (208) [−.075, +.145] |
+  | p3 s83 | .16 | +.134 [+.065, +.205] | +.105 (312) [+.026, +.180] |
+  | p4 s91 | .21 | +.104 [+.033, +.186] | +.083 (315) [−.007, +.174] |
+  | p4 s92 | .30 | +.120 [+.039, +.200] | +.119 (227) [+.017, +.219] |
+  | p4 s93 | .22 | +.063 [−.017, +.143] | +.059 (219) [−.027, +.148] |
+
+  - Where greedy skips, an extra meal's point estimate is positive for all six nets (mean +.068 per fight in KO − price × death). Two of six intervals exclude 0.
+  - As six independent training runs, all-positive has a one-sided sign-test p of .016. The under-eating is modest and real on average, but no single net shows it firmly.
