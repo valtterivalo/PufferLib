@@ -1478,3 +1478,20 @@ p2's config, 150M steps, seeds 81-83. Argmax `session_probe` (300 sessions, `liv
 
   - The total matches. The shift from 40-59 to 20-39 is within reach of the gap estimate's bias (a meal hidden on a swing tick moves HP), so the band split isn't a target.
 - Tests pass; goldens refreshed.
+
+## 2026-10-19: the low-HP meal probe, per decision (correction)
+
+- **Correction (advisories):** `probe_lowhp_meals`' "greedy matches better branch" compared each decision with its band's pooled branch means, not with that state's own outcomes. The "eating is the better option at every price" read was a pooled result.
+  - The probe now plays each branch 6 times per decision, with paired combat dice, and reports pooled and per-decision results apart.
+- **p3 seeds at ≤ 20 HP** (150 sessions; d is the forced meal's benefit in KO − price × death per fight):
+
+  | Seed | Greedy eats | Mean d (se) | Meal better / worse / not told apart | Greedy picks the better, of those told apart |
+  |---|---|---|---|---|
+  | 81 | .33 | +.164 (.052) | .11 / .06 / .83 | .42 |
+  | 82 | .30 | +.024 (.045) | .06 / .05 / .88 | .87 |
+  | 83 | .12 | +.105 (.040) | .08 / .07 / .85 | .55 |
+
+  - On average a forced meal at ≤ 20 HP is worth it for seeds 81 and 83; for 82 it isn't told from zero.
+  - With 6 binary rolls, 83-88% of decisions can't be told apart. The per-state accuracy rests on 15-30 decisions per seed and isn't a result. Separating d of about .15 per state needs about 50 rolls.
+  - The pooled break-even for seed 82 flipped between runs ("eat always" at 2 rolls, "skip below 0.16" at 6): the pooled column is noise at this n.
+- **Live real2sim for the ledger:** `ocean/osrs/tests/export_tape_duels.c` writes own tapes as duels. `tools/rollout_export.py` gives 8 tapes for the Oct 17-18 sessions, and only one is Dharok v Dharok, so a live ledger needs more live Dharok fights.
