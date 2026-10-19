@@ -1316,5 +1316,17 @@ p1 = night3 trial 33's hyperparameters, 150M steps on 4f8d314cb, `live_loadout` 
 | Our death (mutual included) | .019 | 26 (.44 / .21 / .23 / .11 / 0) | 29 | .61 / .21 | .56 | 16.5 / 10.4 |
 
 - Per 3,000-tick session: 4.72 kills, 0.13 deaths (mutual included), 0.16 our tabs, 2.03 his tabs (0.23 ragged). Dharok kit 4.43 kills / 0.10 deaths, VW kits 4.96 / 0.16.
-- Our tabs come only in long fights when our food is almost gone. Our deaths come early, with a full bag, in close trades; .44 start their tick at 0-19 HP.
+- Observed distributions, not causes: our tabs all fall at tick 100+, with 2.1 food items left on average (.19 none). Our deaths fall early (.61 before tick 50) with 16.5 food left; .44 start their tick at 0-19 HP.
+- **Joint columns** (added after an advisory: "no food" counts eat items only, while the scripts' forced tab needs no eat item, no brew dose and HP < 30):
+
+  | Ending | Under 30, no heals (the forced-tab state) | Under 40, heals left |
+  |---|---|---|
+  | Our tab | 0 | .19 |
+  | His tab, Dharok kit | .38 | .29 |
+  | His tab, other kit | .26 | .18 |
+  | Our death | 0 | .66 |
+  | Our kill (his state) | .04 | .74 |
+
+  - .38 of Dharok-kit tabs come in the forced state, not the .50 the eat-item column suggested. The rule tabs at once in that state, so those are its tabs `[INFERENCE: the per-tick roll could fire on the same tick]`.
+  - All our tabs under 40 HP (.19) had heals left, so n3r33 does tab at low HP with food left. Every death under 40 HP had heals left.
 - Real duels between players end by KO .25-.27 (either side). The net KOs .67 of its sim opponents: the net's edge over the fitted scripts is the sim's claim, still unmeasured live.
