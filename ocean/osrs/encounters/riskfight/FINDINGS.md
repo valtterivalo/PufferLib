@@ -1495,3 +1495,15 @@ p2's config, 150M steps, seeds 81-83. Argmax `session_probe` (300 sessions, `liv
   - With 6 binary rolls, 83-88% of decisions can't be told apart. The per-state accuracy rests on 15-30 decisions per seed and isn't a result. Separating d of about .15 per state needs about 50 rolls.
   - The pooled break-even for seed 82 flipped between runs ("eat always" at 2 rolls, "skip below 0.16" at 6): the pooled column is noise at this n.
 - **Live real2sim for the ledger:** `ocean/osrs/tests/export_tape_duels.c` writes own tapes as duels. `tools/rollout_export.py` gives 8 tapes for the Oct 17-18 sessions, and only one is Dharok v Dharok, so a live ledger needs more live Dharok fights.
+
+## 2026-10-19: p4, three seeds against the Vengeance-keyed Voidwaker (c-main d34183ce6)
+
+| Seed | Ladder | Dharok (deaths per session) | tentacle+VW+maul | tentacle+VW | tentacle+AGS+maul | VW | ≤ 20: greedy eats / mean meal benefit d (se) |
+|---|---|---|---|---|---|---|---|
+| 91 | 8.80 | 9.09 (.18) | 7.38 | 10.91 | 4.85 | 9.18 | .20 / +.031 (.023) |
+| 92 | 8.72 | 7.81 (.15) | 7.91 | 7.61 | 3.46 | 9.59 | .32 / +.109 (.034) |
+| 93 | 8.86 | 8.55 (.03) | 7.04 | 8.42 | 4.89 | 9.56 | .17 / +.080 (.029) |
+
+- The forced meal at ≤ 20 HP is worth +.03 to +.16 per fight on average in five of six p3/p4 seeds (four of them over 2 se), while the nets eat greedily .12-.33 of the time.
+  - The pooled evidence that nets under-eat at very low HP holds. Which states they get wrong is not resolved at 6 rolls.
+- No candidate replaces n3r33.
