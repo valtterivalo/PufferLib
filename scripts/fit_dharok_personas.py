@@ -41,11 +41,13 @@ from fit_dharok_meals import SWING_SPEED, INSTANT_ANIMS, band_of, STATUS_L, HEAL
 from fit_dharok_tab import TELEPORT_ANIMS  # noqa: E402
 
 EAT = 2
-BEHAVIOURS = ("meal_low", "meal_mid", "eat", "uptime", "vw_spec", "axe", "orb", "tab", "big_meal")
+BEHAVIOURS = ("meal_low", "meal_mid", "eat", "uptime", "vw_spec", "axe", "orb", "tab", "big_meal", "order", "order_ready", "hidden_meal")
 OUTCOMES = ("ko_dealt", "ko_taken", "escaped")
 EAT_BLOCK = 3      # ticks after an eat animation in which a ready tick is not counted (the meal delays his swing)
 BIG_MEAL = 33      # heal of a double meal or more
 VW_BAR_MAX = 25    # riskfight_policy.h RF_VW_SPEC_BAR_MAX
+ORDER_BAR = 12     # order: a hit leaves his bar at 1 .. ORDER_BAR - 1 (12: under 40 hitpoints, meal bands 0-1 where RF_DHAROK_MEAL_CLOCK applies); --order-bar
+ORDER_W, ORDER_CLOCKS, FOOD_DELAY = 8, 3, 3  # fit_dharok_meal_clock.py's window, clocks 0-2 (the ticks before his swing), a meal's attack delay
 
 
 def anims(field):
@@ -91,6 +93,45 @@ def units(duels):
                 if band <= 2: add("meal_low", (band, L), heal < HEALED_MIN)
                 elif band <= 4: add("meal_mid", (band, L), heal >= HEALED_MIN)
                 if band <= 4: add("eat", (band, L), heal >= HEALED_MIN)
+            def gap_heal(u):
+                """The heal shown over the gap of fresh reads around tick u (the last read before it, the first from it), None if unreadable."""
+                a = next((x for x in reversed(fresh) if x < u), None)
+                b = next((x for x in fresh if x >= u), None)
+                if a is None or b is None or b - a > 12 or any(rows[x][1] for x in range(a, b + 1)): return None
+                return a, b, int(mine[b][BAR]) * 99 / 30 + int(mine[b][DMG]) - int(mine[a][BAR]) * 99 / 30
+
+            # low-HP order (fit_dharok_meal_clock.py): his own clock from his swing animations, a meal adding its delay; after a hit leaves his bar at
+            # 1 .. ORDER_BAR - 1 with his clock at t+1 at 0-2, his first eat animation before his first swing, a meal by the heal its gap shows ("eat
+            # first"; an eat animation with no heal is a potion, which the persona doesn't scale); order_ready: clock 0 only
+            clock, clocks = None, []
+            for t in range(n):
+                if clock is not None:
+                    clock -= 1
+                    if mine[t][EAT] == "1": clock += FOOD_DELAY
+                own = [x for x in anims(mine[t][ANIMS]) if x in SWING_ANIMS and x not in INSTANT_ANIMS]
+                if own: clock = SWING_SPEED.get(own[0], 4) - 1
+                clocks.append(clock)
+            for t in range(1, min(end, n - ORDER_W)):
+                if int(mine[t][NHIT]) <= 0 or int(mine[t][DMG]) <= 0 or rows[t][1] or not 0 < int(mine[t][BAR]) < ORDER_BAR or clocks[t] is None:
+                    continue
+                r = max(0, clocks[t])
+                if r >= ORDER_CLOCKS: continue
+                sw = next((u for u in range(t + 1, t + 1 + ORDER_W) if any(a in SWING_ANIMS for a in anims(mine[u][ANIMS]))), None)
+                ate = next((u for u in range(t + 1, t + 1 + ORDER_W) if mine[u][EAT] == "1"), None)
+                y = ate is not None and (sw is None or ate < sw)
+                if y:
+                    g = gap_heal(ate)
+                    if g is None: continue
+                    y = g[2] >= HEALED_MIN
+                add("order", r, y)
+                if r == 0: add("order_ready", 0, y)
+            # hidden_meal: a swing of his at bar under 12 whose gap of fresh reads (the last before the swing tick, the first from it) shows a heal of
+            # HEALED_MIN with no eat animation in it: a meal eaten on the swing tick (where it never shows) or hidden by a hit or carry; cell his bar band
+            for u in range(2, end + 1):
+                if rows[u][1] or not any(x in SWING_ANIMS and x not in INSTANT_ANIMS for x in anims(mine[u][ANIMS])) or not 0 < s.bar[u - 1] < 12: continue
+                g = gap_heal(u)
+                if g is None: continue
+                add("hidden_meal", s.bar[u - 1] >= 6, g[2] >= HEALED_MIN and not any(mine[x][EAT] == "1" for x in range(g[0] + 1, g[1] + 1)))
             # uptime, specs, axe, tab over the fight (first hit to its end)
             if first is None: continue
             vw = any(r[WEAPON_FIELD] == str(VOIDWAKER) or r[SPEC] == "VW" for r in mine[:end + 1])
@@ -147,25 +188,40 @@ class Data:
 
 
 MEAL_H = (0.589, 0.572, 0.468, 0.205, 0.036)  # riskfight_policy.h RF_DHAROK_MEAL_PM bands 0-4 (fit_dharok_meals.py)
-PERSONA_TRAITS = ("eat", "big_meal", "axe")  # riskfight_personas.h columns, in this order
+PERSONA_TRAITS = ("eat", "big_meal", "axe", "order")  # riskfight_personas.h columns, in this order
+PERSONA_OFFSET = {"order": "eat"}  # a trait fitted on top of another the script applies with it: the pre-swing meal exponent is EAT x EAT_FIRST
+ORDER_PRE = sum((632, 200, 316)) / 4000  # riskfight_policy.h RF_DHAROK_MEAL_CLOCK: clocks 0-2's share of the 4-tick cycle's exponent (clock 3 up has the rest)
+ORDER_GAIN = 3.0  # the order column's spread over the fit's: the sim's between-fighter sd of order, read by this script on the sim's duels, is closest to real at 3
 THETA = [i / 50 - 4 for i in range(401)]     # the log-scale grid a fighter's loglik is tabulated on
 NODES = [i / 4 - 4 for i in range(33)]
 _w = [math.exp(-z * z / 2) for z in NODES]
 WEIGHTS = [w / sum(_w) for w in _w]
 
 
-def prob(trait, cell, p, th):
-    """A fighter's event probability at log-scale offset th: the meal hazard's log-survival times e^th (eat), else the odds times e^th."""
+def multiplier(trait, th):
+    """A trait's per-unit multiplier at th: e^th, but order's is the pre-swing share of the cycle's meal exponent on a logit scale over its pooled share
+    (bounded by 1 / ORDER_PRE, where clock 3 up is left nothing), so a fighter's whole cycle still eats as much."""
+    if trait == "order":
+        return 1 / (1 + math.exp(-(math.log(ORDER_PRE / (1 - ORDER_PRE)) + th))) / ORDER_PRE
+    return math.exp(th)
+
+
+def prob(trait, cell, p, th, off=0.0):
+    """A fighter's event probability at log-scale offset th: the meal hazard's log-survival times the multiplier (eat; order, eating before his swing at
+    the cell's pooled rate, times e^off, his eat), else the odds times it."""
     if trait == "eat":
         band, L = cell
         return 1 - (1 - MEAL_H[band]) ** (L * math.exp(th))
     p = min(max(p, 1e-6), 1 - 1e-6)
+    if trait == "order":
+        return 1 - (1 - p) ** (math.exp(off) * multiplier(trait, th))
     odds = p / (1 - p) * math.exp(th)
     return odds / (1 + odds)
 
 
-def latent(data, trait):
-    """Random-effect fit, th ~ N(mu, sigma^2) per fighter: (mu, sigma, {fighter: posterior mean th}) by marginal likelihood on a grid."""
+def latent(data, trait, offset=None):
+    """Random-effect fit, th ~ N(mu, sigma^2) per fighter: (mu, sigma, {fighter: posterior mean th}) by marginal likelihood on a grid. offset: a fighter's
+    known log-scale offset added to th (his persona value of the trait the script applies together with this one)."""
     p = data.pooled[trait]
     per = collections.defaultdict(lambda: collections.defaultdict(lambda: [0, 0]))
     for f, _, cells, _ in data.fds:
@@ -178,7 +234,7 @@ def latent(data, trait):
         for th in THETA:
             s = 0.0
             for c, (n, y) in cells.items():
-                q = min(max(prob(trait, c, p[c], th), 1e-9), 1 - 1e-9)
+                q = min(max(prob(trait, c, p[c], th, offset[f] if offset else 0.0), 1e-9), 1 - 1e-9)
                 s += y * math.log(q) + (n - y) * math.log(1 - q)
             row.append(s)
         top = max(row)
@@ -199,19 +255,20 @@ def latent(data, trait):
     return mu, sigma, post
 
 
-def personas(data, fights, shares):
+def personas(data, fights, shares, gain):
     """Per fighter: (fights, {trait: th}). The posterior means are spread back to the persistent variance sigma^2 x min(1, share) about mu (a fighter's
-    shrunk estimate alone is narrower than the fighters are), whole vectors kept, so the traits keep their correlations."""
+    shrunk estimate alone is narrower than the fighters are), whole vectors kept, so the traits keep their correlations. gain: a trait's spread times this
+    (ORDER_GAIN)."""
     out = {f: {} for f in fights}
     fitted = {}
     for trait in PERSONA_TRAITS:
-        mu, sigma, post = latent(data, trait)
+        mu, sigma, post = latent(data, trait, {f: out[f][PERSONA_OFFSET[trait]] for f in fights} if trait in PERSONA_OFFSET else None)
         vals = {f: post.get(f, mu) for f in fights}
         w = sum(fights.values())
         mean = sum(vals[f] * fights[f] for f in fights) / w
         var = sum((vals[f] - mean) ** 2 * fights[f] for f in fights) / w
         target = sigma ** 2 * min(1.0, max(0.0, shares[trait]))
-        scale = math.sqrt(target / var) if var > 0 else 0.0
+        scale = (math.sqrt(target / var) if var > 0 else 0.0) * gain.get(trait, 1.0)
         for f in fights: out[f][trait] = mu + scale * (vals[f] - mean)
         fitted[trait] = (mu, sigma, scale)
     return out, fitted
@@ -262,12 +319,16 @@ def quantiles(xs, qs=(0.05, 0.95)):
 
 
 def main():
+    global ORDER_BAR
     ap = argparse.ArgumentParser()
     ap.add_argument("--duels", default=DEFAULT_DUELS)
     ap.add_argument("--names")
     ap.add_argument("--boot", type=int, default=200)
     ap.add_argument("--table", help="write riskfight_personas.h here")
+    ap.add_argument("--order-bar", type=int, default=ORDER_BAR, help="order events: his bar under this after the hit (12: < 40 hitpoints, 15: < 50)")
+    ap.add_argument("--order-gain", type=float, default=ORDER_GAIN, help="the order column's spread times this (ORDER_GAIN)")
     args = ap.parse_args()
+    ORDER_BAR = args.order_bar
     names_path = args.names or args.duels + ".names"
     names = {}
     with open(names_path) as fh:
@@ -347,29 +408,31 @@ def main():
             lo, hi = quantiles(bs)
             cells.append(f"{o} {wr(fighters):+.2f} [{lo:+.2f}, {hi:+.2f}]")
         print(f"  {b}: " + "; ".join(cells))
-    vec, fitted = personas(data, fights, shares)
+    vec, fitted = personas(data, fights, shares, {"order": args.order_gain})
     print("personas: th ~ N(mu, sigma^2) per fighter by marginal likelihood; spread back to sigma x sqrt(min(1, persistent share)) (eat: log-survival "
-          "exponent of RF_DHAROK_MEAL_PM bands 0-4; big_meal: odds of a double or triple meal; axe: odds of RF_AXE_SWING_PM)")
+          "exponent of RF_DHAROK_MEAL_PM bands 0-4; big_meal: odds of a double or triple meal; axe: odds of RF_AXE_SWING_PM; order: the exponent of "
+          "RF_DHAROK_MEAL_CLOCK clocks 0-2, on top of eat)")
     for t in PERSONA_TRAITS:
         mu, sigma, scale = fitted[t]
-        xs = sorted(math.exp(vec[f][t]) for f in fighters)
+        xs = sorted(multiplier(t, vec[f][t]) for f in fighters)
         print(f"  {t}: mu {mu:+.2f} sigma {sigma:.2f} spread x{scale:.2f}; multiplier p10 / p50 / p90 {xs[len(xs) // 10]:.2f} / {xs[len(xs) // 2]:.2f} / "
               f"{xs[9 * len(xs) // 10]:.2f}")
     for i, a in enumerate(PERSONA_TRAITS):
         for b in PERSONA_TRAITS[i + 1:]:
             print(f"  persona correlation {a} ~ {b}: {wcorr([vec[f][a] for f in fighters], [vec[f][b] for f in fighters], [fights[f] for f in fighters]):+.2f}")
     if args.table:
+        if ORDER_BAR != 12: ap.error("--table needs --order-bar 12: RF_DHAROK_MEAL_CLOCK applies under 40 hitpoints")
         rows, cum = [], 0
         for f in fighters:
             cum += fights[f]
-            rows.append("{" + ", ".join(str(x) for x in [cum] + [round(1000 * math.exp(vec[f][t])) for t in PERSONA_TRAITS]) + "}")
+            rows.append("{" + ", ".join(str(x) for x in [cum] + [round(1000 * multiplier(t, vec[f][t])) for t in PERSONA_TRAITS]) + "}")
         with open(args.table, "w") as fh:
             fh.write("#ifndef OSRS_RISKFIGHT_PERSONAS_H\n#define OSRS_RISKFIGHT_PERSONAS_H\n")
             fh.write(f"/** Generated by scripts/fit_dharok_personas.py from {os.path.basename(args.duels)}: one row per spectated Dharok fighter ({len(fighters)} "
                      f"fighters of {len(fds)} Dharok v Dharok fighter-duels), drawn in proportion to his fights. Columns: cumulative fights, then per mille "
                      "multipliers (RiskfightDharokPersonaTrait). */\n")
             fh.write(f"enum {{ RF_DHAROK_PERSONAS = {len(rows)} }};\n")
-            fh.write("static const uint16_t RF_DHAROK_PERSONA[RF_DHAROK_PERSONAS][4] = {\n")
+            fh.write(f"static const uint16_t RF_DHAROK_PERSONA[RF_DHAROK_PERSONAS][{1 + len(PERSONA_TRAITS)}] = {{\n")
             for i in range(0, len(rows), 6):
                 fh.write("    " + ", ".join(rows[i:i + 6]) + ",\n")
             fh.write("};\n#endif\n")

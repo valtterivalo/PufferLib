@@ -34,12 +34,14 @@ typedef struct {
 } RiskfightProfile;
 #include "riskfight_profiles.h"
 /* A spectated Dharok fighter's own play, kept by a Dharok pool opponent over the rounds of a session (scripts/fit_dharok_personas.py). Spectated fighters differ
- * beyond the noise of their counts in how fast they eat after a hit, how big their meals are and how often they swing the greataxe, and those differences
- * persist across their fights; a row is one fighter's empirical-Bayes estimate, spread back to the fitted between-fighter variance, the traits of a row kept
- * together so their correlation stays. Per mille multipliers: EAT the exponent of the log-survival of RF_DHAROK_MEAL_PM bands 0-4 (above 1000 eats sooner),
- * BIG_MEAL the odds of a double or triple meal, AXE the odds of RF_AXE_SWING_PM. CUM is the cumulative count of the fighter's spectated fights (the draw's
- * weight). Orbs differ as much between fighters, but the kit's orb share (RF_KIT_ORB_PM, carrying or not) already gives that spread. */
-typedef enum { RF_PERSONA_CUM, RF_PERSONA_EAT, RF_PERSONA_BIG_MEAL, RF_PERSONA_AXE } RiskfightDharokPersonaTrait;
+ * beyond the noise of their counts in how fast they eat after a hit, how big their meals are, how often they swing the greataxe and, when a hit leaves them
+ * under 40, whether they eat before their next swing or swing first, and those differences persist across their fights; a row is one fighter's
+ * empirical-Bayes estimate, spread back to the fitted between-fighter variance, the traits of a row kept together so their correlation stays. Per mille
+ * multipliers: EAT the exponent of the log-survival of RF_DHAROK_MEAL_PM bands 0-4 (above 1000 eats sooner), BIG_MEAL the odds of a double or triple meal,
+ * AXE the odds of RF_AXE_SWING_PM, EAT_FIRST the exponent of RF_DHAROK_MEAL_CLOCK clocks 0-2 (below 1000 swings before he eats; clock 3 up takes the rest of
+ * the cycle, so he eats after the swing instead). CUM is the cumulative count of the fighter's spectated fights (the draw's weight). Orbs differ as much
+ * between fighters, but the kit's orb share (RF_KIT_ORB_PM, carrying or not) already gives that spread. */
+typedef enum { RF_PERSONA_CUM, RF_PERSONA_EAT, RF_PERSONA_BIG_MEAL, RF_PERSONA_AXE, RF_PERSONA_EAT_FIRST } RiskfightDharokPersonaTrait;
 #include "riskfight_personas.h"
 typedef char riskfight_dharok_persona_fits_uint8[RF_DHAROK_PERSONAS < 255 ? 1 : -1]; /* dharok_persona is 1 + a row in a uint8_t; a typedef compiles as C and CUDA C++ */
 

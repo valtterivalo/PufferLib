@@ -1135,3 +1135,45 @@ Harness: `dh`, both seats on the Dharok script with personas, starts drawn, 6,00
   - The live server reads the `B` line's owner and flip. Before this change the live state's PID was a coin flip: `snapshot_of` sends '?'.
 - **Limits.** A swing that landed on its own tick reads .119 on [1], not 0, because the wire doesn't say whether his hitsplat on us came on the swing's tick. An optional `V` field for that would make [1] exact. A `swing_spec` that arrives a tick late leaves [3] at 0 on the decision tick.
 - **Parity** (`test_rl_pid_obs_parity`): sim fights are replayed into `rt_observe` as `V` and `B` lines. Over 6 fights, every tick has the same PID block, the same newest history row and the same energy estimate live and in the sim.
+## 2026-10-19: swing first or eat first when low, a persona trait (branch persona-risk)
+
+Data: `spectator.duels` (510 Dharok v Dharok duels, 994 fighter-duels, 169 fighters with events). Sim: `dh` harness (both seats on the Dharok script, personas on, starts drawn, 6,000 fights, 3 seeds), written as `spectator.duels` with the persona as the fighter's name, so `scripts/fit_dharok_personas.py` reads real and sim the same way. Scripts in /tmp/personarisk (`dh.c`, `truth.py`, `bypersona.py`, `ends.py`).
+
+- **New behaviours in `fit_dharok_personas.py`:**
+  - order: after a hit leaves his bar at 1-11 (under 40) with his own clock at 0-2 at the next tick, a meal before his next swing. A meal is an eat animation whose gap of fresh reads shows a heal of 8+, so potion sips don't count (the visibility correction of `fit_dharok_meals.py`). Cell: his clock. order_ready: clock 0 only.
+  - hidden_meal: a swing of his at bar 1-11 whose gap shows a heal of 8+ with no eat animation in it (a meal on the swing tick, or one hidden by a hit or carry).
+- **Heterogeneity** (real; X² over the null, p; sd of a fighter's multiplier [90% CI]; persistent share [90% CI]):
+
+  | Behaviour | Events | X² / null (p) | sd, fighters | Persistent share |
+  |---|---|---|---|---|
+  | Eat first, < 40, clock 0-2 | 1137 | 1.55 (0.01) | 0.24 [0.13, 0.39] | 0.36 [0.00, 1.06] |
+  | Eat first, < 40, clock 0 | 506 | 1.32 (0.01) | 0.33 [0.01, 0.56] | 0.39 |
+  | Eat first, < 50, clock 0-2 | 2297 | 1.82 (0.005) | 0.21 [0.15, 0.28] | 0.49 [0.23, 0.88] |
+  | Hidden meal on a low swing | 706 | 1.30 (0.03) | 0.31 [0.18, 0.43] | unstable (3.7) |
+
+  - Pooled: eat first .47; a hidden meal on .31 of low swings.
+  - Correlations (EB multipliers): eat first goes with fast eating (eat +0.29, unfed below 60 −0.42) and against uptime (−0.32). It is part of the careful/aggressive axis, not separate from it. Axe use: −0.06; hidden meal: −0.22.
+  - Outcomes: fighters who eat first escape more (+0.17 [0.01, 0.32]). There's no clear link to KOs dealt (+0.04) or deaths (−0.06 to −0.10, CIs span 0).
+- **Trait EAT_FIRST** (`RF_PERSONA_EAT_FIRST`, a fifth persona column). It scales `RF_DHAROK_MEAL_CLOCK` clocks 0-2, and clock 3 up keeps the rest of the cycle's 4000. A fighter who swings first eats right after his swing instead, and eats as much per cycle.
+  - Fit: a random effect on the logit of the clocks-0-2 share of the cycle (so it is bounded at 1 / 0.287). It is fitted on top of his EAT trait (the script applies both), then spread back as the other traits are.
+  - **The sim under-expresses it.** Read the same way, the sim's eat-first rate moves 0.22-0.29 per unit log exponent, against about 0.7 for a clean hazard. That holds in the true state too (`truth.py`), so it isn't the reader. The direct fit (p10/p90 0.73/1.25) gave a sim fighter sd of .09.
+  - The spread is calibrated in the sim: `ORDER_GAIN` 3 (p10/p50/p90 0.38/0.94/1.89) gives .16 (gain 2: .14), against real .24 per fighter (.22 persistent). The bound saturates beyond that.
+- **Validation** (c-main personas → persona-risk, 3 seeds):
+  - Pooled targets stay:
+    - KO .288 → .292.
+    - Escape .714 → .711.
+    - Eat first .462 → .451 (real .47).
+  - Low attackers, bands 0-19 / 20-39 / 40-59: swing by +2 is .20 / .20 / .20 in both arms (real .23 / .28 / .30); axe swings .30 / .29 / .22 in both (real .36 / .32 / .31).
+  - Spread: eat first, fighter sd .06 → .16, persistent share .07 → .22 (real .24, .36).
+- **Personas more broadly:**
+  - Read the same way, the sim under-disperses every persona trait: fighter sd eat .02 (real .07), big meal .04 (.15), axe .18 (.39), unfed below 60 .13 (.37).
+  - The spread-back targets the latent sigma, but the script's other paths dilute it: potions, food timers, running out of food, combos.
+  - So each trait's spread should be calibrated in the sim as EAT_FIRST is here.
+  - Real spread that is still pooled:
+    - Hidden meals: sd .31.
+    - Uptime: .07; the script always attacks, so there is no table to scale.
+    - Tab by HP: p .11.
+    - VW spec rate: p .06.
+    - The orb spread (.94) is already in the kit carry.
+  - Whole vectors are the right unit: the traits correlate (eat ~ big meal +0.51, eat first ~ unfed −0.42, ~ uptime −0.32), and drawing them independently would lose that.
+- Tests pass: test_riskfight_dharok_script, _mix and _scripts. The env_trace goldens are not refreshed: Dharok pool opponents' meal rolls change.
