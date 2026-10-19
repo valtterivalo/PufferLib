@@ -136,13 +136,21 @@ enum {
      *   27 orb               1 while we carry a locator orb, 28 1 while our hitpoints are above 1 (the orb can take one off)
      *   29 safe_window       his_ready_min minus the ticks until our own next swing (same convention: 1 when we can swing on the tick about to be played,
      *                        0 when we could already before), / RF_OBSERVATION_ATTACK_AGE_SCALE in [-1, 1]: positive, our swing comes first
-     *   30 hand_busy         1 while clicks of our previous decision are still unlanded (RiskfightState.hand_busy): this tick's mask is the no-op of every head */
+     *   30 hand_busy         1 while clicks of our previous decision are still unlanded (RiskfightState.hand_busy): this tick's mask is the no-op of every head
+     *   31 ko_ags_spec       as ko: an Armadyl godsword special (its row: spec_hit, uniform 0..spec_max); 0 without a godsword in the kit
+     *   32-33 chain          the chance a special of our opener and one granite maul special on the next tick knock him out together (the opener's damage
+     *                        plus the maul's at least his hitpoints, the same uniform hitpoints and independent rolls, exact convolution): 32 the Voidwaker
+     *                        special (as ko 23) then the maul (as ko 24), 33 the Armadyl godsword special (as 31) then the maul; 0 without both weapons.
+     *                        His meal between the two is ignored (the maul's special lands on the tick it is clicked, and the opener's hit lands the tick
+     *                        after its swing without PID, so both often land on one tick); our energy is not read (each costs 50; ko 25 likewise). A
+     *                        second maul special after the opener needs 150 energy, more than the bar holds, so no float counts it */
     RF_TACTICS_START = RF_TIMING_START + RF_TIMING_SIZE,
     RF_TACTICS_AXE_MAX = 0, RF_TACTICS_STRIPPED = 3, RF_TACTICS_IDENTITY = 4, RF_TACTICS_KINDS = 4,
     RF_TACTICS_CAN_WIELD_2H = RF_TACTICS_IDENTITY + RF_THREAT_OURS_SLOTS * RF_TACTICS_KINDS,
     RF_TACTICS_KO = RF_TACTICS_CAN_WIELD_2H + 1, RF_TACTICS_KO_COUNT = 5,
     RF_TACTICS_HIS_VENG = RF_TACTICS_KO + RF_TACTICS_KO_COUNT, RF_TACTICS_ORB, RF_TACTICS_HP_ABOVE_1, RF_TACTICS_SAFE_WINDOW, RF_TACTICS_HAND_BUSY,
-    RF_TACTICS_SIZE,
+    RF_TACTICS_KO_AGS_SPEC, RF_TACTICS_CHAIN, RF_TACTICS_CHAIN_COUNT = 2,
+    RF_TACTICS_SIZE = RF_TACTICS_CHAIN + RF_TACTICS_CHAIN_COUNT,
     /* PID block (riskfight_write_pid_observation), who acts first and his swing still in the air, from what a viewer reads (riskfight_pid_ours):
      *   0 pid_ours           the chance we hold PID: the reading of the latest melee pairing (an attack animation and its hitsplat on the same tick: the attacker
      *                        holds it; on the next: the target), 1 - its flip odds when it named us, its flip odds when it named him (RF_PID_FLIPPED over
@@ -311,7 +319,7 @@ typedef struct {
     OsrsActorRouteCache routes[2];
     HumanInput policy_commands[2];
     RiskfightOpponent opponent;
-    int kit_mix; /* RiskfightKitMix: what training resets draw our kit from (live_loadout 3 and 4) */
+    int kit_mix; /* RiskfightKitMix: what training resets draw our kit from (live_loadout 3, 4 and 5) */
     const RiskfightLoadout* opp_default; /* his kit when he takes no pool kit, as live_loadout set it */
     int opponent_pool; /* a reset draws his kit from the opponent pool (riskfight_kits.h) unless opp_plain; the script, OppFit or a net may play him */
     int opp_ragger;    /* the next new opponent is a ragger: a ranged pool kit (needs opponent_pool) */
@@ -385,9 +393,18 @@ enum { RF_VW_PIES = 2 };
  * 2 summer pies (2 bites), 6 halibut, 10 marlin, 2 blighted super restores, 2 brews, the ornate granite maul (24225), Dharok's greataxe, a super combat, the
  * locator orb (Feel: 10 self-damage, never below 1), the Vengeance sack (25 casts) and the house tablet. */
 static RiskfightLoadout RISKFIGHT_DHAROK_LOADOUT;
+/* The commonest setups of the spectated Dharok fighters that the user's kit is not (scripts/measure_dharok_play.py (g), 1,020 fighters of the 510 Dharok v Dharok
+ * duels: the main weapon most ticks in hand, the spec weapons and a granite maul seen wielded): an abyssal tentacle wielded with a Voidwaker and a maul for the
+ * specials (0.208), the same without the maul (0.043), the tentacle with an Armadyl godsword and a maul (0.021). The Voidwaker wielded is 0.459 (with a maul seen
+ * 0.118: the user's kit). Each is the user's Dharok kit with the tentacle wielded and the Voidwaker in the bag: with a maul it takes a marlin's cell (9 marlin),
+ * without one it takes the maul's; the godsword kit holds the godsword where the Voidwaker kit holds it. Same armour, defender, axe, orb and supplies. */
+enum { RF_DHAROK_TENTACLE_VW_MAUL, RF_DHAROK_TENTACLE_VW, RF_DHAROK_TENTACLE_AGS_MAUL, RF_DHAROK_SPECTATED_KITS };
+static RiskfightLoadout RISKFIGHT_DHAROK_SPECTATED_LOADOUT[RF_DHAROK_SPECTATED_KITS];
 /* What a training reset draws our kit from (riskfight_training_draw_kit): nothing (the kit live_loadout set stays); the three Voidwaker kits evenly (live_loadout 3);
- * the Dharok kit half the time, else the three Voidwaker kits evenly (live_loadout 4). */
-typedef enum { RF_KIT_MIX_NONE, RF_KIT_MIX_VW, RF_KIT_MIX_DHAROK } RiskfightKitMix;
+ * the Dharok kit half the time, else the three Voidwaker kits evenly (live_loadout 4); as 4, but a Dharok draw is one of the spectated Dharok kits, evenly, with
+ * the chance dharok_spectated_share (RiskfightTrainingConfig, RF_DHAROK_SPECTATED_SHARE unless set), the user's kit otherwise (live_loadout 5). */
+typedef enum { RF_KIT_MIX_NONE, RF_KIT_MIX_VW, RF_KIT_MIX_DHAROK, RF_KIT_MIX_DHAROK_SPECTATED } RiskfightKitMix;
+#define RF_DHAROK_SPECTATED_SHARE 0.5f
 
 __attribute__((constructor)) static void riskfight_build_default_loadout(void) {
     RiskfightLoadout loadout = {.hitpoints = 121, .vengeance_sacks = 100};
@@ -502,6 +519,23 @@ __attribute__((constructor)) static void riskfight_build_dharok_loadout(void) {
     (void)sizeof(riskfight_dharok_kit_fills_28_cells);
     memcpy(loadout.inventory, bag, sizeof(bag));
     RISKFIGHT_DHAROK_LOADOUT = loadout;
+    /* The spectated kits (RF_DHAROK_TENTACLE_*): the tentacle wielded, the spec weapon in the last marlin's cell (with a maul) or in the maul's (without). */
+    int last_marlin = -1, maul_cell = -1;
+    for (int i = 0; i < 28; i++) {
+        if (bag[i] == marlin) last_marlin = i;
+        if (bag[i] == maul) maul_cell = i;
+    }
+    assert(last_marlin >= 0 && maul_cell >= 0);
+    const struct { int kit; uint8_t spec; int cell; } spectated[] = {
+        {RF_DHAROK_TENTACLE_VW_MAUL, ITEM_VOIDWAKER, last_marlin}, {RF_DHAROK_TENTACLE_VW, ITEM_VOIDWAKER, maul_cell},
+        {RF_DHAROK_TENTACLE_AGS_MAUL, ITEM_AGS, last_marlin},
+    };
+    for (size_t k = 0; k < sizeof(spectated) / sizeof(*spectated); k++) {
+        RiskfightLoadout kit = loadout;
+        kit.equipment[GEAR_SLOT_WEAPON] = ITEM_ABYSSAL_TENTACLE;
+        kit.inventory[spectated[k].cell] = osrs_inventory_content_code_from_item(spectated[k].spec);
+        RISKFIGHT_DHAROK_SPECTATED_LOADOUT[spectated[k].kit] = kit;
+    }
 }
 
 #include "riskfight_kits.h"

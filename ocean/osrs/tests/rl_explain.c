@@ -91,6 +91,7 @@ static void rx_tactics(const float* obs) {
     printf(" 2h %.0f ko axe %.3f vw %.3f vw_spec %.3f maul %.3f maul2 %.3f his_veng %.0f orb %.0f hp>1 %.0f safe %.0f", t[RF_TACTICS_CAN_WIELD_2H],
         ko[0], ko[1], ko[2], ko[3], ko[4], t[RF_TACTICS_HIS_VENG], t[RF_TACTICS_ORB], t[RF_TACTICS_HP_ABOVE_1],
         t[RF_TACTICS_SAFE_WINDOW] * RF_OBSERVATION_ATTACK_AGE_SCALE);
+    printf(" ags_spec %.3f chain vw+maul %.3f ags+maul %.3f", t[RF_TACTICS_KO_AGS_SPEC], t[RF_TACTICS_CHAIN], t[RF_TACTICS_CHAIN + 1]);
     /* The PID block (riskfight_model.h): our PID chance, his swing of the tick just played landing next tick, its max and special flag. */
     const float* pid = obs + RF_PID_START;
     printf(" | pid ours %.3f in_flight %.3f max %.0f spec %.0f", pid[RF_PID_OURS], pid[RF_PID_IN_FLIGHT], pid[RF_PID_IN_FLIGHT_MAX] * RF_THREAT_DAMAGE_SCALE,

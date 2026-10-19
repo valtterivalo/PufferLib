@@ -9,8 +9,10 @@
  * his kit from the pool; fight_starts 1 starts every fight as a recorded one, price_table 1 draws the price from the live table instead of the wide log-uniform).
  * With fight_starts the probe also prints how the fights it played began (our hitpoints, his bar, who had swung, specials, Vengeance), the check that starts vary.
  * live_loadout 3 draws our kit per session from the three Voidwaker kits; 4 draws the Dharok kit half the time, and the probe then also prints every session
- * metric split by our kit (Dharok vs VW), the Dharok play per fight (orb clicks, strips, axe swings with our hitpoints and the full set, maul specials) and the
- * meal-gate check: meals eaten at hitpoints above his chance range (the env's overeats) per fight, 0 under the gate. */
+ * metric split by our kit (Dharok vs VW), the Dharok play per fight (orb clicks, strips, axe swings with our hitpoints and the full set, maul specials), the
+ * specials per fight (Voidwaker or godsword openers, maul specials, maul specials chained to an opener) and the meal-gate check: meals eaten at hitpoints above
+ * his chance range (the env's overeats) per fight, 0 under the gate. 5 draws the spectated Dharok kits in part of the Dharok draws (dharok_spectated_share,
+ * default RF_DHAROK_SPECTATED_SHARE), and each of them gets its own lines. */
 #include "../../osrs_riskfight/osrs_riskfight.h"
 #include "rf_net.h"
 
@@ -46,14 +48,19 @@ int main(int argc, char** argv) {
     const int start_tick = starts > 0 ? 1 : 0;
     long began = 0, hp_count[122] = {0}, bar_count[31] = {0}, opened[3] = {0}, spec_used = 0, veng_lost = 0, hit_landed = 0, in_flight = 0;
     double price_sum = 0, price_lo = 9, price_hi = 0;
-    /* live_loadout 4: the log of each kit's sessions (the kit is drawn once per session, so the session's log goes to the kit worn on its last step), and the
+    /* live_loadout 4 and 5: the log of each kit's sessions (the kit is drawn once per session, so the session's log goes to the kit worn on its last step), and the
      * Dharok play counted off the state around each fight step. A step that ends a fight into the next one at once (no wait, or the session's end) resets the
-     * state inside puf_step: its swing and strip are not seen, and such steps are counted. Kit index 1 is Dharok, 0 the Voidwaker kits. */
-    const int split = live_loadout == 4;
+     * state inside puf_step: its swing and strip are not seen, and such steps are counted. Kit index 0 is the Voidwaker kits, 1 the user's Dharok kit, 2.. the
+     * spectated Dharok kits (RISKFIGHT_DHAROK_SPECTATED_LOADOUT, live_loadout 5). Specials per fight: the opener's (a Voidwaker or Armadyl godsword special),
+     * the maul's, and the chains: a maul special within RF_PROBE_CHAIN_TICKS after an opener of the same fight. */
+    enum { RF_PROBE_KITS = 2 + RF_DHAROK_SPECTATED_KITS, RF_PROBE_CHAIN_TICKS = 3 };
+    const int split = live_loadout >= 4;
     static_assert(sizeof(Log) % sizeof(float) == 0, "Log holds floats only");
-    Log kit_log[2] = {0}, session_start = env->log;
-    long kit_orbs[2] = {0}, kit_strips[2] = {0}, kit_axe[2] = {0}, kit_axe_full[2] = {0}, kit_unseen[2] = {0};
-    double kit_axe_hp[2] = {0};
+    Log kit_log[RF_PROBE_KITS] = {0}, session_start = env->log;
+    long kit_orbs[RF_PROBE_KITS] = {0}, kit_strips[RF_PROBE_KITS] = {0}, kit_axe[RF_PROBE_KITS] = {0}, kit_axe_full[RF_PROBE_KITS] = {0},
+        kit_unseen[RF_PROBE_KITS] = {0}, kit_openers[RF_PROBE_KITS] = {0}, kit_maul_specs[RF_PROBE_KITS] = {0}, kit_chains[RF_PROBE_KITS] = {0};
+    double kit_axe_hp[RF_PROBE_KITS] = {0};
+    int last_opener_tick = -1000;
     while (env->log.n < sessions) {
         if (env->wait_left == 0 && env->state.env.tick == start_tick && !env->state.env.episode_over) {
             const RiskfightState* st = &env->state;
@@ -73,7 +80,10 @@ int main(int argc, char** argv) {
         int chosen[RF_HEADS];
         rf_net_act(net, obs, mask, &rng, hard, RF_ACTION_DIMS, RF_HEADS, chosen);
         for (int h = 0; h < RF_HEADS; h++) actions[h] = (float)chosen[h];
-        const int kit = env->context.loadout[0] == &RISKFIGHT_DHAROK_LOADOUT, fight_step = env->wait_left == 0;
+        const RiskfightLoadout* worn = env->context.loadout[0];
+        int kit = worn == &RISKFIGHT_DHAROK_LOADOUT;
+        for (int k = 0; k < RF_DHAROK_SPECTATED_KITS; k++) if (worn == &RISKFIGHT_DHAROK_SPECTATED_LOADOUT[k]) kit = 2 + k;
+        const int fight_step = env->wait_left == 0, pre_specs = env->state.specs_used[0];
         const Player* us = &env->state.env.players[0];
         const int pre_hp = us->current_hitpoints, pre_dressed = us->equipped[GEAR_SLOT_BODY] != ITEM_NONE && us->equipped[GEAR_SLOT_LEGS] != ITEM_NONE;
         const int pre_fights = env->session_fights;
@@ -93,6 +103,13 @@ int main(int argc, char** argv) {
                     kit_axe[kit]++;
                     kit_axe_hp[kit] += pre_hp;
                     kit_axe_full[kit] += p->equipment_effect_profile.dharok_piece_count == 4;
+                }
+                /* Our specials of the step, by the weapon in hand after it (a double maul is one event). */
+                if (t < last_opener_tick) last_opener_tick = -1000; /* a new fight */
+                if (st->specs_used[0] > pre_specs) {
+                    const uint8_t hand = p->equipped[GEAR_SLOT_WEAPON];
+                    if (hand == ITEM_VOIDWAKER || hand == ITEM_AGS) { kit_openers[kit]++; last_opener_tick = t; }
+                    if (pvp_is_maul(hand)) { kit_maul_specs[kit]++; kit_chains[kit] += t - last_opener_tick <= RF_PROBE_CHAIN_TICKS; }
                 }
             }
         }
@@ -134,19 +151,24 @@ int main(int argc, char** argv) {
     }
     printf("share of fights ending in: kill %.3f death %.3f teleport %.3f\n", l->kills / fights, (l->deaths + l->mutual_deaths) / fights, tp / fights);
     if (split) {
-        static const char* const kit_name[2] = {"VW", "Dharok"};
-        for (int k = 1; k >= 0; k--) {
-            const Log* g = &kit_log[k];
+        static const char* const kit_name[RF_PROBE_KITS] = {"VW", "Dharok", "Dharok tentacle+VW+maul", "Dharok tentacle+VW", "Dharok tentacle+AGS+maul"};
+        static_assert(RF_DHAROK_TENTACLE_VW_MAUL == 0 && RF_DHAROK_TENTACLE_VW == 1 && RF_DHAROK_TENTACLE_AGS_MAUL == 2 && RF_DHAROK_SPECTATED_KITS == 3, "kit_name order");
+        for (int k = 1; k < RF_PROBE_KITS + 1; k++) {
+            const int kk = k % RF_PROBE_KITS; /* the Dharok kits first, then the Voidwaker kits */
+            const Log* g = &kit_log[kk];
             const double n = g->n, f = g->rounds;
-            if (n == 0) { printf("kit %s: no sessions\n", kit_name[k]); continue; }
+            if (kk >= 2 && live_loadout < 5) continue;
+            if (n == 0) { printf("kit %s: no sessions\n", kit_name[kk]); continue; }
             printf("kit %s: sessions %.0f fights %.0f; per session kills %.2f deaths %.2f mutual %.2f net_stake/h %.3f rude %.2f overeats %.2f; fight-end steps unseen %ld\n",
-                kit_name[k], n, f, g->kills / n, g->deaths / n, g->mutual_deaths / n, g->net_stake / n, g->rude_teleports / n, g->overeats / n, kit_unseen[k]);
+                kit_name[kk], n, f, g->kills / n, g->deaths / n, g->mutual_deaths / n, g->net_stake / n, g->rude_teleports / n, g->overeats / n, kit_unseen[kk]);
             printf("  meal gate check: meals at hitpoints above his chance range %.3f per fight (%.0f in all; 0 under the gate)%s\n",
                 f > 0 ? g->overeats / f : 0.0, g->overeats, g->overeats > 0 ? "  ** GATE BROKEN **" : "");
-            if (k == 1)
+            if (kk >= 1)
                 printf("  per fight: orb clicks %.3f strips %.3f axe swings %.3f (our hp at the swing %.1f, all four pieces worn %.3f of them) maul specials %.3f\n",
-                    f > 0 ? kit_orbs[k] / f : 0.0, f > 0 ? kit_strips[k] / f : 0.0, f > 0 ? kit_axe[k] / f : 0.0, kit_axe[k] ? kit_axe_hp[k] / kit_axe[k] : 0.0,
-                    kit_axe[k] ? (double)kit_axe_full[k] / kit_axe[k] : 0.0, f > 0 ? g->spec_maul / f : 0.0);
+                    f > 0 ? kit_orbs[kk] / f : 0.0, f > 0 ? kit_strips[kk] / f : 0.0, f > 0 ? kit_axe[kk] / f : 0.0, kit_axe[kk] ? kit_axe_hp[kk] / kit_axe[kk] : 0.0,
+                    kit_axe[kk] ? (double)kit_axe_full[kk] / kit_axe[kk] : 0.0, f > 0 ? g->spec_maul / f : 0.0);
+            printf("  per fight: opener specials (VW or AGS) %.3f, maul special events %.3f, chains (a maul special within %d ticks of an opener) %.3f\n",
+                f > 0 ? kit_openers[kk] / f : 0.0, f > 0 ? kit_maul_specs[kk] / f : 0.0, RF_PROBE_CHAIN_TICKS, f > 0 ? kit_chains[kk] / f : 0.0);
         }
     }
     for (size_t i = 0; i < out.size; i++) printf("log %s %.4f\n", out.items[i].key, out.items[i].value / (sessions > 0 ? sessions : 1));

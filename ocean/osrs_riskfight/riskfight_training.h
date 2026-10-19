@@ -15,7 +15,8 @@ typedef struct {
     RiskfightRepRules rep; /* what a reputation costs (riskfight_session.h): env keys rep_search, rep_rag, rep_half_life, defaulting to RF_REP_SEARCH, RF_REP_RAG, RF_REP_HALF_LIFE_TICKS */
     float pool_probability; /* self-play: the share of net-played opponents that wear a pool kit instead of one of our kits (needs opponent_pool) */
     float same_class; /* kit_same_class: the share of new opponents whose kit is drawn among seat 0's kit class (RiskfightKitClass) instead of without a condition */
-    float learner_random_kit; /* the share of sessions in which seat 0 wears a pool kit it can play instead of one of our kits (needs live_loadout 3 or 4) */
+    float learner_random_kit; /* the share of sessions in which seat 0 wears a pool kit it can play instead of one of our kits (needs live_loadout 3, 4 or 5) */
+    float dharok_spectated_share; /* live_loadout 5: the share of our Dharok draws that wear a spectated Dharok kit (RISKFIGHT_DHAROK_SPECTATED_LOADOUT) */
 } RiskfightTrainingConfig;
 
 typedef enum { RF_TRAIN_LEARNED, RF_TRAIN_SCRIPTED } RiskfightTrainingOpponent;
@@ -86,6 +87,9 @@ static RiskfightTrainingConfig riskfight_training_config(Dict* kwargs) {
     DictItem* random_kit = dict_find(kwargs, "learner_random_kit");
     config.learner_random_kit = random_kit ? (float)random_kit->value : 0;
     assert(config.learner_random_kit >= 0 && config.learner_random_kit <= 1);
+    DictItem* spectated = dict_find(kwargs, "dharok_spectated_share");
+    config.dharok_spectated_share = spectated ? (float)spectated->value : RF_DHAROK_SPECTATED_SHARE;
+    assert(config.dharok_spectated_share >= 0 && config.dharok_spectated_share <= 1);
     for (int i = 0; i < 5; i++) {
         DictItem* item = dict_find(kwargs, names[i]);
         if (item) values[i] = item->value;
@@ -116,13 +120,17 @@ static int riskfight_training_draw(RiskfightTraining* training, float probabilit
 }
 
 /** One of our kits (context->kit_mix): the recorded live kit, the Voidwaker kit, or the Voidwaker kit with summer pies, evenly (RF_KIT_MIX_VW); with RF_KIT_MIX_DHAROK
- * the Dharok kit half the time and those three a sixth each. */
+ * the Dharok kit half the time and those three a sixth each; with RF_KIT_MIX_DHAROK_SPECTATED as RF_KIT_MIX_DHAROK, and a Dharok draw is one of the spectated Dharok
+ * kits, evenly, with the chance dharok_spectated_share. */
 static const RiskfightLoadout* riskfight_training_draw_kit(RiskfightTraining* training, int kit_mix) {
     static const RiskfightLoadout* const kits[] = {&RISKFIGHT_LIVE_LOADOUT, &RISKFIGHT_VW_LOADOUT, &RISKFIGHT_VW_PIES_LOADOUT};
-    assert(kit_mix == RF_KIT_MIX_VW || kit_mix == RF_KIT_MIX_DHAROK);
+    assert(kit_mix == RF_KIT_MIX_VW || kit_mix == RF_KIT_MIX_DHAROK || kit_mix == RF_KIT_MIX_DHAROK_SPECTATED);
     if (kit_mix == RF_KIT_MIX_VW) return kits[encounter_rand_int(&training->rng, 3)];
     int draw = encounter_rand_int(&training->rng, 6);
-    return draw < 3 ? &RISKFIGHT_DHAROK_LOADOUT : kits[draw - 3];
+    if (draw >= 3) return kits[draw - 3];
+    if (kit_mix == RF_KIT_MIX_DHAROK_SPECTATED && riskfight_training_draw(training, training->config.dharok_spectated_share))
+        return &RISKFIGHT_DHAROK_SPECTATED_LOADOUT[encounter_rand_int(&training->rng, RF_DHAROK_SPECTATED_KITS)];
+    return &RISKFIGHT_DHAROK_LOADOUT;
 }
 
 /** Seat 0's kit for a session (context->kit_mix set): with learner_random_kit a pool kit seat 0 can play (riskfight_kit_learner_ok), by its pool weight, else

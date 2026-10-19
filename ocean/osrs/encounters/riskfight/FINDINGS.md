@@ -1221,3 +1221,48 @@ Harness: `dh` (both seats on the Dharok script, personas on, starts drawn, 6,000
   - Tab by HP: p .11 on the same 994 fighter-duels.
   - Uptime: no table.
 - Tests pass: test_riskfight_dharok_script, _mix and _scripts. The env_trace goldens are not refreshed.
+
+## 2026-10-19: spectated Dharok kits for our seat, and the spec-chain floats (branch dharok-kits)
+
+- **Why.** Our Dharok kit wields the Voidwaker, so a special is one toggle. Many spectated Dharok fighters wield a tentacle instead and switch to a Voidwaker or an Armadyl godsword for the special, often with a granite maul to follow it. The maul's low accuracy hides what the chain is worth in raw numbers.
+- **Setups** (`scripts/measure_dharok_play.py` (g): the 1,020 fighters of the 510 Dharok v Dharok duels; main weapon = most ticks in hand, the axe and mauls aside; the spec weapons and the maul are the ones seen wielded, so the bag shares are lower bounds):
+
+  | Main | Spec weapon | Maul seen | Share |
+  |---|---|---|---|
+  | Voidwaker | - | no | 0.341 |
+  | tentacle | Voidwaker | yes | 0.208 |
+  | Voidwaker | - | yes | 0.118 (the user's kit) |
+  | tentacle | - | no / yes | 0.063 / 0.058 |
+  | tentacle | Voidwaker | no | 0.043 |
+  | tentacle | AGS | yes / no | 0.021 / 0.004 |
+  | other (scimitar, abyssal dagger, ...) | | | 0.144 |
+
+  Tentacle + Voidwaker is 0.251, Voidwaker wielded 0.459, tentacle + AGS 0.025. The raw ids 29607 (Voidwaker), 26484 (tentacle) and 29605 (AGS) are variants that the item table already maps.
+- **Three kits for our seat** (`RISKFIGHT_DHAROK_SPECTATED_LOADOUT`, riskfight_model.h). Each is the user's Dharok kit with the tentacle wielded and the Voidwaker in the bag:
+  - tentacle + VW + maul: the Voidwaker takes the last marlin's cell (9 marlin);
+  - tentacle + VW: the Voidwaker takes the maul's cell (10 marlin);
+  - tentacle + AGS + maul: the godsword takes the last marlin's cell.
+
+  Same armour, defender, axe, orb, Vengeance and tab. All 28 cells are full, the class is Dharok and the base Defence is 99.
+- **Draw: `live_loadout 5`** (`RF_KIT_MIX_DHAROK_SPECTATED`). It is live_loadout 4, but a Dharok draw takes a spectated kit, evenly, with the chance `env.dharok_spectated_share` (0.5, `RF_DHAROK_SPECTATED_SHARE`). Measured over 120k draws: user's Dharok 0.249, each spectated kit 0.083-0.085, VW kits 0.499. live_loadout 4 draws the same as before, rng included, and never yields a spectated kit. `scripts/sweep_riskfight_live.sh` now trains on 5.
+- **The ladder still scores the user's kits.** `[bot_eval]` keeps live_loadout 4, so `bot_ladder_perf` stays comparable with earlier sweeps.
+- **Live.** `SIM_IDS` gains 12006 (tentacle) and 11802 (AGS). Before this, a godsword in our bag was inert filler on the server. `test_riskfight_dharok_spectated` feeds each kit as a request, with a full bag and with a free cell:
+  - the cells match the kit's;
+  - opener wield + special + attack becomes CLICK_SLOT / SPEC_TOGGLE / ATTACK;
+  - the godsword, axe and maul wields are offered only with a free cell and are a CLICK_SLOT on their slot.
+
+  In the sim, the same test arms and spends the opener's 50, then the maul's special on the next decision (energy 0). Not checked: the plugin's (light) handling of a godsword or tentacle kit.
+- **`session_probe`** with live_loadout 5 prints the same per-kit lines for each spectated kit, plus per fight: opener specials (VW or AGS), maul special events, and chains (a maul special within 3 ticks of an opener). Checked on a zero-weight net only; no 499-input checkpoint exists yet.
+- **Spec-chain floats** (tactics [31..33], `RF_TACTICS_KO_AGS_SPEC` = 31, `RF_TACTICS_CHAIN` = 32; RF_TACTICS_SIZE 31 → 34, `RF_PID_START` 492 → 495, **`RF_OBS_SIZE` 496 → 499**; nets of 496 inputs do not load). They are computed from the OURS rows by the shared writer, so the sim and live get the same value. His hitpoints are uniform over the timing block's bounds, as for the `ko` floats:
+  - [31] an AGS special alone (spec_hit, uniform 0..spec_max);
+  - [32] a VW special (uniform max/2..spec_max, always hits) plus one maul special (spec_hit, uniform 0..spec_max), damage summed, exact convolution (`riskfight_ko_chain`);
+  - [33] the same with the AGS opener.
+
+  What they ignore:
+  - His meal between the two. The maul lands on its click tick, and the opener lands a tick after its swing without PID, so the two often land on one tick.
+  - Our energy, as with ko [25].
+  - A second maul special after the opener: it would need 150 energy.
+
+  The existing `maul2` (ko [25]) is two maul specials on one tick (100 energy) and no opener. `riskfight_ko_chance`'s two-attack path is now `riskfight_ko_chain` of an attack with itself, the same arithmetic.
+- **Example** (`test_riskfight_tactics_obs`, his bar 12: hitpoints 38-40, our HP 99). User's kit and tentacle+VW+maul: VW special 0.432, maul 0, maul2 0.019, **VW + maul 0.518**. Tentacle+AGS+maul: AGS special 0.202, **AGS + maul 0.236**. Hand-checked against `riskfight_ko_chain(1, 2, 3, .5, 0, 1, 4, 4)` = 0.125 and an enumeration of both rolls.
+- **Tests:** test_riskfight_dharok_spectated (new), test_riskfight_tactics_obs, _mix, _session, _mechanics, _dharok_kit, _unequip, _pid_react, _threat_masks, test_rl_pid_obs_parity, test_threat_live, test_threat_features, test_rl_live_pies all pass on the Mac. The `test_riskfight_env_trace` goldens are left to refresh (the observation grew).
