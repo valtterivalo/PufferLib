@@ -54,6 +54,14 @@ cc -std=gnu11 -O2 -I. -Isrc -I$RAYLIB_INC -o probe_lowhp_meals ocean/osrs/tests/
 ./probe_lowhp_meals ~/.light2/rl/a2.bin 512 1 300 1
 ```
 
+`probe_maul_chain.c` checks the granite maul. At each decision where a maul special can be sent, it plays out the net's own choice and forced lines: two maul
+specials (D), one special (S), and the opener special followed by the maul (C). It reports KO, death and stake per line, by kit and by his bar:
+
+```bash
+cc -std=gnu11 -O2 -I. -Isrc -I$RAYLIB_INC -o probe_maul_chain ocean/osrs/tests/probe_maul_chain.c riskfight_oppfit_bridge.o -lm -lpthread
+./probe_maul_chain ~/.light2/rl/p1.bin 512 1 300 1 5
+```
+
 ## Gear Swapper advisory snapshots
 
 Riskfight snapshots retain both players' committed damage queues. Unresolved PID
