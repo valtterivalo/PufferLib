@@ -1291,3 +1291,4 @@ p1 = night3 trial 33's hyperparameters, 150M steps on 4f8d314cb, `live_loadout` 
   | 41-60 | .11 | eat always | .11 |
 - **Live 4-HP ticks:** eats at 175 and 176, not at 173 or 174 (best slot .15 / .07 against none .57 / .87). n3r33 ate on all four.
 - **persona-cells** (e12af34e2): per-band persona factors at gain 1, so they change nothing yet. The branch stays unmerged until a per-band and per-clock eat factor keeps feeding, eat-first and KO together.
+- **Correction:** p1's zero maul use and the per-kit scores describe this policy, not the value of the maul or of a kit. p1's own ≤ 20 HP probe shows it skipping a dominated choice: eating gives more KOs and fewer deaths, yet it mostly skips. So non-use is no evidence that an action doesn't pay. The maul's value is unestablished until paired rollouts from eligible states (double maul, maul now, opener then maul, against the net's own choice) measure it: `probe_maul_chain`, in progress.
