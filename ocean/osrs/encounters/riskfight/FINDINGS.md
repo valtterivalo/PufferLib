@@ -1634,3 +1634,39 @@ Victims are fighters first hit to a fresh bar 1-6 (about 20 HP), and what follow
   - `test_riskfight_live_facts` pins it.
   - A leading tab key isn't modelled: the sim has no tab switch.
 - `test_lookahead_pending_plan` fails on c-main before this change too ("invalid lookahead request: target->current_hitpoints == 79"). It belongs to the lookahead server, which the engine does not use.
+
+## 2026-10-19 night: p7, the first nets on the engine's reacting hand (e811be74c, seeds 121-123)
+
+p6 (seeds 111-113, fb12299a3) has the same env except for the old motor clock, so p6 to p7 isolates the hand. Each seed trained for 150M steps. session_probe ran 300 sessions at argmax; the low-HP row is probe_lowhp_meals at <=20 HP; overeats are per fight.
+
+| | ladder | Dharok net/h | Dharok deaths/session | overeats/fight | greedy eat at <=20 | d where greedy skips [90%] |
+|---|---|---|---|---|---|---|
+| p6 s111 | 7.97 | 7.11 | .04 | .79 | .84 | +.073 [.000, +.133] |
+| p6 s112 | 8.68 | 9.06 | .05 | .47 | .39 | +.078 [-.024, +.184] |
+| p6 s113 | 8.26 | 8.72 | .00 | .94 | .73 | -.093 [-.412, +.232] |
+| p7 s121 | 8.87 | 8.50 | .06 | .12 | .39 | +.001 [-.065, +.088] |
+| p7 s122 | 8.99 | 8.48 | .17 | .12 | .22 | -.008 [-.074, +.067] |
+| p7 s123 | 8.98 | 7.96 | .16 | .13 | .32 | +.029 [-.051, +.132] |
+
+- **Eating:** all three p7 seeds cut overeating about 5x and eat less at low HP. Their deaths rise.
+  - None of the skip intervals excludes 0; at ±.07 each one is still wide enough to hide a meal worth having, so this is unresolved, not shown equal.
+  - Why the hand changes this is not measured. Two candidates: later clicks now come 97 ms apart instead of ~160-200, and a triple eat lands on one tick 39% of the time.
+- **Low opponents dying within 10 ticks** (probe_risk_duels, 3×300 sessions per seed, opponent victims, duel-clustered 90% intervals):
+
+  | | dead within 10 ticks |
+  |---|---|
+  | p5s101 on the meal-rule env | .29 [.26, .32] |
+  | p7 s121 | .21 [.19, .24] |
+  | p7 s122 | .23 [.20, .26] |
+  | p7 s123 | .22 [.19, .25] |
+
+  Real attackers manage .07, so the gap to real narrows but is still about 3x.
+- **Live 4-HP ticks** (20261018T185228, 173-176, factual state):
+  - s121 drinks a brew on all four.
+  - s122 eats at 173, 175 and 176.
+  - s123 drinks on all four.
+  - Every seed restores something at 4 HP against a Voidwaker holder at 14-17.
+- **Installed:** `engine-install --checkpoint p7s121` from c-main e811be74c. It has the lowest deaths of p7 and the lowest low-victim kill rate.
+  - `engine-replay --local` of 20261018T185228, 20261017T211452, 20261015T203026, 20261017T230732 and 20261019T190858 is clean.
+  - Without `--local`, the replay runs pufferbox's own engine install, not the release on this Mac.
+  - The live hand must be light main with #360. On an older client the engine clicks at ~111 ms, against a net trained for 280.
