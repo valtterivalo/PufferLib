@@ -1537,3 +1537,20 @@ p2's config, 150M steps, seeds 81-83. Argmax `session_probe` (300 sessions, `liv
 
   - Where greedy skips, an extra meal's point estimate is positive for all six nets (mean +.068 per fight in KO − price × death). Two of six intervals exclude 0.
   - As six independent training runs, all-positive has a one-sided sign-test p of .016. The under-eating is modest and real on average, but no single net shows it firmly.
+
+## 2026-10-19: p5 and the install of p5 s101 (c-main f32837f1c, the opponents with all three rules)
+
+| Seed | Ladder | Dharok (deaths per session) | tentacle+VW+maul | tentacle+VW | tentacle+AGS+maul | VW | ≤ 20: greedy eats / d where greedy skips (n) [90%] |
+|---|---|---|---|---|---|---|---|
+| 101 | 9.21 | 9.27 (.04) | 9.27 | 8.70 | 5.54 | 9.33 | .42 / +.008 (86) [−.122, +.158] |
+| 102 | 7.75 | 7.36 (.08) | 7.05 | 9.24 | 5.90 | 7.51 | .75 / +.030 (30) [−.074, +.136] |
+| 103 | 9.03 | 8.34 (.32) | 8.52 | 8.31 | 5.67 | 9.13 | .22 / +.024 (268) [−.056, +.106] |
+
+- **Seed 101:**
+  - Best ladder of the three, and the fewest Dharok-kit deaths of any candidate so far.
+  - At ≤ 20 HP it eats greedily .42 of the time, and where it skips, an extra meal shows no gain.
+  - No orb, axe or maul. Strips .08 per fight in the Dharok kit.
+- **Live 4-HP ticks (session 20261018T185228, factual state):** it eats at 173 (food), drinks at 174, and takes neither at 175-176. n3r33 ate at all four. In the real fight the HP stayed at 4 there, so those states don't follow its own meals.
+- **Installed:** `engine-install --checkpoint p5s101`, C 01a94b697 (the same env code as f32837f1c plus FINDINGS and probe commits).
+  - Replays of 20261018T185228, 20261017T211452, 20261015T203026 and 20261017T230732 all run clean.
+  - Going back to n3r33 needs its own server build (492 inputs): `engine-install --checkpoint n3r33` from a checkout at 467413f58. `rl.args.previous` alone would abort the new server.
