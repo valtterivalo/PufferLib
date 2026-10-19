@@ -1554,3 +1554,37 @@ p2's config, 150M steps, seeds 81-83. Argmax `session_probe` (300 sessions, `liv
 - **Installed:** `engine-install --checkpoint p5s101`, C 01a94b697 (the same env code as f32837f1c plus FINDINGS and probe commits).
   - Replays of 20261018T185228, 20261017T211452, 20261015T203026 and 20261017T230732 all run clean.
   - Going back to n3r33 needs its own server build (492 inputs): `engine-install --checkpoint n3r33` from a checkout at 467413f58. `rl.args.previous` alone would abort the new server.
+
+## 2026-10-19 evening: the first live session of p5 s101, and what drives its eating
+
+Session 20261019T190858, one fight against Sniffingbagz (ticks 386-573, Dharok v Dharok, live price 0.92 from the K line).
+- **No bug found:**
+  - `engine-replay` runs clean (no exception or engine failure, 32 runs).
+  - The bag is read as the training bag: pies, halibut 32336, marlin 32352, the free cell, maul, axe, combat, orb, sack, tab.
+  - Brews drain attack and strength 118 → 105, and the super combat restores them, as in the sim.
+- **What it did:** it kept its HP between about 80 and 115.
+  - Below about 84 (his range, a double granite maul special's 2 × 42) it ate marlin with a brew sip, then a combat sip, then a restore. That was 7 marlin, 4 halibut, 7 brew sips, 4 combat doses and 7 restore doses in 188 ticks.
+  - The super combat ran out at tick 458. It tabbed at tick 570 at 86 HP when out of boosts (a kosher escape). He was at 62-64.
+  - He was at 7-10 HP on ticks 450-453, after two Voidwaker specials (443, 447). He was at 62 by tick 454.
+- **The death price doesn't drive its eating:**
+  - Counterfactual on every tick of the fight (`engine-explain` with the price set to 0.4, 1.0 and 2.5): the eat decisions are identical, on the same 20 ticks.
+  - In the sim at a fixed price (`session_probe`, 300 sessions, `live_loadout` 4), per session:
+
+    | Price | Kills | Deaths | Marlin | Brew sips | Combat sips |
+    |---|---|---|---|---|---|
+    | 0.4 | 4.68 | .07 | 8.5 | 17.1 | 14.9 |
+    | 1.0 | 4.71 | .09 | 8.3 | 16.6 | 14.4 |
+    | 2.0 | 4.39 | .07 | 8.4 | 16.3 | 14.2 |
+
+  - The net plays one way at every price. In the sim, playing safe costs it no kills.
+- **The likely cause is how easily sim opponents die once they are low.** Fighters first hit to about 20 HP (a fresh bar of 6 or less), and what happens in the next 10 ticks:
+
+  | | Dead | Tab | Still alive | Recording ends |
+  |---|---|---|---|---|
+  | Real v real (404) | .07 | .11 | .71 | .10 |
+  | Scripts v scripts (5,233) | .05 | .15 | .72 | .07 |
+  | Scripts v the net (p3 s82, 988) | .31 | .17 | .51 | .01 |
+  | Our live opponents (all own tapes, 56) | .02 | - | .91 | .07 |
+
+  - Our 167 live fights (mostly VW-kit sessions of Oct 4-15, older nets and the user's own play): he died .05, we died .08, he tabbed .16, we tabbed .17, .54 ended unseen. In the sim the nets kill .67 of their fights.
+  - The sim opponent at low HP dies to the net 4-6 times as often as real opponents die, to real attackers or to us. `[INFERENCE]` The net learned that finishing is easy, so staying full costs nothing. Against a real opponent who eats back from 7 to 62 in 3 ticks, the same play burns its supplies and tabs.
