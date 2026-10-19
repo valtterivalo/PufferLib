@@ -1426,3 +1426,20 @@ Same config and env (p2: the 2026-10-19 bag), 150M steps, five seeds. Argmax `se
 
 - Seeds alone move the Dharok kit's probe from 6.6 to 9.0 and the ladder from 7.6 to 9.2. p1 measured on p2's environment sits inside that range, so the bag change and p1 against p2 are not separable from seed noise at one seed each.
 - Low-HP greedy eating varies .13-.49 by seed alone. Picking a net on one gate selects a seed's luck: candidates need several seeds, judged together on the gates.
+
+## 2026-10-19: p3, three seeds against the rekeyed axe (c-main d09d98948)
+
+p2's config, 150M steps, seeds 81-83. Argmax `session_probe` (300 sessions, `live_loadout` 5), net stake per hour, and `probe_lowhp_meals` at ≤ 20 HP:
+
+| Seed | Ladder | Dharok (deaths per session) | tentacle+VW+maul | tentacle+VW | tentacle+AGS+maul | VW | ≤ 20 greedy eats / matches better branch / break-even |
+|---|---|---|---|---|---|---|---|
+| 81 | 8.02 | 9.00 (.17) | 7.43 | 7.58 | 4.92 | 8.91 | .33 / .33 / eat always |
+| 82 | 9.47 | 9.92 (.07) | 8.59 | 8.37 | 4.80 | 9.13 | .27 / .27 / eat always |
+| 83 | 8.83 | 8.73 (.15) | 8.54 | 9.15 | 5.47 | 9.12 | .13 / .42 / skip below 0.69 |
+
+- At ≤ 20 HP eating is now the better branch at every price for two of three seeds (the opponents' low-HP axe makes the trade deadlier). The nets still eat greedily only .13-.33 of the time. None passes the low-HP gate; n3r33 stays installed.
+- No maul specials, orb clicks or axe swings. Seed 83 strips (1.63 per fight with tentacle+AGS+maul).
+- **Ledger, seed 82 against the env's opponents** (1,864 Dharok v Dharok fights):
+  - The scripts' kill chance at a swing is .017 (.042 against each other). The net's D at its swings is .016, and it spends .024 of its ticks at D ≥ .25.
+  - Under 20 HP the scripts take the axe on .38 of swings against the net (.81 against each other). The net is mostly on a bar of 24+, where the table is .45-.52, and a Dharok max of 96 does not reach 99.
+  - The rekeyed axe doesn't reach a net that stays healthy. The lethality gap left is FINDINGS' KO hazard from 40 HP up (sim 17 / 2.3 / 0.5 per 10,000 fighter-ticks at 40-59 / 60-79 / 80+, real 32 / 4.6 / 2.1): bursts from mid HP, not the low-HP axe.
