@@ -1591,3 +1591,32 @@ Session 20261019T190858, one fight against Sniffingbagz (ticks 386-573, Dharok v
 
   - Our 167 live fights (mostly VW-kit sessions of Oct 4-15, older nets and the user's own play): he died .05, we died .08, he tabbed .16, we tabbed .17, .54 ended unseen. In the sim the nets kill .67 of their fights.
   - The sim opponent at low HP dies to the net 4-6 times as often as real opponents die, to real attackers or to us. `[INFERENCE]` The net learned that finishing is easy, so staying full costs nothing. Against a real opponent who eats back from 7 to 62 in 3 ticks, the same play burns its supplies and tabs.
+
+## 2026-10-19 night: why sim opponents die once low (branch meal-vw-threat)
+
+Victims are fighters first hit to a fresh bar 1-6 (about 20 HP), and what follows in the next 10 ticks.
+- **What follows the low hit** (attacker's action in the 4 ticks after it, and the share of victims who died):
+
+  | | VW spec | Axe swing | Neither |
+  |---|---|---|---|
+  | Real v real (404) | .27 of cases, dead .12 | .27, dead .06 | .37, dead .03 |
+  | Scripts v scripts (5,233) | .22, dead .10 | .26, dead .05 | .48, dead .03 |
+  | Scripts v net (p3 s82, 988) | .56, dead .45 | - | .43, dead .12 |
+
+  - The net follows a low victim with a Voidwaker special twice as often as real attackers, and its special kills four times as often.
+- **Real victims eat sooner against a Voidwaker. The script did not condition on it.** Meal shown within 2 ticks of the low hit, against a Voidwaker holder / another weapon:
+
+  | | Bar 1-6 | Bar 7-11 |
+  |---|---|---|
+  | Real | .48 / .35 | .42 / .35 |
+  | Scripts | .35 / .34 | .35 / .36 |
+
+- **Change:** below 40 HP, the Dharok script raises its meal hazard to `RF_DHAROK_MEAL_VW_THREAT[band]` (6000 / 3300 per mille) when the other side holds a Voidwaker. Calibrated with `scripts/fit_dharok_meal_threat.py`.
+  - Band 1 reads .41 against .44 real.
+  - Band 0 is at the sim's ceiling: .44-.46 at any exponent from 2600 up (food timer, meal visibility), against .55 real over 71 events (90% interval .45-.65).
+- **Against p5 s101** (`probe_risk_duels`, 3 × 300 sessions, `live_loadout` 4):
+  - KO share of its Dharok v Dharok fights: .56 → .46.
+  - Low victims dead within 10 ticks: .39 → .29. After its Voidwaker special: .48 → .39.
+  - Real attackers kill .07 of low victims. The gap narrows but stays about 4 times. The rest is unexplained: the net's special timing against the script's meal timing, and the ceiling above.
+- **Measurement note:** an earlier version of these readers dropped fights that ended within the look-ahead (`i + 10 >= n`), which removed the deaths. The numbers here count every event.
+- Tests pass; goldens refreshed.

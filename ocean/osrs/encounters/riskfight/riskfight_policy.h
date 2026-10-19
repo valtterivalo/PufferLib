@@ -866,6 +866,16 @@ static int riskfight_hazard_power(int pm, int exponent) {
     return (int)lround(1000.0 * (1.0 - pow(1.0 - pm / 1000.0, exponent / 1000.0)));
 }
 
+/* Below 40 hitpoints a Dharok fighter eats sooner when the other side holds a Voidwaker (its special always lands, 22-66 here): after a hit leaves him at bar
+ * 1-6, a meal shows within 2 ticks 0.48 of the time against a Voidwaker, 0.35 against another weapon (bar 7-11: 0.42 against 0.35; spectator.duels of
+ * 2026-10-19, 404 and 689 events). The sim's fighters ate alike either way (0.35 / 0.34), and a net holding a Voidwaker killed them 4 times as often as
+ * spectated attackers (FINDINGS, 2026-10-19 evening). RF_DHAROK_MEAL_VW_THREAT[meal band 0-1] is the exponent, per mille, the band's hazard is raised to
+ * then, calibrated in the sim (scripts/fit_dharok_meal_threat.py: the script on both seats, probe_script_duels) on the share of meals shown by 2 ticks of a
+ * first hit to bar 1-5 / 6-11, by the meal band. Band 1 reads 0.41 at 3000 against 0.44 spectated. Band 0 is at the sim's ceiling: 0.44-0.46 at any
+ * exponent from 2600 up (food timer and meal visibility), against 0.55 spectated over 71 events (90% interval 0.45-0.65). Against p5 s101 the net's KO
+ * share of its Dharok v Dharok fights fell 0.56 -> 0.46 and its kills within 10 ticks of a hit to bar 1-6 0.39 -> 0.29 (spectated attackers: 0.07). */
+static const uint16_t RF_DHAROK_MEAL_VW_THREAT[2] = {6000, 3300};
+
 static void riskfight_script_dharok_meal(const float* obs, const RiskfightObservedSelf* self, const RiskfightObservedInventory* inventory,
     const uint32_t* persona, uint32_t seed, uint32_t tick, int* actions) {
     int hp = self->hitpoints;
@@ -880,6 +890,8 @@ static void riskfight_script_dharok_meal(const float* obs, const RiskfightObserv
             exponent = clock < 3 ? exponent * persona[RF_PERSONA_EAT_FIRST] / 1000 : 4000 - pre * persona[RF_PERSONA_EAT_FIRST] / 1000;
         }
         meal_pm = riskfight_hazard_power(meal_pm, exponent);
+        if ((int)lroundf(obs[RF_OPPONENT_START + GEAR_SLOT_WEAPON] * RF_OBSERVATION_ITEM_SCALE) == ITEM_VOIDWAKER)
+            meal_pm = riskfight_hazard_power(meal_pm, RF_DHAROK_MEAL_VW_THREAT[band]);
     }
     if (persona && band <= 4) meal_pm = riskfight_hazard_power(meal_pm, persona[RF_PERSONA_EAT]);
     if (!riskfight_sample_event(seed, tick, 32, meal_pm)) return;
