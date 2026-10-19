@@ -848,7 +848,7 @@ static int riskfight_hazard_power(int pm, int exponent) {
 }
 
 static void riskfight_script_dharok_meal(const float* obs, const RiskfightObservedSelf* self, const RiskfightObservedInventory* inventory,
-    const uint16_t* persona, uint32_t seed, uint32_t tick, int* actions) {
+    const uint32_t* persona, uint32_t seed, uint32_t tick, int* actions) {
     int hp = self->hitpoints;
     if (hp >= 99) return;
     int band = riskfight_dharok_meal_band(hp);
@@ -1031,7 +1031,7 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     int consume_pm = profile->dharok_eating ? RF_DHAROK_REPOT_PM[(hp >= 40) + (hp >= 80)] : profile->consume_pm[consume_band];
     if (!combo_specs && riskfight_sample_event(seed, tick, 11, consume_pm))
         riskfight_script_consume(&self, &inventory, !profile->dharok_eating, actions);
-    const uint16_t* persona = profile->dharok_eating && profile->dharok_persona ? RF_DHAROK_PERSONA[profile->dharok_persona - 1] : NULL;
+    const uint32_t* persona = profile->dharok_eating && profile->dharok_persona ? RF_DHAROK_PERSONA[profile->dharok_persona - 1] : NULL;
     if (!combo_specs && profile->dharok_eating) riskfight_script_dharok_meal(obs, &self, &inventory, persona, seed, tick, actions);
     if (actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO]) actions[RF_PRIMARY] = RF_STOP;
     uint8_t generic_spec = plain_spec != ITEM_NONE ? plain_spec : plain_main != ITEM_NONE && osrs_spec_cost(plain_main) > 0 ? plain_main : ITEM_NONE;
