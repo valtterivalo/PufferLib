@@ -192,9 +192,9 @@ PERSONA_TRAITS = ("eat", "big_meal", "axe", "order")  # riskfight_personas.h col
 PERSONA_OFFSET = {"order": "eat"}  # a trait fitted on top of another the script applies with it: the pre-swing meal exponent is EAT x EAT_FIRST
 ORDER_PRE = sum((632, 200, 316)) / 4000  # riskfight_policy.h RF_DHAROK_MEAL_CLOCK: clocks 0-2's share of the 4-tick cycle's exponent (clock 3 up has the rest)
 # Each trait's spread over the fit's. The script's other paths (potions, food timers, running out of food, combos, the per-fight profiles) dilute a
-# persona's multiplier, so the sim read by this script on its own duels showed 2-4 times too little between-fighter spread; each gain is set by
-# simulation so the sim's fighter sd comes closest to real (FINDINGS 2026-10-19, persona-spread). order saturates at its bound.
-GAIN = {"eat": 2.0, "big_meal": 3.0, "axe": 3.0, "order": 3.0}
+# persona's multiplier, so the sim read by this script on its own duels showed 2-4 times too little between-fighter spread. A gain is set by simulation
+# only where the wider spread keeps the pooled targets (order); eat, big_meal and axe need a shift per cell instead (FINDINGS 2026-10-19, persona-spread).
+GAIN = {"eat": 1.0, "big_meal": 1.0, "axe": 1.0, "order": 3.0}
 THETA = [i / 50 - 4 for i in range(401)]     # the log-scale grid a fighter's loglik is tabulated on
 NODES = [i / 4 - 4 for i in range(33)]
 _w = [math.exp(-z * z / 2) for z in NODES]

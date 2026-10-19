@@ -1182,39 +1182,42 @@ Data: `spectator.duels` (510 Dharok v Dharok duels, 994 fighter-duels, 169 fight
 
 Harness: `dh` (both seats on the Dharok script, personas on, starts drawn, 6,000 fights, 3 seeds), written as `spectator.duels` with the persona as the fighter's name and read by `scripts/fit_dharok_personas.py`, the same reader as the real data. Scripts in /tmp/pspread (`cal.sh`, `run.sh`).
 
-- **Change:** `GAIN` in `fit_dharok_personas.py`, one per trait: eat 2, big_meal 3, axe 3, order 3.
-  - Each trait's spread back is multiplied by its gain, then its mean is shifted so the fights-weighted event rate over the pooled cells stays as at gain 1.
+- **Committed:** `GAIN` in `fit_dharok_personas.py`, one per trait: order (eat first) 3; eat, big_meal and axe 1.
+  - A trait's spread back is multiplied by its gain, then its mean is shifted so the fights-weighted event rate over the pooled cells stays as at gain 1.
   - A trait fitted on top of another (order on eat) takes that trait's gain-1 value.
-  - The table is now `uint32_t`: the axe tail runs past 65,535 per mille.
-- **Spread** (fighter sd of the multiplier; real [90% CI] / sim before / sim after, mean of 3 seeds):
+  - The table is now `uint32_t`, so a gained axe tail (past 65,535 per mille) fits.
+- **Committed arm against c-main 00171508c** (3 seeds each; c-main / committed / real):
+  - KO share: .288 / .292 / .25-.27.
+  - Escape share: .714 / .711 / .58-.64.
+  - Unfed by the next hit, < 60: .088 / .089 / .070.
+  - Healed by the next hit, 60-79: .427 / .426 / .43.
+  - Low attackers, bands 0-19 / 20-39 / 40-59: swing by +2 .20 / .20 / .20 and axe swings .30 / .29 / .22, the same in both arms.
+  - All of these are within seed noise (the KO sd per seed is .004).
+  - Eat-first spread: .07 → .17 (real .24 [.13, .39]).
+- **Spread the gains reach, not committed** (fighter sd of the multiplier; real [90% CI] / sim at gain 1 / sim with eat 2, big_meal 3, axe 3, order 3):
 
-  | Trait | Real [90% CI] | Before | After |
+  | Trait | Real [90% CI] | Gain 1 | Gained |
   |---|---|---|---|
   | Eat (healed by the next hit, bands 0-4) | .07 [.05, .08] | .02 | .04 |
   | Unfed by the next hit, < 60 | .37 [.21, .52] | .13 | .24 |
   | Healed by the next hit, 60-79 | .23 [.17, .30] | .05 | .10 |
   | Big meal | .15 [.12, .19] | .04 | .11 |
   | Axe share | .39 [.28, .54] | .18 | .46 |
-  | Eat first | .24 [.13, .39] | .16 | .16 |
 
-- **Pooled targets moved** (real / before / after):
-
-  | Target | Real | Before | After |
-  |---|---|---|---|
-  | KO share | .25-.27 | .292 | .307 |
-  | Escape share | .58-.64 | .711 | .695 |
-  | Unfed by the next hit, < 60 | .070 | .089 | .097 |
-  | Healed by the next hit, 60-79 | .43 | .426 | .451 |
-  | Low attackers: axe swings, bands 0-19 / 20-39 / 40-59 | .36 / .32 / .31 | .30 / .29 / .22 | .27 / .26 / .19 |
-  | Low attackers: swing by +2 | .23 / .28 / .30 | .20 / .21 / .20 | .20 / .20 / .20 |
-  | Per-swing axe share | .151 | .168 | .155 |
-
-- **Why the pooled targets move:**
-  - The eat exponent's spread lowers mean feeding where the hazard is high (under 60) and raises it where it is low (60-79). One shift can't hold both.
-  - Big meal at gain 5 (sd .15) raised the KO share to .334, so it stays at 3.
-  - Holding the pooled rates needs a shift per cell (band), not a single mean shift.
+- **What those gains do to the pooled targets** (c-main → gained):
+  - KO .292 → .307; escape .711 → .695.
+  - Unfed below 60 .089 → .097; healed at 60-79 .426 → .451.
+  - Low-attacker axe swings .30 / .29 / .22 → .27 / .26 / .19.
+  - Big meal at gain 5 (sd .15) raises the KO share to .334.
+  - Axe at gain 3 on its own:
+    - KO .288 → .278 and low-attacker axe swings → .25 / .25 / .20.
+    - A log shift of +0.14 restores the per-swing axe share (.155 → .167), but not those two.
+- **Why one shift isn't enough:** a wider log-scale multiplier lowers the mean rate where the base rate is high and raises it where the base rate is low:
+  - Eat: feeding falls under 60 and rises at 60-79.
+  - Axe: at bar under 12, where `RF_AXE_SWING_PM` is 509-755 per mille, axe swings fall.
+- **Next step:** a shift per cell (meal band, axe cell) that holds each cell's sim rate. Then eat, big_meal and axe can take the gains above.
 - **Not added:**
   - Hidden meals: real sd .31, but no script table makes a meal on the swing tick.
   - Tab by HP: p .11 on the same 994 fighter-duels.
   - Uptime: no table.
-- Tests pass: test_riskfight_dharok_script, _mix and _scripts. The goldens are not refreshed.
+- Tests pass: test_riskfight_dharok_script, _mix and _scripts. The env_trace goldens are not refreshed.
