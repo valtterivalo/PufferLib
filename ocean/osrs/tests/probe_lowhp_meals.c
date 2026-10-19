@@ -11,9 +11,11 @@
  *  - pooled over the band's decisions and rolls: n; the net's greedy meal rate (rf_net_act hard: the argmax slot of each head, a meal when the food, combo or
  *    drink head picks a slot); KO and death shares of the fight under each branch; the pooled break-even price (KO gain over extra deaths of skipping: "skip
  *    below P" when skipping gains kills for deaths). These are band averages: they say nothing of any one decision.
- *  - per decision: the forced meal's benefit at the decision's own price, d = (KO - price x death | meal) - (same | none), its mean over the rolls; the band's
- *    mean d with its standard error over decisions; the decisions where the meal is better (mean d over 2 standard errors of its rolls above 0), worse (below),
- *    or not told apart by ROLLS rolls; the greedy meal rate in each; and of the decisions told apart, the share where greedy picks the better branch.
+ *  - per decision: the forced meal's benefit at the decision's own price, d = (KO - price x death | meal) - (same | none), its mean over the rolls. The band's
+ *    mean d, and its mean over the decisions where greedy skips (there the skip branch is greedy's own play: the direct test of whether an extra meal would
+ *    pay), each with a 90% interval over sessions resampled (a session's decisions share fights and states; they are not independent); the decisions where
+ *    the meal is better (mean d over 2 standard errors of its rolls above 0), worse (below), or not told apart by ROLLS rolls; the greedy meal rate in each;
+ *    and of the decisions told apart, the share where greedy picks the better branch.
  * Build as the suite builds osrs_riskfight.h users:
  *   cc -std=gnu11 -O2 -I. -Isrc -I$RAYLIB_INC -o probe_lowhp_meals ocean/osrs/tests/probe_lowhp_meals.c riskfight_oppfit_bridge.o -lm -lpthread */
 #include "../../osrs_riskfight/osrs_riskfight.h"
@@ -24,7 +26,7 @@ static float obs[RF_OBS_SIZE], obs_saved[RF_OBS_SIZE], actions[RF_HEADS], reward
 static unsigned char mask[RF_MASK_SIZE], mask_saved[RF_MASK_SIZE];
 
 typedef struct { double n, kill, death; } Outcome;
-typedef struct { unsigned char band, greedy_eats; float price; double d_sum, d_sq; } Decision;
+typedef struct { unsigned char band, greedy_eats; float price; int session; double d_sum, d_sq; } Decision;
 static Decision decisions[MAX_DECISIONS];
 
 static int first_allowed(int head) {
@@ -89,7 +91,7 @@ int main(int argc, char** argv) {
                 assert(count < MAX_DECISIONS);
                 const int band = hp <= 20 ? 0 : hp <= 40 ? 1 : 2;
                 Decision* dec = &decisions[count++];
-                *dec = (Decision){band, greedy[RF_FOOD] || greedy[RF_COMBO] || greedy[RF_DRINK], st->death_price, 0, 0};
+                *dec = (Decision){band, greedy[RF_FOOD] || greedy[RF_COMBO] || greedy[RF_DRINK], st->death_price, (int)env->log.n, 0, 0};
                 /* The clone shares the command queues' heap buffers: grow them first so no branch reallocates a buffer the saved copy still points at. */
                 for (int seat = 0; seat < 2; seat++) human_command_queue_reserve(&env->context.policy_commands[seat].commands, 256);
                 memcpy(saved, env, sizeof(*env));
@@ -139,10 +141,16 @@ int main(int argc, char** argv) {
         else snprintf(even, sizeof(even), "%s", gain >= 0 && extra <= 0 ? "skip always" : "eat always");
         printf("%s | %ld | %.3f | %.3f / %.3f | %.3f / %.3f | %s\n", names[band], n, (double)eats / n, ko_e, d_e, ko_k, d_k, even);
     }
-    printf("per decision: our hp | mean meal benefit d (se) | meal better / worse / not told apart | greedy eats in each | greedy picks the better, of those told apart\n");
+    printf("per decision: our hp | mean d [90%% over sessions] | mean d where greedy skips (n) [90%%] | meal better / worse / not told apart | greedy eats in each | "
+        "greedy picks the better, of those told apart\n");
     for (int band = 0; band < BANDS; band++) {
         long n = 0, cls[3] = {0}, cls_eats[3] = {0}, right = 0;
-        double sum = 0, sq = 0;
+        /* Per session: the sum of the decisions' mean d and their count, over all decisions and over greedy's skips. */
+        static double s_sum[2][1 << 16];
+        static long s_n[2][1 << 16];
+        memset(s_sum, 0, sizeof(s_sum));
+        memset(s_n, 0, sizeof(s_n));
+        assert(sessions <= (1 << 16));
         for (long i = 0; i < count; i++) {
             const Decision* x = &decisions[i];
             if (x->band != band) continue;
@@ -150,19 +158,43 @@ int main(int argc, char** argv) {
             const double se = sqrt(var > 0 ? var / rolls : 0);
             const int c = se == 0 ? (mean > 0 ? 0 : mean < 0 ? 1 : 2) : mean > 2 * se ? 0 : mean < -2 * se ? 1 : 2;
             n++;
-            sum += mean;
-            sq += mean * mean;
+            s_sum[0][x->session] += mean;
+            s_n[0][x->session]++;
+            if (!x->greedy_eats) { s_sum[1][x->session] += mean; s_n[1][x->session]++; }
             cls[c]++;
             cls_eats[c] += x->greedy_eats;
             right += (c == 0 && x->greedy_eats) || (c == 1 && !x->greedy_eats);
         }
         if (!n) continue;
-        const double mean = sum / n, se = sqrt((sq / n - mean * mean) / (n > 1 ? n - 1 : 1));
+        char col[2][64];
+        for (int k = 0; k < 2; k++) {
+            double total = 0;
+            long m = 0;
+            for (int s = 0; s < sessions; s++) { total += s_sum[k][s]; m += s_n[k][s]; }
+            if (!m) { snprintf(col[k], sizeof(col[k]), "-"); continue; }
+            enum { BOOT = 1000 };
+            static double boot[BOOT];
+            uint32_t r = 0x2545f491u ^ (uint32_t)(band * 2 + k);
+            for (int b = 0; b < BOOT; b++) {
+                double bs = 0;
+                long bn = 0;
+                for (int s = 0; s < sessions; s++) {
+                    r = osrs_lowbias32(r + 0x9e3779b9u);
+                    const int pick = (int)(r % (uint32_t)sessions);
+                    bs += s_sum[k][pick];
+                    bn += s_n[k][pick];
+                }
+                boot[b] = bn ? bs / bn : 0;
+            }
+            for (int i = 1; i < BOOT; i++) for (int j = i; j > 0 && boot[j - 1] > boot[j]; j--) { double t = boot[j]; boot[j] = boot[j - 1]; boot[j - 1] = t; }
+            if (k == 0) snprintf(col[k], sizeof(col[k]), "%+.3f [%+.3f, %+.3f]", total / m, boot[BOOT / 20], boot[BOOT - BOOT / 20 - 1]);
+            else snprintf(col[k], sizeof(col[k]), "%+.3f (%ld) [%+.3f, %+.3f]", total / m, m, boot[BOOT / 20], boot[BOOT - BOOT / 20 - 1]);
+        }
         char rate[3][16], told[16];
         for (int c = 0; c < 3; c++) snprintf(rate[c], sizeof(rate[c]), cls[c] ? "%.3f" : "-", cls[c] ? (double)cls_eats[c] / cls[c] : 0.0);
         snprintf(told, sizeof(told), cls[0] + cls[1] ? "%.3f" : "-", cls[0] + cls[1] ? (double)right / (cls[0] + cls[1]) : 0.0);
-        printf("%s | %+.3f (%.3f) | %.3f / %.3f / %.3f | %s / %s / %s | %s\n", names[band], mean, se, (double)cls[0] / n, (double)cls[1] / n, (double)cls[2] / n,
-            rate[0], rate[1], rate[2], told);
+        printf("%s | %s | %s | %.3f / %.3f / %.3f | %s / %s / %s | %s\n", names[band], col[0], col[1], (double)cls[0] / n, (double)cls[1] / n,
+            (double)cls[2] / n, rate[0], rate[1], rate[2], told);
     }
     puf_close(env);
     return 0;
