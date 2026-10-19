@@ -27,12 +27,14 @@ Reported per group (real, sim opponents, sim us):
 (a) occupancy: fighter-ticks by D band;
 (b) at decision points by D band: what comes first (swing / meal / teleport / none), the mean K;
 (c) at decision points, by D below or at least 0.25 and by his own K: what comes first;
-(d) per fighter (a named real fighter, a sim opponent persona, the net) with >= MIN_POINTS decision points at D >= 0.1: the share he swings first there; the spread,
-    and its part beyond sampling noise (the shares' variance less the mean binomial variance p (1 - p) / n of each fighter's own count).
+(d) per fighter (a named real fighter, a sim opponent persona, the net) at decision points with D >= 0.1: his raw share swinging first (fighters with >= MIN_POINTS),
+    and the part of the spread that repeats across his duels (split_half: residuals against the group's D x K cell rates, his duels alternated into two halves,
+    the covariance of the halves across fighters), with a 90% interval over fighters resampled and the split-half correlation.
 (e) greataxe swings at own hitpoints < 20: per 1,000 fighter-ticks under 20, and their mean K.
 """
 import argparse
 import collections
+import random
 import os
 import subprocess
 import sys
@@ -46,6 +48,7 @@ from mine_riskfight_pool import DEFAULT_DUELS, SWING_ANIMS  # noqa: E402
 EAT_FIELD = 2
 WINDOW = 4
 MIN_POINTS = 15
+HALF_MIN = 8
 ENERGY_REGEN_TICKS = 50
 D_BANDS = (0.02, 0.10, 0.25, 0.50)
 D_NAMES = ("<.02", ".02-.10", ".10-.25", ".25-.50", ">=.50")
@@ -222,7 +225,9 @@ def read_corpus(path, names_path, group_of_name, laws, tally):
                     t["points"][db][first] += 1
                     t["points_k"][db] += k
                     t["joint"][(dd >= 0.25, band(k, K_BANDS))][first] += 1
-                    if dd >= 0.10: t["per_fighter"][fighter_id][first] += 1
+                    if dd >= 0.10:
+                        t["per_fighter"][fighter_id][first] += 1
+                        t["points_list"].append((fighter_id, (path, d["id"]), db, band(k, K_BANDS), first == "swing"))
                 if swing[i]:
                     law = laws.law.get(laws.key(fx.weapon[i], fx.comp(i), f[y].comp(i))) if fx.comp(i) and f[y].comp(i) else None
                     ready_at = i + (law["speed"] if law else 4)
@@ -231,8 +236,12 @@ def read_corpus(path, names_path, group_of_name, laws, tally):
                 t["ticks"][band(dd, D_BANDS)] += 1
                 t["ticks_all"] += 1
                 if hp < 20:
+                    low = t["low_by_duel"][(path, d["id"])]
+                    low[0] += 1
                     t["low_ticks"] += 1
+                    low[1] += swing[i]
                     if any(a in (2066, 2067) for a in fx.anims[i]):
+                        low[2] += 1
                         t["low_axe"] += 1
                         t["low_axe_k"] += k
                 if swing[i]:
@@ -245,7 +254,39 @@ def read_corpus(path, names_path, group_of_name, laws, tally):
 def new_tally():
     return dict(ticks=collections.Counter(), ticks_all=0, points=collections.defaultdict(collections.Counter), points_k=collections.Counter(),
                 joint=collections.defaultdict(collections.Counter), per_fighter=collections.defaultdict(collections.Counter), low_ticks=0, low_axe=0, low_axe_k=0.0,
-                swings=0, swing_d=0.0, swing_k=0.0)
+                low_by_duel=collections.defaultdict(lambda: [0, 0, 0]),
+                swings=0, swing_d=0.0, swing_k=0.0, points_list=[])
+
+
+def split_half(points, boot=1000):
+    """The between-fighter spread of swinging first under threat that repeats across a fighter's duels: each point's residual against the group's rate in its
+    D x K cell (so a fighter's mix of states does not count), his duels alternated into two halves (a duel's points stay together, so whatever ties the
+    decisions of one duel together lands in one half), and the covariance across fighters of his two half means: an estimate of the variance of his own
+    tendency, free of the noise of either half. Fighters with >= HALF_MIN points in each half. Returns (fighters, SD, 90% interval over fighters resampled,
+    split-half correlation)."""
+    cell_n, cell_s = collections.Counter(), collections.Counter()
+    for _, _, db, kb, s in points:
+        cell_n[(db, kb)] += 1
+        cell_s[(db, kb)] += s
+    by = collections.defaultdict(lambda: collections.defaultdict(list))
+    for fid, duel, db, kb, s in points:
+        by[fid][duel].append(s - cell_s[(db, kb)] / cell_n[(db, kb)])
+    pairs = []
+    for fid, duels in by.items():
+        halves = ([], [])
+        for j, duel in enumerate(sorted(duels)): halves[j % 2].extend(duels[duel])
+        if min(len(halves[0]), len(halves[1])) >= HALF_MIN: pairs.append((sum(halves[0]) / len(halves[0]), sum(halves[1]) / len(halves[1])))
+    if len(pairs) < 3: return len(pairs), None, None, None
+
+    def cov(ps):
+        ma, mb = sum(a for a, _ in ps) / len(ps), sum(b for _, b in ps) / len(ps)
+        return sum((a - ma) * (b - mb) for a, b in ps) / (len(ps) - 1)
+
+    c = cov(pairs)
+    va, vb = cov([(a, a) for a, _ in pairs]), cov([(b, b) for _, b in pairs])
+    rng = random.Random(1)
+    sds = sorted(max(0.0, cov([rng.choice(pairs) for _ in pairs])) ** 0.5 for _ in range(boot))
+    return len(pairs), max(0.0, c) ** 0.5, (sds[int(0.05 * boot)], sds[int(0.95 * boot)]), c / (va * vb) ** 0.5 if va > 0 and vb > 0 else None
 
 
 def share(c, key):
@@ -287,29 +328,33 @@ def report(tally, counts):
                 if n: rows.append([g, "D >= .25" if hi else "D < .25", K_NAMES[b], n, share(c, "swing"), share(c, "meal"), share(c, "tab"), share(c, "none")])
     out.append(table(["group", "D", "K", "points", "swing", "meal", "tab", "none"], rows))
     out.append("")
-    out.append(f"(d) per fighter, decision points at D >= .10 (fighters with >= {MIN_POINTS}): share swinging first, p10 / p25 / median / p75 / p90")
+    out.append(f"(d) per fighter, decision points at D >= .10: raw share swinging first, p10 / p25 / median / p75 / p90 (fighters with >= {MIN_POINTS}); the spread "
+               f"that repeats across his duels, state-adjusted (fighters with >= {HALF_MIN} points in each half)")
     rows = []
     for g in groups:
         counts = [c for c in tally[g]["per_fighter"].values() if sum(c.values()) >= MIN_POINTS]
         sh = [c["swing"] / sum(c.values()) for c in counts]
-        if len(sh) > 1:
-            mean = sum(sh) / len(sh)
-            var = sum((x - mean) ** 2 for x in sh) / (len(sh) - 1)
-            noise = sum(x * (1 - x) / sum(c.values()) for x, c in zip(sh, counts)) / len(sh)
-            spread = f"{var ** 0.5:.3f} / {max(0.0, var - noise) ** 0.5:.3f}"
-        else:
-            spread = "-"
-        rows.append([g, len(sh), quantiles(sh), spread])
-    out.append(table(["group", "fighters", "swing first", "SD / SD beyond noise"], rows))
+        n, sd, ci, r = split_half(tally[g]["points_list"])
+        rows.append([g, len(sh), quantiles(sh), n, f"{sd:.3f} [{ci[0]:.3f}, {ci[1]:.3f}]" if sd is not None else "-", f"{r:.2f}" if r is not None else "-"])
+    out.append(table(["group", "fighters", "swing first (raw shares)", "fighters split", "repeatable SD [90%]", "split-half r"], rows))
     out.append("")
-    out.append("(e) swings: mean D and K at a swing; greataxe swings at own hitpoints < 20")
+    out.append("(e) swings: mean D and K at a swing; at own hitpoints < 20: swings and greataxe swings per 1,000 fighter-ticks and the axe's share of those swings, "
+               "90% intervals over duels resampled")
     rows = []
     for g in groups:
         t = tally[g]
+        duels = list(t["low_by_duel"].values())
+        rate = lambda ds, j: 1000 * sum(x[j] for x in ds) / max(1, sum(x[0] for x in ds))
+        share_axe = lambda ds: sum(x[2] for x in ds) / max(1, sum(x[1] for x in ds))
+        rng = random.Random(2)
+        boots = [[rng.choice(duels) for _ in duels] for _ in range(500)] if duels else []
+        ci = lambda f: (lambda v: f"[{v[25]:.1f}, {v[474]:.1f}]")(sorted(f(b) for b in boots)) if boots else ""
+        ci_share = (lambda v: f"[{v[25]:.2f}, {v[474]:.2f}]")(sorted(share_axe(b) for b in boots)) if boots else ""
         rows.append([g, t["swings"], f"{t['swing_d'] / t['swings']:.3f}" if t["swings"] else "-", f"{t['swing_k'] / t['swings']:.3f}" if t["swings"] else "-",
-                     t["low_ticks"], f"{1000 * t['low_axe'] / t['low_ticks']:.1f}" if t["low_ticks"] else "-",
-                     f"{t['low_axe_k'] / t['low_axe']:.3f}" if t["low_axe"] else "-"])
-    out.append(table(["group", "swings", "mean D", "mean K", "ticks < 20 hp", "axe swings per 1,000", "their mean K"], rows))
+                     t["low_ticks"], f"{rate(duels, 1):.1f} {ci(lambda b: rate(b, 1))}", f"{rate(duels, 2):.1f} {ci(lambda b: rate(b, 2))}",
+                     f"{share_axe(duels):.2f} {ci_share}", f"{t['low_axe_k'] / t['low_axe']:.3f}" if t["low_axe"] else "-"])
+    out.append(table(["group", "swings", "mean D", "mean K", "ticks < 20 hp", "swings per 1,000", "axe swings per 1,000", "axe share of swings",
+                      "axe swings' mean K"], rows))
     return "\n".join(out)
 
 

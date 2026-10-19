@@ -1369,3 +1369,19 @@ Corpora:
   - The net keeps its own D low: .018 at its swings, and .027 of its ticks at D ≥ .25.
   - What the scripts do in those "none" windows is not yet known (hidden meals, a clock pushed back by a meal, the net out of reach).
 - Side observation: degraded Dharok pieces (helm/body/legs 75: 4881, 4893, 4899) and a few cosmetic items have no item row. They are 0.7% of worn slot-ticks in the corpus. A viewer reading an opponent in them misses his set effect, live too.
+- **Correction (advisories): the "3.5 times the spread" claim is retracted.** It subtracted iid binomial noise, but a fighter's decision points cluster in duels, and fighters face different mixes of D and K.
+  - Re-measured with `split_half` in the ledger: residuals against the group's D × K cell rates, each fighter's duels alternated into two halves, the covariance of the halves across fighters.
+  - Swinging first under threat (D ≥ .10) that repeats across duels: real SD .043 [90%: 0, .076] over 48 fighters, split-half r .09; scripts v scripts .020 [0, .034], r .08.
+  - Real players' risk appetite on this measure is not shown to vary beyond chance. It is not a calibration target.
+- **What holds, with duel-resampled intervals: the greataxe at low true hitpoints.** At own HP < 20, swings per 1,000 ticks are alike (real 127 [119, 136], sim 139), but the axe takes .69 [.65, .73] of real swings against .44 [.43, .46] in the sim.
+- Axe share of non-special swings, by own HP (gap estimate) and the opponent's, real [90% over duels] (n) against scripts v scripts:
+
+  | Own HP | Opp < 40 | Opp 40-79 | Opp 80+ |
+  |---|---|---|---|
+  | < 20 | .78 [.68, .85] (58) / .59 | .75 [.70, .81] (162) / .47 | .89 [.81, .95] (55) / .42 |
+  | 20-39 | .79 [.72, .86] (128) / .57 | .64 [.60, .68] (490) / .41 | .61 [.54, .66] (140) / .37 |
+  | 40-79 | .46 [.42, .49] (591) / .34 | .17 (9145) / .19 | .10 (3329) / .15 |
+  | 80+ | .20 [.14, .26] (157) / .20 | .07 (3466) / .11 | .02 (5142) / .09 |
+
+  - Real fighters key the axe on their own current HP, which they know. Low with the opponent healthy, they take it on .89 of swings.
+  - The script keys it on its own bar at its last hit (`RF_SCRIPT_OWN_BAR`). A fighter who has eaten back up keeps the low band, one still low gets no more axe, and the healthy ones get too much. The old table matches real by that key (`measure_dharok_play.py` (d) on the sim duels: bar 0-11, 601 against 633 real) but misplaces the axe in true HP.
