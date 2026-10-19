@@ -1316,7 +1316,7 @@ p1 = night3 trial 33's hyperparameters, 150M steps on 4f8d314cb, `live_loadout` 
 | Our death (mutual included) | .019 | 26 (.44 / .21 / .23 / .11 / 0) | 29 | .61 / .21 | .56 | 16.5 / 10.4 |
 
 - Per 3,000-tick session: 4.72 kills, 0.13 deaths (mutual included), 0.16 our tabs, 2.03 his tabs (0.23 ragged). Dharok kit 4.43 kills / 0.10 deaths, VW kits 4.96 / 0.16.
-- Observed distributions, not causes: our tabs all fall at tick 100+, with 2.1 food items left on average (.19 none). Our deaths fall early (.61 before tick 50) with 16.5 food left; .44 start their tick at 0-19 HP.
+- Observed distributions, not causes: 95 of our 96 tabs fall at tick 100+ (one at 50-99), with 2.1 food items left on average (.19 none). Our deaths fall early (.61 before tick 50) with 16.5 food left; .44 start their tick at 0-19 HP.
 - **Joint columns** (added after an advisory: "no food" counts eat items only, while the scripts' forced tab needs no eat item, no brew dose and HP < 30):
 
   | Ending | Under 30, no heals (the forced-tab state) | Under 40, heals left |
