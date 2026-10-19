@@ -1003,6 +1003,14 @@ static const int RF_AXE_WIELD_MEAN[3] = {75, 44, 15};
  * a Voidwaker, 96% came at his bar 25 or less; the rate is 6-13 per 1,000 ticks up to bar 25 and under 1 from bar 27). The old gate, bar under 19.5 (0.65), cut
  * the 60-79 hitpoint specials that are half of the spectated ones, and the sim landed 0.0042 specials per fighter-tick against 0.0068. */
 enum { RF_VW_SPEC_BAR_MAX = 25 };
+/* A Dharok fighter's Voidwaker special per attack, per mille, by his own Vengeance up (cast, not yet proc'd) and the other side's bar (scale 30: <12, 12-23,
+ * 24 up, under the gate above). Spectated Dharok fighters holding a Voidwaker spec 2-4 times as often with Vengeance up (per 1,000 ticks 20.9 / 17.0 / 11.5
+ * against 15.6 / 7.8 / 2.7 down): the special lands with the reflect of his next hit. The profile rate (vw_pm) had no Vengeance in it, 12-13 per 1,000 ticks
+ * either way in the sim. Calibrated in the sim (scripts/fit_dharok_vw.py: the script on both seats, probe_script_duels) to the spectated rates: after three
+ * steps every cell within 8% of them (15.9 / 8.3 / 2.9 and 21.7 / 17.9 / 11.9 at the step before these values). A profile's vw_pm over the training
+ * profiles' mean RF_VW_PM_MEAN is his propensity, on the odds. Scripts that don't fight on the Dharok rules keep vw_pm. */
+static const int16_t RF_DHAROK_VW_SPEC_PM[2][3] = {{236, 83, 48}, {309, 238, 406}};
+enum { RF_VW_PM_MEAN = 202 }; /* RISKFIGHT_HUMAN_PROFILES' mean vw_pm over the training profiles */
 
 /** Weapon rolls are keyed on the tick the next attack comes off cooldown, so one attack gets one decision.
  * consume_ticks counts this round's ticks on which the fighter ate or drank. */
@@ -1053,8 +1061,9 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     if (actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO]) actions[RF_PRIMARY] = RF_STOP;
     uint8_t generic_spec = plain_spec != ITEM_NONE ? plain_spec : plain_main != ITEM_NONE && osrs_spec_cost(plain_main) > 0 ? plain_main : ITEM_NONE;
     int generic_cost = generic_spec == ITEM_NONE ? 100 : osrs_spec_cost(generic_spec);
-    int vw_spec = !combo_specs && has_vw && obs[6] >= 0.5f && opp_bar <= RF_VW_SPEC_BAR_MAX &&
-        riskfight_sample_event(seed, attack_tick, 21, profile->vw_pm);
+    const int vw_pm = profile->dharok_eating ?
+        riskfight_persona_odds(RF_DHAROK_VW_SPEC_PM[obs[11] > 0.5f][(opp_bar >= 12) + (opp_bar >= 24)], profile->vw_pm * 1000 / RF_VW_PM_MEAN) : profile->vw_pm;
+    int vw_spec = !combo_specs && has_vw && obs[6] >= 0.5f && opp_bar <= RF_VW_SPEC_BAR_MAX && riskfight_sample_event(seed, attack_tick, 21, vw_pm);
     int maul_cost = maul_item == ITEM_NONE ? 100 : osrs_spec_cost(maul_item);
     /* The ornate maul waits for the energy of two specials and lands both at once; the plain one costs 60 and gets one. */
     int maul_specs = maul_item == ITEM_NONE ? 0 : maul_item == ITEM_GRANITE_MAUL_ORNATE ? 2 : 1;

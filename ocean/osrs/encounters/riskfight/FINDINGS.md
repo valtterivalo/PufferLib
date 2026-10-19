@@ -1443,3 +1443,38 @@ p2's config, 150M steps, seeds 81-83. Argmax `session_probe` (300 sessions, `liv
   - The scripts' kill chance at a swing is .017 (.042 against each other). The net's D at its swings is .016, and it spends .024 of its ticks at D ≥ .25.
   - Under 20 HP the scripts take the axe on .38 of swings against the net (.81 against each other). The net is mostly on a bar of 24+, where the table is .45-.52, and a Dharok max of 96 does not reach 99.
   - The rekeyed axe doesn't reach a net that stays healthy. The lethality gap left is FINDINGS' KO hazard from 40 HP up (sim 17 / 2.3 / 0.5 per 10,000 fighter-ticks at 40-59 / 60-79 / 80+, real 32 / 4.6 / 2.1): bursts from mid HP, not the low-HP axe.
+
+## 2026-10-19: what kills from mid HP; the Voidwaker special keyed on Vengeance (branch vw-veng)
+
+- **KO anatomy, real against script v script** (`/tmp/risk/burst.py`, same reader): damage on the victim in the 3 ticks to the KO, and the attacker's specials, axe swings and Vengeance procs around it.
+
+  | | Real (112 KOs) | Sim (1,628) |
+  |---|---|---|
+  | 60+ damage in the last 3 ticks | .71 | .57 |
+  | KOs by an axe swing without a special | .26 | .32 |
+  | KOs by a Voidwaker special with his Vengeance proc | .20 | .07 |
+  | KOs by a Voidwaker special alone | .15 | .20 |
+
+  - Hitsplat counts per burst can't be compared. The sim writer marks a hitsplat per tick (0/1), and the engine counts only attack hits (no reflect, recoil or orb), while the export counts every hitsplat.
+- **Spectated Voidwaker specials depend on the attacker's own Vengeance; the script's did not.** Per 1,000 ticks of a fighter holding a Voidwaker, by the other side's bar <12 / 12-23 / 24+:
+
+  | | Vengeance down | Vengeance up |
+  |---|---|---|
+  | Real | 15.6 / 7.8 / 2.7 | 20.9 / 17.0 / 11.5 |
+  | Sim before | 11.9 / 13.4 / 6.1 | 12.3 / 13.1 / 5.4 |
+
+- **Change:** a Dharok script's Voidwaker special uses `RF_DHAROK_VW_SPEC_PM[veng][his bar band]`, with the profile's vw_pm as an odds propensity (mean 202).
+  - Calibrated in the sim with `scripts/fit_dharok_vw.py`, 3 steps; every cell within 8% of real.
+  - Scripts not on the Dharok rules keep vw_pm.
+- **After:** KOs by a Voidwaker special with a Vengeance proc are still .08 against .20. The spec is now there; the victim's hit into the Vengeance that lands with it is not (the timing of the reflect, an open question since the escape-gap work).
+- **KO hazard by victim HP** (`/tmp/eg/ko.py`, gap estimate; per 10,000 fighter-ticks at 0-19 / 20-39 / 40-59 / 60-79 / 80+, and in total):
+
+  | | By HP band | Total |
+  |---|---|---|
+  | Real | 117 / 47 / 32 / 4.6 / 2.1 | 9.9 |
+  | Sim before | 97 / 62 / 24 / 4.8 / 0.9 | 10.2 |
+  | Rekeyed axe | 100 / 67 / 23 / 5.1 / 0.8 | 10.4 |
+  | Plus Vengeance-keyed Voidwaker | 115 / 69 / 23 / 5.2 / 0.9 | 10.6 |
+
+  - The total matches. The shift from 40-59 to 20-39 is within reach of the gap estimate's bias (a meal hidden on a swing tick moves HP), so the band split isn't a target.
+- Tests pass; goldens refreshed.
