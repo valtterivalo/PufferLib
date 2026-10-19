@@ -1292,3 +1292,10 @@ p1 = night3 trial 33's hyperparameters, 150M steps on 4f8d314cb, `live_loadout` 
 - **Live 4-HP ticks:** eats at 175 and 176, not at 173 or 174 (best slot .15 / .07 against none .57 / .87). n3r33 ate on all four.
 - **persona-cells** (e12af34e2): per-band persona factors at gain 1, so they change nothing yet. The branch stays unmerged until a per-band and per-clock eat factor keeps feeding, eat-first and KO together.
 - **Correction:** p1's zero maul use and the per-kit scores describe this policy, not the value of the maul or of a kit. p1's own ≤ 20 HP probe shows it skipping a dominated choice: eating gives more KOs and fewer deaths, yet it mostly skips. So non-use is no evidence that an action doesn't pay. The maul's value is unestablished until paired rollouts from eligible states (double maul, maul now, opener then maul, against the net's own choice) measure it: `probe_maul_chain`, in progress.
+- **Maul value, paired** (`probe_maul_chain`, 5ac4b2fd6; p1, 2 × 100 sessions; each line minus p1's own choice on the same decisions and clones):
+  - Double maul now: −.13 to −.55 stake. One maul special now: lower in 11 of 12 cells.
+  - Opener then maul: within −.09 to +.03.
+  - The chain as the user plays it, with the maul's KO gate skipped: likewise, −.10 to +.03. The gate isn't what stops the chain from paying.
+  - The only gain is +.03 ± .015, in the tentacle+VW+maul kit with his bar above 70%.
+  - So in this sim, against these opponents, forcing the maul doesn't beat p1's continuation: this is a value result, unlike p1's non-use. It is only as faithful as the opponents' behaviour after a big hit.
+- **The user's Dharok kit can't wield the maul in most states:** the 2h rule needs a free cell for the defender, and the bag is full, so the wield was blocked in 6091 of 7460 decisions with his bar above 70%. The user will leave one cell free live (2026-10-19); the sim kit should match.
