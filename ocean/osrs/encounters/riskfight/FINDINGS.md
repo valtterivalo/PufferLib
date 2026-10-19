@@ -1084,3 +1084,23 @@ Harness: `dh`, both seats on the Dharok script with personas, starts drawn, 6,00
 - **Restarted again as night3 on 2df8c8261:** the scripts now keep Smite up, as 91% of real Dharok fighter-ticks show (fa4ab04d6). That drains our prayer as it does live.
   - night2 had reached its anchor at 9.38 (on dcc97daa0 opponents) before the restart.
   - The morning check also uses `probe_lowhp_meals` (1d3764077).
+
+## 2026-10-19 morning: night3 results and the installed candidate n3r33
+
+- **night3** (2df8c8261, 60 trials, self-play off, steps swept 1e8-2e9):
+  - Protein drew every trial at 1.0-2.1e8 steps. The `time`-scaled step parameter plus cost-aware selection keeps it near the floor.
+  - Best scores: 9.69 (run 52), 9.69 (33), 9.63 (42), 9.53 (57); anchor 9.19.
+- **Morning check** of the top 4. Probe columns: argmax net_stake per hour; `probe_lowhp_meals` at 300 sessions, greedy meals, our HP ≤ 20 with him < 40:
+
+  | Run | Dharok / VW | Strips per fight | ≤20 greedy eats | Greedy picks better branch |
+  |---|---|---|---|---|
+  | 52 | 9.10 / 8.97 | 1.48 | .27 | .55 |
+  | 33 | 8.86 / 9.63 | 0.00 | .40 | .54 |
+  | 42 | 9.57 / 9.96 | 0.96 | .21 | .21 |
+  | 57 | 8.59 / 8.84 | 0.94 | .20 | .48 |
+
+- **Live 4-HP ticks (173-176), greedy actions in the actual state:**
+  - Run 33 eats on all four, best slot .36-.55 against none .00-.22. It also eats when our HP is set to 4 at ticks 169 and 172. It doesn't eat at 59 HP, where the sim says skipping pays below price 1.74.
+  - Run 52 skips all four.
+- **Installed: n3r33** (512x1, 150M steps, C 467413f58). Replays of 4 live sessions run clean.
+- **Timestep-only sweep night4** (run 52's other hyperparameters fixed, steps 1.4e8-1.5e9) was started after the advisory rejected a hand-picked 600M run. Its random draws also stay at 1.4-1.8e8. Scores range 8.79-9.69 at fixed hyperparameters, so trial-to-trial noise is about ±0.4: single-trial gaps under about 0.5 don't rank nets.
