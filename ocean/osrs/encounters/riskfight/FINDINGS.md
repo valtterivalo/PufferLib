@@ -1620,3 +1620,17 @@ Victims are fighters first hit to a fresh bar 1-6 (about 20 HP), and what follow
   - Real attackers kill .07 of low victims. The gap narrows but stays about 4 times. The rest is unexplained: the net's special timing against the script's meal timing, and the ceiling above.
 - **Measurement note:** an earlier version of these readers dropped fights that ended within the look-ahead (`i + 10 >= n`), which removed the deaths. The numbers here count every event.
 - Tests pass; goldens refreshed.
+
+## 2026-10-19 night: human reaction on the engine's hand, live and in the sim (light PR #360, branch motor-reaction)
+
+- **Before:**
+  - The live engine pressed its first click 83-161 ms after the tick start (p50 111, light's `engineReactionTimingSelfTest`). A leading tab hotkey went at +4-8 ms, and all three clicks of a triple eat landed on one tick.
+  - The sim's motor model was fitted on the user's own hotkey swaps (Fact 20: clicks 1-3 at p50 261/437/639 ms), slower than the engine on every click.
+- **Live (#360, merged 7920af159):**
+  - A fresh run's first input, tab key or click, waits a primed reaction (`HumanReaction.PRIMED`, median 180 ms, p1 133, p99 243) before its hop. Later clicks follow on at the batch pace; a continued run gets no new reaction.
+  - First press p10/p50/p90 248/285/325 ms (inventory runs; 235/272/317 on recorded 3-click batches), each later gap 76/97/115.
+  - P(third press before the 465 ms cutoff) .37-.41: a reacted triple eat usually spills into the next tick.
+- **Sim:** `riskfight_motor.h` refit to those numbers. First click lognormal, median 280, p90 322. Later gaps a 71 ms floor plus a lognormal: p50/p90 97/115. The sim reads P(third < 465) .39.
+  - `test_riskfight_live_facts` pins it.
+  - A leading tab key isn't modelled: the sim has no tab switch.
+- `test_lookahead_pending_plan` fails on c-main before this change too ("invalid lookahead request: target->current_hitpoints == 79"). It belongs to the lookahead server, which the engine does not use.

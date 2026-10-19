@@ -3,20 +3,22 @@
 #include <math.h>
 
 /* Our hand: when a chain of clicks started at a tick's start is pressed, and on which game tick the server processes each click.
- * Measured on 11,202 queued gear-swapper clicks of 167 own recordings (calib README Fact 20): the k-th click of a chain commits, in ms after the
- * tick start, at p50/p90 261/343, 437/620, 639/898, 841/1141, 1161/1417; one click is processed on the first tick after the decision (96% of first
- * clicks, 37% of second clicks), three clicks in one tick 0 of 757 below 400 ms, five 0 of 114 below 858 ms; the server takes a click for the next
- * tick only when it arrives before about 465 ms (n 2,373; the plugin's own 405 is safe, 0 of 1,710 late).
+ * The engine's hand since light PR #360 (2026-10-19): a fresh run's first input waits a primed human reaction (HumanReaction.PRIMED, lognormal median 180 ms,
+ * p1 133, p99 243) after the tick start, then the hop plays and presses on arrival; the run's later clicks follow on at the actuator's batch pace, with no
+ * second reaction. light's engineReactionTimingSelfTest (the actuator's own code over the donor library) gives the first press at p10/p50/p90 248/285/325
+ * ms after the tick start on 5-click inventory runs (235/272/317 on 28 recorded 3-click batches), each later gap 76/97/115 (min 71), P(third press before
+ * the 465 ms cutoff) 0.37-0.41. Before #360 the engine pressed its first click at 111 ms (p50) and all three of a triple eat landed on one tick; the old
+ * model here was fitted on the user's own hotkey swaps (calib README Fact 20: 261/437/639 ms p50 for clicks 1-3), slower than the engine on every click.
  *
- * Model: click k comes GAP_k after click k-1 (click 0 after the tick start). GAP_0 is lognormal; GAP_k (k >= 1) is a 76 ms floor (no hand clicks
- * faster) plus a lognormal, k >= 4 repeating the last row. Parameters from fit_motor_clock.py (Nelder-Mead on the ten quantiles above plus
- * P(first < 405) = .96, P(second < 405) = .37, P(third < 400) = 0 and P(fifth < 858) = 0): model p50/p90 263/352, 436/623, 656/897,
- * 861/1108, 1178/1425; P(third < 400) .002, P(fifth < 858) .0004. The opponent has no motor model on purpose: his reaction latency is inside
- * his fitted hazards, and a second meal on the tick after a first one is 0.3% (2 of 744, Fact 9), so his chains do not slip across ticks. */
+ * Model: click k comes GAP_k after click k-1 (click 0 after the tick start). GAP_0 is lognormal (median 280, p90 322); GAP_k (k >= 1) is a 71 ms floor (no
+ * hand clicks faster) plus a lognormal (median 26, p90 44: gaps p50/p90 97/115), k >= 4 repeating the last row. The server takes a click for the next tick
+ * only when it arrives before about 465 ms (n 2,373 live). A leading tab hotkey is not modelled: the sim has no tab switch. The opponent has no motor
+ * model on purpose: his reaction latency is inside his fitted hazards, and a second meal on the tick after a first one is 0.3% (2 of 744, Fact 9), so his
+ * chains do not slip across ticks. */
 enum { MOTOR_CUTOFF_MS = 465, MOTOR_TICK_MS = 600, MOTOR_ROWS = 5 };
-static const double MOTOR_FLOOR_MS = 76.35;
-static const double MOTOR_MU[MOTOR_ROWS] = {5.5774, 4.3777, 4.8085, 4.8084, 5.4684};
-static const double MOTOR_SIGMA[MOTOR_ROWS] = {0.2262, 0.9077, 0.6059, 0.2840, 0.1231};
+static const double MOTOR_FLOOR_MS = 71.0;
+static const double MOTOR_MU[MOTOR_ROWS] = {5.6348, 3.2581, 3.2581, 3.2581, 3.2581};
+static const double MOTOR_SIGMA[MOTOR_ROWS] = {0.1091, 0.4108, 0.4108, 0.4108, 0.4108};
 
 /** Inverse of the standard normal CDF (Acklam), u in (0, 1). */
 static double motor_inverse_normal(double u) {

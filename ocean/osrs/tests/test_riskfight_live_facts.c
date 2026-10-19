@@ -5,7 +5,7 @@
 #include "riskfight_motor.h"
 
 /* Tick-exact regressions of mechanics measured live (calib README VALIDATED FACTS), one per mechanic the audit found wrong:
- * the consumable lock matrix with karambwan to karambwan at T+3, the motor clock of Fact 20, the maul's spec cost. Meal-before-damage by PID
+ * the consumable lock matrix with karambwan to karambwan at T+3, the engine's motor clock (light PR #360), the maul's spec cost. Meal-before-damage by PID
  * (Fact 3) is pinned in test_riskfight_decision_phases.c. */
 
 static RiskfightState state;
@@ -207,32 +207,25 @@ static void check_quantiles(double* values, int n, double p50, double p90, doubl
 
 static void test_motor_clock(void) {
     enum { N = 200000 };
-    static double commit[5][N];
-    int third_before_400 = 0, fifth_before_858 = 0, first_before_405 = 0, second_before_405 = 0, three_in_one_tick = 0;
+    static double commit[5][N], gaps[N];
+    int first_before_cutoff = 0, third_before_cutoff = 0;
     for (int i = 0; i < N; i++) {
         double ms = 0;
-        int tick[5];
         for (int k = 0; k < 5; k++) {
-            ms += motor_gap_ms(uniform(), k);
+            const double gap = motor_gap_ms(uniform(), k);
+            if (k == 2) gaps[i] = gap;
+            ms += gap;
             commit[k][i] = ms;
-            tick[k] = motor_land_tick(0, ms);
         }
-        third_before_400 += commit[2][i] < 400;
-        fifth_before_858 += commit[4][i] < 858;
-        first_before_405 += commit[0][i] < 405;
-        second_before_405 += commit[1][i] < 405;
-        three_in_one_tick += tick[0] == tick[1] && tick[1] == tick[2];
+        first_before_cutoff += commit[0][i] < MOTOR_CUTOFF_MS;
+        third_before_cutoff += commit[2][i] < MOTOR_CUTOFF_MS;
     }
-    /* Fact 20: k-th click p50/p90 261/343, 437/620, 639/898, 841/1141, 1161/1417 ms after the tick start. */
-    const double p50[] = {261, 437, 639, 841, 1161}, p90[] = {343, 620, 898, 1141, 1417};
-    for (int k = 0; k < 5; k++) check_quantiles(commit[k], N, p50[k], p90[k], 0.07);
-    assert(third_before_400 < N * 0.005);   /* live: 0 of 757 */
-    assert(fifth_before_858 < N * 0.005);   /* live: 0 of 114 */
-    assert(fabs(first_before_405 / (double)N - 0.96) < 0.02);
-    assert(fabs(second_before_405 / (double)N - 0.37) < 0.04);
-    /* Three clicks processed by one tick: 33% under the old 130+U(0,330)/80+U(0,90) clock, 0 of 757 live below 400 ms; the fitted tail between 400 and
-     * the 465 ms cutoff leaves about 3% (P(third < 465)), an extrapolation the live count cannot confirm or refute. */
-    assert(three_in_one_tick < N * 0.04);
+    /* light's engineReactionTimingSelfTest (PR #360): the first press p50/p90 285/325 ms on inventory runs, 272/317 on recorded batches; each later gap
+     * 97/115; P(third press before the cutoff) 0.37-0.41. */
+    check_quantiles(commit[0], N, 280, 322, 0.05);
+    check_quantiles(gaps, N, 97, 115, 0.05);
+    assert(first_before_cutoff > N * 0.995);
+    assert(fabs(third_before_cutoff / (double)N - 0.39) < 0.06);
     /* The server takes a click for the next tick only when it arrives before 465 ms. */
     assert(motor_land_tick(10, 464.9) == 11 && motor_land_tick(10, 465.0) == 12 && motor_land_tick(10, 465.0 + 599.9) == 12 &&
         motor_land_tick(10, 465.0 + 600.0) == 13);
