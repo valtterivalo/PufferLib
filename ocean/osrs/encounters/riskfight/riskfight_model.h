@@ -512,9 +512,12 @@ __attribute__((constructor)) static void riskfight_build_dharok_loadout(void) {
         brew = riskfight_supply_code(OSRS_CONSUMABLE_BREW, 4), combat = riskfight_supply_code(OSRS_CONSUMABLE_SUPER_COMBAT, 4),
         orb = riskfight_supply_code(OSRS_CONSUMABLE_LOCATOR_ORB, 0), sack = riskfight_supply_code(OSRS_CONSUMABLE_VENGEANCE_SACK, 0),
         tab = riskfight_supply_code(OSRS_CONSUMABLE_TELEPORT, 0),
-        maul = osrs_inventory_content_code_from_item(ITEM_GRANITE_MAUL_ORNATE), axe = osrs_inventory_content_code_from_item(ITEM_DHAROKS_GREATAXE);
-    const uint16_t bag[] = {pie, pie, halibut, halibut, restore, marlin, halibut, halibut, restore, marlin, halibut, halibut, marlin, brew,
-        marlin, brew, marlin, marlin, marlin, marlin, maul, axe, combat, marlin, orb, marlin, sack, tab};
+        maul = osrs_inventory_content_code_from_item(ITEM_GRANITE_MAUL_ORNATE), axe = osrs_inventory_content_code_from_item(ITEM_DHAROKS_GREATAXE),
+        empty = 0;
+    /* The user's bag as of 2026-10-19: one halibut fewer than the 2026-10-18 snapshot, so a cell is free for the defender when a two-hander is wielded. The free
+     * cell sits between the maul and the axe, so the weapon and the defender a 2h wield returns land next to each other (the user's layout, less cursor travel). */
+    const uint16_t bag[] = {pie, pie, halibut, halibut, restore, marlin, halibut, halibut, restore, marlin, halibut, marlin, marlin, brew,
+        marlin, brew, marlin, marlin, marlin, marlin, maul, empty, axe, combat, orb, marlin, sack, tab};
     typedef char riskfight_dharok_kit_fills_28_cells[sizeof(bag) == sizeof(loadout.inventory) ? 1 : -1]; /* compiles as C and as CUDA C++ */
     (void)sizeof(riskfight_dharok_kit_fills_28_cells);
     memcpy(loadout.inventory, bag, sizeof(bag));

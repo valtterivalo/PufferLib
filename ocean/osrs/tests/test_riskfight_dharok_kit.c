@@ -43,18 +43,21 @@ static int first_slot_of(const Player* p, OsrsConsumableKind kind, uint8_t item)
 
 static void test_kit_shape_and_set_effect(void) {
     const RiskfightLoadout* kit = &RISKFIGHT_DHAROK_LOADOUT;
-    int pie = 0, halibut = 0, marlin = 0, restore = 0, brew = 0, combat = 0, orb = 0, sack = 0, tab = 0, maul = 0, axe = 0;
+    int pie = 0, halibut = 0, marlin = 0, restore = 0, brew = 0, combat = 0, orb = 0, sack = 0, tab = 0, maul = 0, axe = 0, empty = -1, maul_cell = -1, axe_cell = -1;
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
-        assert(kit->inventory[slot] != 0);
+        if (kit->inventory[slot] == 0) { assert(empty < 0); empty = slot; continue; }
         const OsrsItemContentMetadata* m = osrs_item_content_metadata(kit->inventory[slot]);
         pie += m->consumable_kind == OSRS_CONSUMABLE_SUMMER_PIE; halibut += m->consumable_kind == OSRS_CONSUMABLE_HALIBUT;
         marlin += m->consumable_kind == OSRS_CONSUMABLE_MARLIN; restore += m->consumable_kind == OSRS_CONSUMABLE_SUPER_RESTORE;
         brew += m->consumable_kind == OSRS_CONSUMABLE_BREW; combat += m->consumable_kind == OSRS_CONSUMABLE_SUPER_COMBAT;
         orb += m->click_action == OSRS_CLICK_SELF_DAMAGE; sack += m->consumable_kind == OSRS_CONSUMABLE_VENGEANCE_SACK;
         tab += m->consumable_kind == OSRS_CONSUMABLE_TELEPORT;
-        maul += m->item_idx == ITEM_GRANITE_MAUL_ORNATE; axe += m->item_idx == ITEM_DHAROKS_GREATAXE;
+        if (m->item_idx == ITEM_GRANITE_MAUL_ORNATE) { maul++; maul_cell = slot; }
+        if (m->item_idx == ITEM_DHAROKS_GREATAXE) { axe++; axe_cell = slot; }
     }
-    assert(pie == 2 && halibut == 6 && marlin == 10 && restore == 2 && brew == 2 && combat == 1 && orb == 1 && sack == 1 && tab == 1 && maul == 1 && axe == 1);
+    /* The user's bag of 2026-10-19: one halibut out, its cell free between the maul and the axe, so a 2h wield always has a cell for the defender. */
+    assert(pie == 2 && halibut == 5 && marlin == 10 && restore == 2 && brew == 2 && combat == 1 && orb == 1 && sack == 1 && tab == 1 && maul == 1 && axe == 1);
+    assert(empty == maul_cell + 1 && axe_cell == empty + 1);
     assert(kit->inventory[0] == riskfight_supply_code(OSRS_CONSUMABLE_SUMMER_PIE, 2) && kit->vengeance_sacks == 25);
     assert(kit->equipment[GEAR_SLOT_HEAD] == ITEM_DHAROKS_HELM && kit->equipment[GEAR_SLOT_BODY] == ITEM_DHAROKS_PLATEBODY &&
         kit->equipment[GEAR_SLOT_LEGS] == ITEM_DHAROKS_PLATELEGS && kit->equipment[GEAR_SLOT_WEAPON] == ITEM_VOIDWAKER &&
@@ -64,10 +67,9 @@ static void test_kit_shape_and_set_effect(void) {
     Player* p = &state.env.players[0];
     int full = 0;
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) full += !osrs_inventory_cell_is_empty(&p->inventory_cells[slot]);
-    assert(full == 28);
+    assert(full == 27); /* one cell free, between the maul and the axe */
     assert(p->equipment_effect_profile.dharok_piece_count == 3); /* helm, body, legs: the Voidwaker is wielded */
-    /* The axe is two-handed: the defender needs a free cell, as after a meal. */
-    p->inventory_cells[first_slot_of(p, OSRS_CONSUMABLE_MARLIN, 0)] = osrs_inventory_cell_empty();
+    /* The axe is two-handed: the defender takes the kit's free cell. */
     int axe_slot = first_slot_of(p, OSRS_CONSUMABLE_NONE, ITEM_DHAROKS_GREATAXE);
     assert(axe_slot >= 0 && osrs_equip_from_cell(p, p->inventory_cells, axe_slot) == GEAR_SLOT_WEAPON);
     assert(p->equipped[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE && p->equipped[GEAR_SLOT_SHIELD] == ITEM_NONE);
@@ -103,7 +105,9 @@ static void test_mixed_draw(void) {
 static void test_strip_and_reequip(void) {
     reset_with(&RISKFIGHT_DHAROK_LOADOUT);
     Player* p = &state.env.players[0];
-    /* A full bag: nothing comes off. */
+    /* A full bag (the kit's free cell taken by a halibut, the 2026-10-18 bag): nothing comes off. */
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
+        if (osrs_inventory_cell_is_empty(&p->inventory_cells[slot])) p->inventory_cells[slot] = p->inventory_cells[first_slot_of(p, OSRS_CONSUMABLE_HALIBUT, 0)];
     unsigned char* mask = mask_of(&state, 1);
     assert(!mask[RF_HEAD_OFFSET[RF_BODY] + RF_UNEQUIP] && !mask[RF_HEAD_OFFSET[RF_LEGS] + RF_UNEQUIP]);
     int eaten = first_slot_of(p, OSRS_CONSUMABLE_HALIBUT, 0);

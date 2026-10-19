@@ -62,26 +62,29 @@ static void test_shapes(void) {
     const RiskfightLoadout* user = &RISKFIGHT_DHAROK_LOADOUT;
     for (int k = 0; k < RF_DHAROK_SPECTATED_KITS; k++) {
         const RiskfightLoadout* kit = &RISKFIGHT_DHAROK_SPECTATED_LOADOUT[k];
-        int marlin = 0, halibut = 0, pie = 0, opener = 0, maul = 0, axe = 0, orb = 0, vw = 0;
+        int marlin = 0, halibut = 0, pie = 0, opener = 0, maul = 0, axe = 0, orb = 0, vw = 0, empty = 0;
         for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
-            assert(kit->inventory[slot] != 0);
+            if (kit->inventory[slot] == 0) { empty++; continue; }
             const OsrsItemContentMetadata* m = osrs_item_content_metadata(kit->inventory[slot]);
             marlin += m->consumable_kind == OSRS_CONSUMABLE_MARLIN; halibut += m->consumable_kind == OSRS_CONSUMABLE_HALIBUT;
             pie += m->consumable_kind == OSRS_CONSUMABLE_SUMMER_PIE; orb += m->click_action == OSRS_CLICK_SELF_DAMAGE;
             opener += m->item_idx == OPENER[k]; maul += m->item_idx == ITEM_GRANITE_MAUL_ORNATE; axe += m->item_idx == ITEM_DHAROKS_GREATAXE;
             vw += m->item_idx == ITEM_VOIDWAKER;
         }
-        assert(opener == 1 && maul == HAS_MAUL[k] && axe == 1 && orb == 1 && pie == 2 && halibut == 6 && marlin == (HAS_MAUL[k] ? 9 : 10));
+        /* The user's bag less one halibut leaves one free cell; the spectated kits keep it. */
+        assert(opener == 1 && maul == HAS_MAUL[k] && axe == 1 && orb == 1 && pie == 2 && halibut == 5 && marlin == (HAS_MAUL[k] ? 9 : 10) && empty == 1);
         assert(vw == (OPENER[k] == ITEM_VOIDWAKER));
         for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
             assert(kit->equipment[slot] == (slot == GEAR_SLOT_WEAPON ? ITEM_ABYSSAL_TENTACLE : user->equipment[slot]));
         assert(kit->vengeance_sacks == user->vengeance_sacks && kit->hitpoints == user->hitpoints);
         assert(riskfight_loadout_class(kit) == RF_CLASS_DHAROK);
         reset_with(kit, 123);
-        for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) assert(!osrs_inventory_cell_is_empty(&us()->inventory_cells[slot]));
+        int filled = 0;
+        for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) filled += !osrs_inventory_cell_is_empty(&us()->inventory_cells[slot]);
+        assert(filled == 27);
         assert(us()->equipped[GEAR_SLOT_WEAPON] == ITEM_ABYSSAL_TENTACLE && us()->equipped[GEAR_SLOT_SHIELD] == ITEM_DRAGON_DEFENDER);
         assert(us()->equipment_effect_profile.dharok_piece_count == 3 && us()->base_defence == MAXED_BASE_DEFENCE);
-        printf("kit %s: 28 cells, %d marlin, tentacle and defender worn with the Dharok set, class Dharok\n", NAME[k], marlin);
+        printf("kit %s: 27 cells and one free, %d marlin, tentacle and defender worn with the Dharok set, class Dharok\n", NAME[k], marlin);
     }
 }
 
@@ -127,7 +130,9 @@ static void test_switch_spec_and_2h(int k) {
     decision[RF_SPECIAL] = 1;
     decision[RF_PRIMARY] = RF_ATTACK;
     attack[RF_PRIMARY] = RF_ATTACK;
-    /* A two-handed opener (the godsword) needs a free cell with the defender on: the bag is full. */
+    /* A two-handed opener (the godsword) needs a free cell with the defender on: fill the kit's free cell, so the bag is full. */
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
+        if (osrs_inventory_cell_is_empty(&us()->inventory_cells[slot])) us()->inventory_cells[slot] = us()->inventory_cells[slot_of(us(), OSRS_CONSUMABLE_MARLIN, 0)];
     assert(offered(&state, decision) == !two_handed_opener);
     float obs[RF_OBS_SIZE];
     riskfight_write_observation(&state, 0, obs);

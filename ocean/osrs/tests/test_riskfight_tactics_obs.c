@@ -105,10 +105,11 @@ static void test_identity(void) {
 static void test_can_wield_2h(void) {
     reset();
     assert(first_slot_of(ITEM_DHAROKS_GREATAXE) >= 0);
+    assert(tactics()[RF_TACTICS_CAN_WIELD_2H] == 1); /* the kit's free cell takes the defender */
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
+        if (osrs_inventory_cell_is_empty(&us()->inventory_cells[slot])) us()->inventory_cells[slot] = us()->inventory_cells[first_slot_of_kind(OSRS_CONSUMABLE_MARLIN)];
     assert(tactics()[RF_TACTICS_CAN_WIELD_2H] == 0); /* 28 cells full, the defender would have nowhere to go */
-    us()->inventory_cells[first_slot_of_kind(OSRS_CONSUMABLE_MARLIN)] = osrs_inventory_cell_empty();
-    assert(tactics()[RF_TACTICS_CAN_WIELD_2H] == 1);
-    printf("can_wield_2h: 0 with the bag full and the defender worn, 1 once a cell frees\n");
+    printf("can_wield_2h: 1 with the kit's free cell, 0 once the bag is full and the defender worn\n");
 }
 
 /** Two maul specials by brute force: each lands with `hit`, then deals 0..max uniformly; his hitpoints uniform over [lower, upper]. */
