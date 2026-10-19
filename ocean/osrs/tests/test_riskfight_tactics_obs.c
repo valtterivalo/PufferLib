@@ -5,7 +5,9 @@
  * - the knockout chances are 0 when his lower bound exceeds the max, the Voidwaker special's is its hit chance (1) when his upper bound is at most its least damage,
  *   and two maul specials match a brute-force enumeration of both rolls;
  * - the OURS row identities: Voidwaker wielded, then the maul and the axe by item index, the fourth row empty;
- * - can_wield_2h is 0 with the full bag and the defender on, 1 once a cell frees.
+ * - can_wield_2h is 0 with the full bag and the defender on, 1 once a cell frees;
+ * - the spec chains (an opener's special then one maul special) and the godsword's special: riskfight_ko_chain on a hand-computed case, then the block on the
+ *   user's kit and the spectated tentacle kits (RISKFIGHT_DHAROK_SPECTATED_LOADOUT) against an enumeration of both rolls.
  *   cc -std=gnu11 -O2 -I. -o /tmp/test_riskfight_tactics_obs ocean/osrs/tests/test_riskfight_tactics_obs.c -lm      (cwd = repo root) */
 #include <assert.h>
 #include <stdio.h>
@@ -154,11 +156,67 @@ static void test_ko(void) {
         t[RF_TACTICS_KO + 4]);
 }
 
+/** Opener then one maul special by brute force: the opener lands with `hit_a` and deals lo_a..hi_a uniformly, the maul with `hit_b` and 0..hi_b. */
+static double chain_enumerated(double hit_a, int lo_a, int hi_a, double hit_b, int hi_b, int lower, int upper) {
+    double sum = 0;
+    for (int hp = lower; hp <= upper; hp++)
+        for (int a = lo_a - 1; a <= hi_a; a++)
+            for (int b = -1; b <= hi_b; b++) {
+                double pa = a < lo_a ? 1 - hit_a : hit_a / (hi_a - lo_a + 1), pb = b < 0 ? 1 - hit_b : hit_b / (hi_b + 1);
+                if ((a < lo_a ? 0 : a) + (b < 0 ? 0 : b) >= hp) sum += pa * pb;
+            }
+    return sum / (upper - lower + 1);
+}
+
+/** The spec chains [32..33] and the godsword's special [31]: a hand-computed case of riskfight_ko_chain, then the block on the spectated kits against the enumeration. */
+static void test_spec_chain(void) {
+    /* By hand: A always hits for 2 or 3, B hits half the time for 0 or 1; his hitpoints 4. Only A = 3 with B = 1 reaches: 1/2 x 1/2 x 1/2 = 0.125. With his hitpoints
+     * 3 or 4: hp 3 adds A = 3 (1/2) and A = 2 with B = 1 (1/2 x 1/4): (0.625 + 0.125) / 2 = 0.375. */
+    assert(near(riskfight_ko_chain(1.0f, 2, 3, 0.5f, 0, 1, 4, 4), 0.125));
+    assert(near(riskfight_ko_chain(1.0f, 2, 3, 0.5f, 0, 1, 3, 4), 0.375));
+    const RiskfightLoadout* kits[3] = {&RISKFIGHT_DHAROK_LOADOUT, &RISKFIGHT_DHAROK_SPECTATED_LOADOUT[RF_DHAROK_TENTACLE_VW_MAUL],
+        &RISKFIGHT_DHAROK_SPECTATED_LOADOUT[RF_DHAROK_TENTACLE_AGS_MAUL]};
+    const int bars[2] = {-1, 12};
+    for (int k = 0; k < 3; k++)
+        for (int b = 0; b < 2; b++) {
+            context.self_play = 1;
+            context.loadout[0] = kits[k];
+            riskfight_reset((EncounterState*)&state, (EncounterContext*)&context, 123);
+            context.loadout[0] = NULL;
+            us()->current_hitpoints = 99;
+            state.visible[0].health_bar = bars[b];
+            const float* obs = observe();
+            const float *t = obs + RF_TACTICS_START, *timing = obs + RF_TIMING_START;
+            const int lower = damage(timing[3]), upper = damage(timing[4]);
+            const float* maul = ours_row(obs, ITEM_GRANITE_MAUL_ORNATE);
+            /* The OURS rows: the wielded weapon, then the bag's by item index, so the godsword (index 26, under the axe's and the maul's) is row 1. */
+            const float* ags = k == 2 ? obs + RF_THREAT_START + RF_THREAT_OURS_OFFSET + RF_THREAT_OURS_WIDTH : NULL;
+            if (ags) assert(t[RF_TACTICS_IDENTITY + RF_TACTICS_KINDS + 3] == 1 && ags[0] == 1 && near(ags[4], 0.5));
+            double vw_chain = 0, ags_chain = 0, ags_alone = 0;
+            if (k < 2) {
+                const float* vw = ours_row(obs, ITEM_VOIDWAKER);
+                vw_chain = chain_enumerated(vw[6], osrs_voidwaker_min_hit(damage(vw[1])), damage(vw[5]), maul[6], damage(maul[5]), lower, upper);
+                assert(ags == NULL);
+            } else {
+                assert(ags != NULL);
+                ags_chain = chain_enumerated(ags[6], 0, damage(ags[5]), maul[6], damage(maul[5]), lower, upper);
+                ags_alone = chain_enumerated(ags[6], 0, damage(ags[5]), 0, 0, lower, upper);
+            }
+            assert(near(t[RF_TACTICS_CHAIN], vw_chain) && near(t[RF_TACTICS_CHAIN + 1], ags_chain) && near(t[RF_TACTICS_KO_AGS_SPEC], ags_alone));
+            /* The chain needs both rolls: it is at least either special alone. */
+            assert(t[RF_TACTICS_CHAIN] + 1e-6f >= (k < 2 ? t[RF_TACTICS_KO + 2] : 0) && t[RF_TACTICS_CHAIN] + 1e-6f >= (k < 2 ? t[RF_TACTICS_KO + 3] : 0));
+            printf("chain, %s, his hp %d-%d: vw spec %.4f maul %.4f maul2 %.4f | ags spec %.4f | vw+maul %.4f ags+maul %.4f as enumerated\n",
+                k == 0 ? "user's Dharok (VW wielded)" : k == 1 ? "tentacle+VW+maul" : "tentacle+AGS+maul", lower, upper, t[RF_TACTICS_KO + 2], t[RF_TACTICS_KO + 3],
+                t[RF_TACTICS_KO + 4], t[RF_TACTICS_KO_AGS_SPEC], t[RF_TACTICS_CHAIN], t[RF_TACTICS_CHAIN + 1]);
+        }
+}
+
 int main(void) {
     test_axe_max();
     test_identity();
     test_can_wield_2h();
     test_ko();
+    test_spec_chain();
     puts("riskfight tactics observation: all passed");
     return 0;
 }

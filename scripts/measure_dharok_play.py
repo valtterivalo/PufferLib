@@ -33,6 +33,8 @@ A Dharok fighter is a duel side that, on some tick, wears Dharok's helm, platebo
     swing of the opponent on ticks i-1..i+1 and no Vengeance proc of his on i-1, i. On any other tick an orb can't be told from his hit, so those ticks leave both
     the count and the denominator (the tick after his swing always does): no orb seen there is not evidence of none. By his own hitpoints band and the axe in
     hand the tick before, over KIT_ORB_PM; then the visible rate by ticks since the opponent's swing, the ready tick (his weapon frees the next swing) apart.
+(g) Setups (riskfight_model.h's spectated Dharok kits): per Dharok fighter of the Dharok v Dharok duels, the main weapon (most ticks in hand, the axe and
+    mauls aside), the Voidwaker or Armadyl godsword seen wielded besides it, and a granite maul seen wielded. The bag is not in the data: these are lower bounds.
 """
 import argparse
 import collections
@@ -51,6 +53,10 @@ HEAD, WEAPON, BODY, LEGS = 0, 3, 4, 7
 BAR, SPEC, DMG, NHIT, VENG_CAST, VENG_PROC, DEAD, ANIMS = 0, 4, 5, 6, 7, 8, 11, 12
 WEAPON_FIELD = 1  # the R line's weapon (item id in hand); WEAPON above is the composition slot
 VOIDWAKER = 27690
+VOIDWAKERS = {VOIDWAKER, 29607}     # (g) the raw ids osrs_items.h maps to the Voidwaker, abyssal tentacle, Armadyl godsword and granite maul
+TENTACLES = {12006, 26484}
+GODSWORDS = {11802, 20368, 29605}
+MAULS = {4153, 12848, 24225, 24227}
 VW_GATE_SHARE = 0.95  # (e)
 FOLLOW = 20       # ticks after a strip's start in which its outcome is read
 OPP_SWING_WINDOW = 4
@@ -304,6 +310,8 @@ def measure(duels):
     out.append(measure_vw_specs(duels))
     out.append("")
     out.append(measure_orb_ticks(duels))
+    out.append("")
+    out.append(measure_setups(duels))
     return "\n".join(out)
 
 
@@ -328,6 +336,28 @@ def measure_vw_specs(duels):
         if gate is None and cum >= VW_GATE_SHARE * total: gate = bar
         out.append(f"| {bar} | {ticks[bar]} | {specs[bar]} | {1000 * rate:.1f} | {cum / max(1, total):.3f} |")
     out.append(f"RF_VW_SPEC_BAR_MAX (the lowest bar with {VW_GATE_SHARE:.0%} of the specials at or below it): {gate}")
+    return "\n".join(out)
+
+
+def measure_setups(duels):
+    """(g), see the module docstring."""
+    setups = collections.Counter()
+    for d in duels:
+        sides = (Side(d, 0), Side(d, 1))
+        if not (sides[0].is_dharok() and sides[1].is_dharok()): continue
+        for s in sides:
+            held = collections.Counter(k[WEAPON] for k in s.kit if k is not None)
+            mains = {w: c for w, c in held.items() if w != -1 and w not in DHAROK_AXES and w not in MAULS}
+            main = max(mains, key=mains.get) if mains else None
+            name = "tentacle" if main in TENTACLES else "Voidwaker" if main in VOIDWAKERS else "other" if main else "axe only"
+            specs = [n for n, ids in (("Voidwaker", VOIDWAKERS), ("AGS", GODSWORDS)) if n != name and any(w in held for w in ids)]
+            setups[(name, " + ".join(specs) or "-", any(w in held for w in MAULS))] += 1
+    total = sum(setups.values())
+    out = [f"(g) Dharok setups of the {total} fighters of the Dharok v Dharok duels, by the main weapon (most ticks in hand, not the axe or a maul), the spec "
+           "weapons seen wielded besides it, and a granite maul seen wielded (lower bounds on what the bag carries)",
+           "| main | spec weapons | maul | fighters | share |", "|---|---|---|---|---|"]
+    for (main, specs, maul), c in setups.most_common():
+        out.append(f"| {main} | {specs} | {'yes' if maul else 'no'} | {c} | {c / total:.3f} |")
     return "\n".join(out)
 
 

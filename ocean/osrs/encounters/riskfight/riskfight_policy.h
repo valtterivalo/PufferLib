@@ -139,19 +139,27 @@ static inline double riskfight_attack_tail(double hit, int lo, int hi, int need)
     return hit * (hi - need + 1) / (hi - lo + 1);
 }
 
-/** The chance `attacks` (1 or 2) independent attacks of riskfight_attack_tail's law deal at least his hitpoints, uniform over the integers [hp_lower, hp_upper].
- * Two attacks: the first misses (the second alone must do it) or lands k uniform on [lo, hi] (the second must deal hitpoints - k), exact. */
+/** The chance attack A then attack B (independent, each of riskfight_attack_tail's law: A hits with `hit_a`, uniform on [lo_a, hi_a], B likewise) deal together at
+ * least his hitpoints, uniform over the integers [hp_lower, hp_upper]: A misses (B alone must do it) or lands k (B must deal hitpoints - k), exact. */
+static float riskfight_ko_chain(float hit_a, int lo_a, int hi_a, float hit_b, int lo_b, int hi_b, int hp_lower, int hp_upper) {
+    assert(0 <= lo_a && lo_a <= hi_a && 0 <= lo_b && lo_b <= hi_b && hp_lower <= hp_upper);
+    double sum = 0;
+    for (int hp = hp_lower; hp <= hp_upper; hp++) {
+        double after_hit = 0;
+        for (int k = lo_a; k <= hi_a; k++) after_hit += riskfight_attack_tail(hit_b, lo_b, hi_b, hp - k);
+        sum += (1 - hit_a) * riskfight_attack_tail(hit_b, lo_b, hi_b, hp) + hit_a * after_hit / (hi_a - lo_a + 1);
+    }
+    return (float)(sum / (hp_upper - hp_lower + 1));
+}
+
+/** The chance `attacks` (1 or 2) independent attacks of riskfight_attack_tail's law deal at least his hitpoints, uniform over the integers [hp_lower, hp_upper]
+ * (two: riskfight_ko_chain of the attack with itself). */
 static float riskfight_ko_chance(float hit, int lo, int hi, int attacks, int hp_lower, int hp_upper) {
     assert(attacks == 1 || attacks == 2);
     assert(0 <= lo && lo <= hi && hp_lower <= hp_upper);
+    if (attacks == 2) return riskfight_ko_chain(hit, lo, hi, hit, lo, hi, hp_lower, hp_upper);
     double sum = 0;
-    for (int hp = hp_lower; hp <= hp_upper; hp++) {
-        double alone = riskfight_attack_tail(hit, lo, hi, hp);
-        if (attacks == 1) { sum += alone; continue; }
-        double after_hit = 0;
-        for (int k = lo; k <= hi; k++) after_hit += riskfight_attack_tail(hit, lo, hi, hp - k);
-        sum += (1 - hit) * alone + hit * after_hit / (hi - lo + 1);
-    }
+    for (int hp = hp_lower; hp <= hp_upper; hp++) sum += riskfight_attack_tail(hit, lo, hi, hp);
     return (float)(sum / (hp_upper - hp_lower + 1));
 }
 
@@ -205,7 +213,7 @@ static void riskfight_write_tactics_observation(const RiskfightState* s, int age
         }
     }
     /* The OURS rows: what each holds, and the rows of the weapons the knockout chances read. */
-    const float *vw = NULL, *maul = NULL, *axe_row = NULL;
+    const float *vw = NULL, *maul = NULL, *axe_row = NULL, *ags = NULL;
     const float* rows = obs + RF_THREAT_START + RF_THREAT_OURS_OFFSET;
     for (int i = 0; i <= bag->count; i++) {
         uint8_t item = i == 0 ? p->equipped[GEAR_SLOT_WEAPON] : bag->item[i - 1];
@@ -215,21 +223,32 @@ static void riskfight_write_tactics_observation(const RiskfightState* s, int age
         if (kind == 0 && !vw) vw = row;
         if (kind == 1 && !maul) maul = row;
         if (kind == 2 && !axe_row) axe_row = row;
+        if (item == ITEM_AGS && !ags) ags = row;
     }
     out[RF_TACTICS_CAN_WIELD_2H] = can_wield_2h;
     int lower = riskfight_threat_his_hp_lower(v->health_bar), upper = riskfight_threat_his_hp_upper(v->health_bar);
     float* ko = out + RF_TACTICS_KO;
     if (axe_row) ko[0] = riskfight_ko_chance(axe_row[2], 0, axe_max, 1, lower, upper);
+    int vw_least = 0, vw_spec_max = 0, maul_spec_max = 0, ags_spec_max = 0;
     if (vw) {
-        int normal_max = (int)lroundf(vw[1] * RF_THREAT_DAMAGE_SCALE), spec_max = (int)lroundf(vw[5] * RF_THREAT_DAMAGE_SCALE);
+        int normal_max = (int)lroundf(vw[1] * RF_THREAT_DAMAGE_SCALE);
+        vw_least = osrs_voidwaker_min_hit(normal_max);
+        vw_spec_max = (int)lroundf(vw[5] * RF_THREAT_DAMAGE_SCALE);
         ko[1] = riskfight_ko_chance(vw[2], 0, normal_max, 1, lower, upper);
-        ko[2] = riskfight_ko_chance(vw[6], osrs_voidwaker_min_hit(normal_max), spec_max, 1, lower, upper);
+        ko[2] = riskfight_ko_chance(vw[6], vw_least, vw_spec_max, 1, lower, upper);
     }
     if (maul) {
-        int spec_max = (int)lroundf(maul[5] * RF_THREAT_DAMAGE_SCALE);
-        ko[3] = riskfight_ko_chance(maul[6], 0, spec_max, 1, lower, upper);
-        ko[4] = riskfight_ko_chance(maul[6], 0, spec_max, 2, lower, upper);
+        maul_spec_max = (int)lroundf(maul[5] * RF_THREAT_DAMAGE_SCALE);
+        ko[3] = riskfight_ko_chance(maul[6], 0, maul_spec_max, 1, lower, upper);
+        ko[4] = riskfight_ko_chance(maul[6], 0, maul_spec_max, 2, lower, upper);
     }
+    if (ags) {
+        ags_spec_max = (int)lroundf(ags[5] * RF_THREAT_DAMAGE_SCALE);
+        out[RF_TACTICS_KO_AGS_SPEC] = riskfight_ko_chance(ags[6], 0, ags_spec_max, 1, lower, upper);
+    }
+    /* The spec chains: the opener's special, then one maul special (layout in riskfight_model.h). */
+    if (maul && vw) out[RF_TACTICS_CHAIN] = riskfight_ko_chain(vw[6], vw_least, vw_spec_max, maul[6], 0, maul_spec_max, lower, upper);
+    if (maul && ags) out[RF_TACTICS_CHAIN + 1] = riskfight_ko_chain(ags[6], 0, ags_spec_max, maul[6], 0, maul_spec_max, lower, upper);
     out[RF_TACTICS_HIS_VENG] = riskfight_his_veng_up(v);
     out[RF_TACTICS_ORB] = orb;
     out[RF_TACTICS_HP_ABOVE_1] = p->current_hitpoints > 1;

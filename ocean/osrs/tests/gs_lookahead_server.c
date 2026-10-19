@@ -66,6 +66,8 @@ static const int SIM_IDS[] = {13441, 3144, 3024, 3026, 3028, 3030, 6685, 6687, 6
      * 100 4898: OSRS_ITEM_RAW_GEAR_ALIAS_ROWS) reach this list as these ids, since canonical() applies osrs_item_canonical_raw_id first; the more degraded helm,
      * body and legs have no row (worn they resolve as priors, in the bag they are inert filler). */
     4716, 4718, 4720, 4722,
+    12006, 11802, /* abyssal tentacle, Armadyl godsword: the spectated Dharok kits (riskfight_model.h RISKFIGHT_DHAROK_SPECTATED_LOADOUT) wield the tentacle and carry
+                   * the godsword; their variants (26484, 29605) reach this list as these ids through osrs_item_canonical_raw_id, as the Dharok ids do */
     -1};
 
 static int canonical(int id) {
