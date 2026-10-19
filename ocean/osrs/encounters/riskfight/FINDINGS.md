@@ -1299,3 +1299,6 @@ p1 = night3 trial 33's hyperparameters, 150M steps on 4f8d314cb, `live_loadout` 
   - The only gain is +.03 ± .015, in the tentacle+VW+maul kit with his bar above 70%.
   - So in this sim, against these opponents, forcing the maul doesn't beat p1's continuation: this is a value result, unlike p1's non-use. It is only as faithful as the opponents' behaviour after a big hit.
 - **The user's Dharok kit can't wield the maul in most states:** the 2h rule needs a free cell for the defender, and the bag is full, so the wield was blocked in 6091 of 7460 decisions with his bar above 70%. The user will leave one cell free live (2026-10-19); the sim kit should match.
+- **p2** (p1's config, the 2026-10-19 Dharok bag with one cell free): ladder 8.93. Probe net per hour: Dharok 8.33, tentacle+VW+maul 8.17, tentacle+VW 8.26, tentacle+AGS+maul 4.52, VW 7.77. Maul specials 0. ≤ 20 HP greedy eats .13 (matches the better branch .62).
+  - Against p1 (same config, bag full) every kit moved by 0.5-1.6, which is single-seed noise.
+  - Seeds 74-77 of the same config are training to measure the seed spread before any of these nets is picked.
