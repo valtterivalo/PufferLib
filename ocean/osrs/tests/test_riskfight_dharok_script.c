@@ -74,18 +74,21 @@ static void test_strip_then_reequip_before_axe(void) {
             assert(p->equipped[GEAR_SLOT_BODY] == ITEM_NONE || p->equipped[GEAR_SLOT_LEGS] == ITEM_NONE);
             assert(in_bag(ITEM_DHAROKS_PLATEBODY) == (p->equipped[GEAR_SLOT_BODY] == ITEM_NONE));
             assert(in_bag(ITEM_DHAROKS_PLATELEGS) == (p->equipped[GEAR_SLOT_LEGS] == ITEM_NONE));
-            /* His hitpoints drop and the axe is wanted: he puts the set back on first, the axe waits. */
-            p->current_hitpoints = 60;
-            state.env.tick = ++tick;
-            decide(&AXER, seed, actions);
-            assert(actions[RF_BODY] != RF_UNEQUIP && actions[RF_LEGS] != RF_UNEQUIP);
-            assert(!actions[RF_WEAPON] || osrs_inventory_cell_metadata(&p->inventory_cells[actions[RF_WEAPON] - 1])->item_idx != ITEM_DHAROKS_GREATAXE);
-            execute(actions);
-            assert(dharok_pieces_worn() == 3 && p->equipped[GEAR_SLOT_WEAPON] != ITEM_DHAROKS_GREATAXE);
-            state.env.tick = ++tick;
-            decide(&AXER, seed, actions);
-            execute(actions);
-            assert(p->equipped[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE && dharok_pieces_worn() == 4);
+            /* His hitpoints drop and the axe is wanted on some roll (its odds are the table's times his propensity, never certain): on the tick it is, he puts
+             * the set back on first and the axe waits; it comes on a later tick, with all four pieces on. */
+            p->current_hitpoints = 15;
+            int reequip_tick = -1, axe_tick = -1;
+            for (int wait = 0; wait < 50 && axe_tick < 0; wait++) {
+                state.env.tick = ++tick;
+                decide(&AXER, seed, actions);
+                assert(actions[RF_BODY] != RF_UNEQUIP && actions[RF_LEGS] != RF_UNEQUIP);
+                execute(actions);
+                if (p->equipped[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE) {
+                    assert(dharok_pieces_worn() == 4);
+                    axe_tick = tick;
+                } else if (reequip_tick < 0 && dharok_pieces_worn() == 3) reequip_tick = tick;
+            }
+            assert(reequip_tick >= 0 && axe_tick > reequip_tick);
             reequipped_before_axe++;
             break;
         }
@@ -138,11 +141,11 @@ static void test_orb_takes_ten(void) {
 }
 
 /* The greataxe per attack, over the training profiles and many seeds: one decision per tentacle attack, the share that takes the axe against RF_AXE_SWING_PM
- * (scripts/measure_dharok_play.py (d)) by his own bar, his Vengeance up and the other side's bar, within 15% (the profiles' own axe propensity averages
- * out to 1 over the training profiles). No energy, so no special or combo takes the attack. */
+ * (scripts/fit_dharok_axe.py) by his own hitpoints, his Vengeance up and the other side's bar, within 15% (the profiles' own axe propensity averages out to 1
+ * over the training profiles). No energy, so no special or combo takes the attack. */
 static void test_axe_swings_by_state(void) {
     enum { AXE_SEEDS = 25, CYCLES = 100 };
-    static const struct { int hp, veng, bar; } CELLS[] = {{30, 0, 30}, {60, 0, 30}, {60, 1, 30}, {60, 0, 5}, {90, 0, 30}, {90, 0, 15}};
+    static const struct { int hp, veng, bar; } CELLS[] = {{15, 0, 5}, {30, 0, 30}, {60, 0, 30}, {60, 1, 30}, {60, 0, 5}, {90, 1, 30}, {90, 0, 15}};
     reset(3);
     Player* p = &state.env.players[0];
     p->special_energy = 0;
@@ -151,7 +154,6 @@ static void test_axe_swings_by_state(void) {
     int speed = ITEM_DATABASE[main].attack_speed;
     for (size_t c = 0; c < sizeof(CELLS) / sizeof(CELLS[0]); c++) {
         p->current_hitpoints = CELLS[c].hp;
-        state.visible[1].health_bar = osrs_health_bar_ratio(CELLS[c].hp, 99, OSRS_PLAYER_HEALTH_BAR_SCALE); /* his own bar as last seen (RF_SCRIPT_OWN_BAR) */
         p->veng_active = CELLS[c].veng;
         state.visible[0].health_bar = CELLS[c].bar;
         long axes = 0, attacks = 0;
@@ -166,7 +168,7 @@ static void test_axe_swings_by_state(void) {
                     attacks++;
                 }
         double per_mille = 1000.0 * axes / attacks;
-        int measured = RF_AXE_SWING_PM[(CELLS[c].hp >= 40) + (CELLS[c].hp >= 80)][CELLS[c].veng][(CELLS[c].bar >= 10) + (CELLS[c].bar >= 20)];
+        int measured = RF_AXE_SWING_PM[(CELLS[c].hp >= 20) + (CELLS[c].hp >= 40) + (CELLS[c].hp >= 80)][CELLS[c].veng][(CELLS[c].bar >= 12) + (CELLS[c].bar >= 24)];
         printf("axe per 1,000 attacks at %d hitpoints, veng %d, his bar %d: %.1f (measured %d)\n", CELLS[c].hp, CELLS[c].veng, CELLS[c].bar, per_mille, measured);
         assert(fabs(per_mille / measured - 1) < 0.15);
     }

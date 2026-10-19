@@ -15,11 +15,8 @@ static const RiskfightProfile QUIET = {{0}, 0, 0, {0}, 0, 0, {{0}}};
 static const RiskfightProfile AXER = {{0}, 0, 0, {1000, 1000, 0}, 0, 0, {{0}}};
 static const RiskfightProfile HUNGRY = {{1000, 1000, 1000, 1000, 1000}, 0, 0, {0}, 0, 0, {{0}}};
 
-/* Our hitpoints and the bar the other side last saw (the script's axe band reads that bar, RF_SCRIPT_OWN_BAR), as if a hit had just left us there. */
-static void set_own_hitpoints(int hp) {
-    state.env.players[0].current_hitpoints = hp;
-    state.visible[1].health_bar = osrs_health_bar_ratio(hp < 99 ? hp : 99, 99, OSRS_PLAYER_HEALTH_BAR_SCALE);
-}
+/* Our hitpoints (the script's axe reads them, RF_AXE_SWING_PM). */
+static void set_own_hitpoints(int hp) { state.env.players[0].current_hitpoints = hp; }
 
 static void decide(const RiskfightProfile* profile, int* actions) {
     float obs[RF_OBS_SIZE];

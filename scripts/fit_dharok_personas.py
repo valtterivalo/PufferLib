@@ -15,7 +15,8 @@ Behaviours (each an event with a yes/no outcome y in a cell of the state the scr
   0, 1, 2, 3+; his bar band).
 - vw_spec: a tick with the other side's bar 25 or under (RF_VW_SPEC_BAR_MAX), for a fighter seen holding a Voidwaker in the duel, a Voidwaker special on it;
   cell the other side's bar 0-9, 10-19, 20-25.
-- axe: a swing without a special, the greataxe animation; cell RF_AXE_SWING_PM's (his bar band the tick before, Vengeance up, the other side's bar band).
+- axe: a swing without a special, the greataxe animation; cell his bar band the tick before, Vengeance up, the other side's bar band (measure_dharok_play.py (d),
+  the key RF_AXE_SWING_PM had before fit_dharok_axe.py: a fighter's odds within it are his propensity, which the script applies to the refitted table).
 - orb: a tick the orb can be told from his hit (measure_dharok_play.py (f)), a lone 10; cell RF_DHAROK_ORB_PM's (axe in hand, hitpoints / 20).
 - tab: a tick before the fight's end, his teleport animation; cell his hitpoints / 20 (0-19, 20-39, 40-59, 60 up) on the carried bar.
 - big_meal: a gap between his hitsplats under 80 hitpoints that healed 8 or more, a heal of 33 or more (a double or triple meal, RF_DHAROK_MEAL_DOUBLE_PM);

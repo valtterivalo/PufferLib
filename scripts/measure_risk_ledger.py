@@ -30,7 +30,9 @@ Reported per group (real, sim opponents, sim us):
 (d) per fighter (a named real fighter, a sim opponent persona, the net) at decision points with D >= 0.1: his raw share swinging first (fighters with >= MIN_POINTS),
     and the part of the spread that repeats across his duels (split_half: residuals against the group's D x K cell rates, his duels alternated into two halves,
     the covariance of the halves across fighters), with a 90% interval over fighters resampled and the split-half correlation.
-(e) greataxe swings at own hitpoints < 20: per 1,000 fighter-ticks under 20, and their mean K.
+(e) mean D and K at a swing; the greataxe's share of his swings without a special at own hitpoints < 20 by a fresh read (fit_dharok_axe.fresh_hitpoints: the
+    gap estimate spreads swings over a meal hidden on the swing tick into the low band, and how often differs between real and sim meal timing), with a 90%
+    interval over duels resampled.
 """
 import argparse
 import collections
@@ -44,6 +46,7 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 from measure_dharok_play import parse, Side, BAR, SPEC, ANIMS, WEAPON_FIELD, DHAROK_AXES, table  # noqa: E402
 from fit_dharok_tab import gap_hitpoints, TELEPORT_ANIMS  # noqa: E402
 from mine_riskfight_pool import DEFAULT_DUELS, SWING_ANIMS  # noqa: E402
+from fit_dharok_axe import fresh_hitpoints  # noqa: E402
 
 EAT_FIELD = 2
 WINDOW = 4
@@ -231,19 +234,18 @@ def read_corpus(path, names_path, group_of_name, laws, tally):
                 if swing[i]:
                     law = laws.law.get(laws.key(fx.weapon[i], fx.comp(i), f[y].comp(i))) if fx.comp(i) and f[y].comp(i) else None
                     ready_at = i + (law["speed"] if law else 4)
+                if swing[i] and not fx.spec[i]:
+                    fresh = fresh_hitpoints(fx.mine, i) if i > 0 and not f[x].s.third[i] else None
+                    if fresh is not None and fresh < 20:
+                        low = t["low_by_duel"][(path, d["id"])]
+                        low[0] += 1
+                        if any(a in (2066, 2067) for a in fx.anims[i]):
+                            low[1] += 1
+                            if counted: t["low_axe_k"].append(K[x][i])
                 if not counted: continue
-                k, dd, hp = K[x][i], K[y][i], fx.hp[i]
+                k, dd = K[x][i], K[y][i]
                 t["ticks"][band(dd, D_BANDS)] += 1
                 t["ticks_all"] += 1
-                if hp < 20:
-                    low = t["low_by_duel"][(path, d["id"])]
-                    low[0] += 1
-                    t["low_ticks"] += 1
-                    low[1] += swing[i]
-                    if any(a in (2066, 2067) for a in fx.anims[i]):
-                        low[2] += 1
-                        t["low_axe"] += 1
-                        t["low_axe_k"] += k
                 if swing[i]:
                     t["swing_d"] += dd
                     t["swing_k"] += k
@@ -253,8 +255,8 @@ def read_corpus(path, names_path, group_of_name, laws, tally):
 
 def new_tally():
     return dict(ticks=collections.Counter(), ticks_all=0, points=collections.defaultdict(collections.Counter), points_k=collections.Counter(),
-                joint=collections.defaultdict(collections.Counter), per_fighter=collections.defaultdict(collections.Counter), low_ticks=0, low_axe=0, low_axe_k=0.0,
-                low_by_duel=collections.defaultdict(lambda: [0, 0, 0]),
+                joint=collections.defaultdict(collections.Counter), per_fighter=collections.defaultdict(collections.Counter), low_axe_k=[],
+                low_by_duel=collections.defaultdict(lambda: [0, 0]),
                 swings=0, swing_d=0.0, swing_k=0.0, points_list=[])
 
 
@@ -338,23 +340,20 @@ def report(tally, counts):
         rows.append([g, len(sh), quantiles(sh), n, f"{sd:.3f} [{ci[0]:.3f}, {ci[1]:.3f}]" if sd is not None else "-", f"{r:.2f}" if r is not None else "-"])
     out.append(table(["group", "fighters", "swing first (raw shares)", "fighters split", "repeatable SD [90%]", "split-half r"], rows))
     out.append("")
-    out.append("(e) swings: mean D and K at a swing; at own hitpoints < 20: swings and greataxe swings per 1,000 fighter-ticks and the axe's share of those swings, "
-               "90% intervals over duels resampled")
+    out.append("(e) swings: mean D and K at a swing; at own hitpoints < 20 by a fresh read, the greataxe's share of his swings without a special, 90% interval over "
+               "duels resampled")
     rows = []
     for g in groups:
         t = tally[g]
         duels = list(t["low_by_duel"].values())
-        rate = lambda ds, j: 1000 * sum(x[j] for x in ds) / max(1, sum(x[0] for x in ds))
-        share_axe = lambda ds: sum(x[2] for x in ds) / max(1, sum(x[1] for x in ds))
+        share_axe = lambda ds: sum(x[1] for x in ds) / max(1, sum(x[0] for x in ds))
         rng = random.Random(2)
-        boots = [[rng.choice(duels) for _ in duels] for _ in range(500)] if duels else []
-        ci = lambda f: (lambda v: f"[{v[25]:.1f}, {v[474]:.1f}]")(sorted(f(b) for b in boots)) if boots else ""
-        ci_share = (lambda v: f"[{v[25]:.2f}, {v[474]:.2f}]")(sorted(share_axe(b) for b in boots)) if boots else ""
+        boots = sorted(share_axe([rng.choice(duels) for _ in duels]) for _ in range(500)) if duels else None
+        k = t["low_axe_k"]
         rows.append([g, t["swings"], f"{t['swing_d'] / t['swings']:.3f}" if t["swings"] else "-", f"{t['swing_k'] / t['swings']:.3f}" if t["swings"] else "-",
-                     t["low_ticks"], f"{rate(duels, 1):.1f} {ci(lambda b: rate(b, 1))}", f"{rate(duels, 2):.1f} {ci(lambda b: rate(b, 2))}",
-                     f"{share_axe(duels):.2f} {ci_share}", f"{t['low_axe_k'] / t['low_axe']:.3f}" if t["low_axe"] else "-"])
-    out.append(table(["group", "swings", "mean D", "mean K", "ticks < 20 hp", "swings per 1,000", "axe swings per 1,000", "axe share of swings",
-                      "axe swings' mean K"], rows))
+                     sum(x[0] for x in duels), f"{share_axe(duels):.2f} [{boots[25]:.2f}, {boots[474]:.2f}]" if boots else "-",
+                     f"{sum(k) / len(k):.3f}" if k else "-"])
+    out.append(table(["group", "swings", "mean D", "mean K", "swings at < 20 hp (fresh)", "axe share", "axe swings' mean K"], rows))
     return "\n".join(out)
 
 

@@ -22,8 +22,8 @@ A Dharok fighter is a duel side that, on some tick, wears Dharok's helm, platebo
     Dharok fighters with >= LONG_WIELDS axe wields carrying an orb, bounded below by an unexplained 10 and above by any single 10: its midpoint is the pool's
     RF_KIT_ORB_PM (riskfight_kits.h). The strip numbers are riskfight_policy.h's RF_STRIP_* constants.
 (d) Greataxe swings: of a Dharok fighter's swings without a special, the share with the axe anim, by his own bar band the tick before (his hitpoints at his last
-    hit, what the script reads: RF_SCRIPT_OWN_BAR), his Vengeance up (a cast seen and no
-    proc of his since) and the opponent's bar the tick before (riskfight_policy.h's RF_AXE_SWING_PM). Then the knockouts of the Dharok v Dharok duels: the
+    hit), his Vengeance up (a cast seen and no proc of his since) and the opponent's bar the tick before: the key riskfight_policy.h's RF_AXE_SWING_PM had before
+    scripts/fit_dharok_axe.py keyed it on his own hitpoints at a fresh read. Then the knockouts of the Dharok v Dharok duels: the
     killer's state at his axe swing (Vengeance up, an orb drop or a strip in the 5 ticks up to it, the opponent swinging the tick before, both bars) against
     all axe swings and all Dharok ticks, and the axe swings carrying his own reflect on the knockout.
 (e) Voidwaker specials of Dharok fighters holding a Voidwaker, by the opponent's bar the tick before: specials per 1,000 ticks and their cumulative share. The
@@ -63,7 +63,7 @@ OPP_SWING_WINDOW = 4
 OWN_SWING_WINDOW = 2
 LONG_WIELDS = 8   # axe wields that make a fighter's orb share readable (the share of fighters showing the orb levels off from about here)
 DH_SWINGS = {2066, 2067}
-AXE_POOL_MIN = 60  # swings under which an RF_AXE_SWING_PM cell takes its Vengeance pair's pooled share
+AXE_POOL_MIN = 60  # swings under which a (d) cell takes its Vengeance pair's pooled share
 KIT_ORB_PM = 600   # riskfight_kits.h's RF_KIT_ORB_PM: (f) divides by it
 WEAPON_SPEED = {27690: 4, 12006: 4, 4151: 4, 24225: 7, 4153: 7, 12848: 7, 11802: 6, 13652: 4, 21009: 5, 28338: 5, **{a: 7 for a in DHAROK_AXES}}  # (f) his clock
 
@@ -423,7 +423,7 @@ def measure_axe_swings(duels, dh):
             axes[key] += s.axe_swing[i]
     out.append(f"(d) greataxe share of a Dharok fighter's swings without a special ({sum(swings.values())} swings), per mille (swings), by his own bar band, "
                f"his Vengeance up (cast seen, not yet proc'd) and the opponent's bar the tick before (<10, 10-19, 20+); a cell under {AXE_POOL_MIN} swings "
-               "pools with its Vengeance pair (riskfight_policy.h's RF_AXE_SWING_PM)")
+               "pools with its Vengeance pair (the old key of riskfight_policy.h's RF_AXE_SWING_PM, now fitted by fit_dharok_axe.py)")
     rows = []
     for b in range(3):
         for up in (0, 1):

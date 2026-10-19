@@ -1385,3 +1385,28 @@ Corpora:
 
   - Real fighters key the axe on their own current HP, which they know. Low with the opponent healthy, they take it on .89 of swings.
   - The script keys it on its own bar at its last hit (`RF_SCRIPT_OWN_BAR`). A fighter who has eaten back up keeps the low band, one still low gets no more axe, and the healthy ones get too much. The old table matches real by that key (`measure_dharok_play.py` (d) on the sim duels: bar 0-11, 601 against 633 real) but misplaces the axe in true HP.
+
+## 2026-10-19: the Dharok script's greataxe keyed on its own hitpoints (branch axe-true-hp)
+
+- **Validation first:**
+  - The gap estimate of HP was checked against the sim's truth at swing ticks (a truth-writing build of `probe_script_duels`). It is close at low HP (mean error +1, 1-2% off by 20+), but low cells pick up higher-HP swings, so it is not used for the axe.
+  - A fresh read (his bar at a hitsplat in the 3 ticks before the swing, no meal of his shown since) gives the sim's true-HP table within .02-.03.
+- **Real against sim on the fresh read** (axe share of swings without a special, by his HP and the other side's bar <12 / 12-23 / 24+):
+
+  | His HP | Real | Sim before |
+  |---|---|---|
+  | < 20 | .91 / .87 / .80 | .64 / .64 / .50 |
+  | 20-39 | .95 / .70 / .43 | .70 / .53 / .45 |
+  | 40-79 | .60 / .22 / .07 | .36 / .19 / .12 |
+  | 80+ | .25 / .06 / .02 | .20 / .09 / .07 |
+
+- **Change:** `RF_AXE_SWING_PM[4][2][3]` is keyed on his own HP (0-19 / 20-39 / 40-79 / 80+), Vengeance up, and the other side's bar (<12 / 12-23 / 24+).
+  - Calibrated in the sim with `scripts/fit_dharok_axe.py`: an odds-ratio fixed point, 5 steps, script on both seats, 6,000 fights per step.
+  - The profile's axe propensity now multiplies the odds, not the share. On the share, the keen capped at 1000 and the rest pulled the low bands under the spectated .87-.95.
+  - `RF_SCRIPT_OWN_BAR` (the script's own bar at its last hit) is removed; nothing else read it.
+- **After:** every cell within .03 of real, except 80+ against a bar of 24+ without Vengeance (.036 against .012, at a table value of 0).
+  - Pooled under 20 HP: .81 [.79, .82] against .88 [.84, .92] real (.60 before).
+  - The rest is the state mix. A real fighter under 20 swings at a bar under 12 on .46 of his swings, a sim one on .21: the known gap where the sim's low fighter faces a healthier opponent.
+- **Fight outcomes, script v script:** KO share .288 → .294, tab .712 → .706. Fights end the same way; the axe now comes when the swinger is truly low.
+- **Personas:** the axe trait (`fit_dharok_personas.py`) is a fighter's odds within the old cells. The script applies it to the new table as a propensity, so it was not refitted.
+- Tests: `test_riskfight_dharok_script` waits for the axe roll after a strip (the odds are never certain) and checks the new cells. Goldens refreshed.
