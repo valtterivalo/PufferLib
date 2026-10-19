@@ -1302,3 +1302,19 @@ p1 = night3 trial 33's hyperparameters, 150M steps on 4f8d314cb, `live_loadout` 
 - **p2** (p1's config, the 2026-10-19 Dharok bag with one cell free): ladder 8.93. Probe net per hour: Dharok 8.33, tentacle+VW+maul 8.17, tentacle+VW 8.26, tentacle+AGS+maul 4.52, VW 7.77. Maul specials 0. ≤ 20 HP greedy eats .13 (matches the better branch .62).
   - **Correction (advisory):** p1 → p2 is not a seed-noise measurement. p2's environment differs: one halibut fewer, two-handers unlocked, a free cell in the tentacle kits, and therefore the training distribution. p1's numbers were measured on its own environment.
   - The like-for-like checks: p1 evaluated on p2's environment (same probe, same seeds); and seeds 74-77 of p2's config on p2's environment, which measure seed variance.
+
+## 2026-10-19: how n3r33's fights end (session_probe fight-ending table)
+
+`session_probe` now prints each fight ending (our tab, his tab by his kit, our death, our kill) with the state at the start of its tick. n3r33 on its own env (night3 repo, `live_loadout` 4, pool, recorded starts, price table, argmax), seeds 7-9 × 200 sessions, 4,228 fights:
+
+| Ending | Per fight | Actor HP mean (0-19 / 20-39 / 40-59 / 60-79 / 80+) | Other HP mean | Fight tick < 50 / 100+ | Actor lower | Food actor / other |
+|---|---|---|---|---|---|---|
+| Our kill | .672 | 20 (.54 / .26 / .17 / .03 / 0) | 69 | .63 / .17 | .96 | 9.4 / 17.7 |
+| His tab, Dharok kit | .118 | 35 (.31 / .38 / .15 / .09 / .07) | 78 | .26 / .53 | .92 | 3.7 / 13.3 (none .50) |
+| His tab, other kit | .171 | 49 (.19 / .28 / .15 / .17 / .21) | 76 | .31 / .58 | .80 | 5.4 / 14.7 (none .36) |
+| Our tab | .023 | 61 (.07 / .12 / .27 / .34 / .20) | 73 | 0 / .99 | .69 | 2.1 / 3.6 (none .19) |
+| Our death (mutual included) | .019 | 26 (.44 / .21 / .23 / .11 / 0) | 29 | .61 / .21 | .56 | 16.5 / 10.4 |
+
+- Per 3,000-tick session: 4.72 kills, 0.13 deaths (mutual included), 0.16 our tabs, 2.03 his tabs (0.23 ragged). Dharok kit 4.43 kills / 0.10 deaths, VW kits 4.96 / 0.16.
+- Our tabs come only in long fights when our food is almost gone. Our deaths come early, with a full bag, in close trades; .44 start their tick at 0-19 HP.
+- Real duels between players end by KO .25-.27 (either side). The net KOs .67 of its sim opponents: the net's edge over the fitted scripts is the sim's claim, still unmeasured live.

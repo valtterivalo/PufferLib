@@ -61,6 +61,16 @@ int main(int argc, char** argv) {
         kit_unseen[RF_PROBE_KITS] = {0}, kit_openers[RF_PROBE_KITS] = {0}, kit_maul_specs[RF_PROBE_KITS] = {0}, kit_chains[RF_PROBE_KITS] = {0};
     double kit_axe_hp[RF_PROBE_KITS] = {0};
     int last_opener_tick = -1000;
+    /* How fights end, by the state at the start of the tick that ended them (the step's decision, before its meals and hits): our teleports, his (split by his
+     * kit: Dharok or not), our deaths and our kills. Each row reads the side that left or died ("actor") against the other: its hitpoints by band, the fight
+     * tick, food left (eat items) and whether it was the lower of the two. Counted off the log's own tallies, so fights that reset into the next at once count too. */
+    enum { RF_PROBE_END_OUR_TAB, RF_PROBE_END_HIS_TAB_DHAROK, RF_PROBE_END_HIS_TAB_OTHER, RF_PROBE_END_OUR_DEATH, RF_PROBE_END_KILL, RF_PROBE_ENDS };
+    static const char* end_name[RF_PROBE_ENDS] = {"our teleport", "his teleport, Dharok kit", "his teleport, other kit", "our death", "our kill (his death)"};
+    static const int end_actor[RF_PROBE_ENDS] = {0, 1, 1, 0, 1};
+    long end_n[RF_PROBE_ENDS] = {0}, end_hp[RF_PROBE_ENDS][5] = {{0}}, end_other_hp[RF_PROBE_ENDS][5] = {{0}}, end_tick[RF_PROBE_ENDS][5] = {{0}},
+        end_lower[RF_PROBE_ENDS] = {0}, end_no_food[RF_PROBE_ENDS] = {0};
+    double end_food[RF_PROBE_ENDS] = {0}, end_other_food[RF_PROBE_ENDS] = {0}, end_hp_sum[RF_PROBE_ENDS] = {0}, end_other_hp_sum[RF_PROBE_ENDS] = {0};
+    static const int tick_edge[4] = {25, 50, 100, 200};
     while (env->log.n < sessions) {
         if (env->wait_left == 0 && env->state.env.tick == start_tick && !env->state.env.episode_over) {
             const RiskfightState* st = &env->state;
@@ -88,6 +98,10 @@ int main(int argc, char** argv) {
         const int pre_hp = us->current_hitpoints, pre_dressed = us->equipped[GEAR_SLOT_BODY] != ITEM_NONE && us->equipped[GEAR_SLOT_LEGS] != ITEM_NONE;
         const int pre_fights = env->session_fights;
         const float pre_n = env->log.n;
+        const int pre_tick = env->state.env.tick, pre_hp2[2] = {env->state.env.players[0].current_hitpoints, env->state.env.players[1].current_hitpoints};
+        const int pre_food[2] = {osrs_escape_supplies(&env->state.env.players[0]).food, osrs_escape_supplies(&env->state.env.players[1]).food};
+        const int his_dharok = riskfight_loadout_class(env->context.loadout[1]) == RF_CLASS_DHAROK;
+        const Log pre_log = env->log;
         puf_step(env);
         steps++;
         if (split && fight_step) {
@@ -120,6 +134,27 @@ int main(int argc, char** argv) {
             session_start = env->log;
         }
         if (terminal || reset) rf_net_reset(net); /* every fight starts from a zeroed state, as live and in training */
+        {
+            const int happened[RF_PROBE_ENDS] = {env->log.self_teleports > pre_log.self_teleports, his_dharok && env->log.opponent_teleports > pre_log.opponent_teleports,
+                !his_dharok && env->log.opponent_teleports > pre_log.opponent_teleports,
+                env->log.deaths + env->log.mutual_deaths > pre_log.deaths + pre_log.mutual_deaths, env->log.kills + env->log.mutual_deaths > pre_log.kills + pre_log.mutual_deaths};
+            for (int e = 0; e < RF_PROBE_ENDS; e++) {
+                if (!happened[e]) continue;
+                const int a = end_actor[e], hp = pre_hp2[a], other = pre_hp2[1 - a];
+                int tb = 0;
+                while (tb < 4 && pre_tick >= tick_edge[tb]) tb++;
+                end_n[e]++;
+                end_hp[e][hp >= 80 ? 4 : hp / 20]++;
+                end_other_hp[e][other >= 80 ? 4 : other / 20]++;
+                end_tick[e][tb]++;
+                end_lower[e] += hp < other;
+                end_no_food[e] += pre_food[a] == 0;
+                end_food[e] += pre_food[a];
+                end_other_food[e] += pre_food[1 - a];
+                end_hp_sum[e] += hp;
+                end_other_hp_sum[e] += other;
+            }
+        }
     }
     Dict out = {0};
     puf_log(&env->log, &out);
@@ -150,6 +185,19 @@ int main(int argc, char** argv) {
             opened[0], opened[1], opened[2], (double)spec_used / began, (double)veng_lost / began, (double)hit_landed / began, (double)in_flight / began, price_sum / began, price_lo, price_hi);
     }
     printf("share of fights ending in: kill %.3f death %.3f teleport %.3f\n", l->kills / fights, (l->deaths + l->mutual_deaths) / fights, tp / fights);
+    printf("fight endings by the state at the start of their tick (actor: who left or died); shares of each row's n\n");
+    printf("  %-26s %6s %6s | actor hp 0-19 20-39 40-59 60-79 80+ (mean) | other hp 0-19 20-39 40-59 60-79 80+ (mean) | tick <25 25-49 50-99 100-199 200+ | lower | food actor/other, none\n",
+        "ending", "n", "/fight");
+    for (int e = 0; e < RF_PROBE_ENDS; e++) {
+        const double n = end_n[e] > 0 ? (double)end_n[e] : 1;
+        printf("  %-26s %6ld %6.3f |", end_name[e], end_n[e], end_n[e] / (fights > 0 ? fights : 1));
+        for (int b = 0; b < 5; b++) printf(" %.2f", end_hp[e][b] / n);
+        printf(" (%5.1f) |", end_hp_sum[e] / n);
+        for (int b = 0; b < 5; b++) printf(" %.2f", end_other_hp[e][b] / n);
+        printf(" (%5.1f) |", end_other_hp_sum[e] / n);
+        for (int b = 0; b < 5; b++) printf(" %.2f", end_tick[e][b] / n);
+        printf(" | %.2f | %4.1f/%4.1f, %.2f\n", end_lower[e] / n, end_food[e] / n, end_other_food[e] / n, end_no_food[e] / n);
+    }
     if (split) {
         static const char* const kit_name[RF_PROBE_KITS] = {"VW", "Dharok", "Dharok tentacle+VW+maul", "Dharok tentacle+VW", "Dharok tentacle+AGS+maul"};
         static_assert(RF_DHAROK_TENTACLE_VW_MAUL == 0 && RF_DHAROK_TENTACLE_VW == 1 && RF_DHAROK_TENTACLE_AGS_MAUL == 2 && RF_DHAROK_SPECTATED_KITS == 3, "kit_name order");
