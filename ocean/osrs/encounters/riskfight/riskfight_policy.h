@@ -356,14 +356,17 @@ static void riskfight_write_observation_core(const RiskfightState* s, int agent,
 
 /** What the scripts read: the observation without its appended blocks (they read nothing from them), at the cost of the base. The bag in physical slot order: scripts
  * click physical slots. */
-/* RF_SCRIPT_LAST_HIT_ZERO: the other side's last hit landing on him did 0 (RF_DHAROK_MEAL_PM's column). The script observation carries no threat features, so
- * it sits in the threat block's first floats. */
-enum { RF_SCRIPT_LAST_HIT_ZERO = RF_THREAT_START + 1 };
+/* RF_SCRIPT_VENG_PROC_AGO: ticks since his own Vengeance was last spent (a hit into it this fight), -1 before. RF_SCRIPT_LAST_HIT_ZERO: the other side's last
+ * hit landing on him did 0 (RF_DHAROK_MEAL_PM's column). The script observation carries no threat features, so both sit in the threat block's first floats. */
+enum { RF_SCRIPT_VENG_PROC_AGO = RF_THREAT_START, RF_SCRIPT_LAST_HIT_ZERO = RF_THREAT_START + 1 };
 
-/** The scripts' observation: the base with the bag in physical slot order; of the threat block only the Soulreaper stacks and RF_SCRIPT_LAST_HIT_ZERO. */
+/** The scripts' observation: the base with the bag in physical slot order; of the threat block only the Soulreaper stacks, RF_SCRIPT_VENG_PROC_AGO and
+ * RF_SCRIPT_LAST_HIT_ZERO. */
 static void riskfight_write_script_observation(const RiskfightState* s, int agent, float* obs) {
     riskfight_write_observation_core(s, agent, obs, &RF_BAG_PHYSICAL, NULL);
     riskfight_threat_write_stacks(&s->env.players[agent], &s->visible[agent].threat, obs + RF_THREAT_START); /* the Soulreaper stacks are the one thing a script reads there */
+    const int spent = s->inventory_use[agent].vengeance_consumed_tick;
+    obs[RF_SCRIPT_VENG_PROC_AGO] = spent < 0 ? -1.0f : (float)(s->env.tick - spent);
     obs[RF_SCRIPT_LAST_HIT_ZERO] = (float)s->visible[1 - agent].last_hit_zero;
 }
 
@@ -1003,13 +1006,15 @@ static const int RF_AXE_WIELD_MEAN[3] = {75, 44, 15};
  * a Voidwaker, 96% came at his bar 25 or less; the rate is 6-13 per 1,000 ticks up to bar 25 and under 1 from bar 27). The old gate, bar under 19.5 (0.65), cut
  * the 60-79 hitpoint specials that are half of the spectated ones, and the sim landed 0.0042 specials per fighter-tick against 0.0068. */
 enum { RF_VW_SPEC_BAR_MAX = 25 };
-/* A Dharok fighter's Voidwaker special per attack, per mille, by his own Vengeance up (cast, not yet proc'd) and the other side's bar (scale 30: <12, 12-23,
- * 24 up, under the gate above). Spectated Dharok fighters holding a Voidwaker spec 2-4 times as often with Vengeance up (per 1,000 ticks 20.9 / 17.0 / 11.5
- * against 15.6 / 7.8 / 2.7 down): the special lands with the reflect of his next hit. The profile rate (vw_pm) had no Vengeance in it, 12-13 per 1,000 ticks
- * either way in the sim. Calibrated in the sim (scripts/fit_dharok_vw.py: the script on both seats, probe_script_duels) to the spectated rates: after three
- * steps every cell within 8% of them (15.9 / 8.3 / 2.9 and 21.7 / 17.9 / 11.9 at the step before these values). A profile's vw_pm over the training
- * profiles' mean RF_VW_PM_MEAN is his propensity, on the odds. Scripts that don't fight on the Dharok rules keep vw_pm. */
-static const int16_t RF_DHAROK_VW_SPEC_PM[2][3] = {{236, 83, 48}, {309, 238, 406}};
+/* A Dharok fighter's Voidwaker special per attack, per mille, by his own Vengeance (down; up, cast and not yet proc'd; spent 1-2 ticks ago, his reflect just
+ * landed on the other side) and the other side's bar (scale 30: <12, 12-23, 24 up, under the gate above). Spectated Dharok fighters holding a Voidwaker spec
+ * 2-4 times as often with Vengeance up (per 1,000 ticks 20.9 / 17.0 / 11.5 against 15.6 / 7.8 / 2.7 down), and most of all in the 2 ticks after their
+ * Vengeance is spent (34-44 per 1,000 under a bar of 24): the special follows the reflect before the other side can eat. The profile rate (vw_pm) had no
+ * Vengeance in it, 12-13 per 1,000 ticks either way in the sim, 6 after a reflect. Calibrated in the sim (scripts/fit_dharok_vw.py: the script on both
+ * seats, probe_script_duels) to the spectated rates: at the step before these values every cell within 7% of them but spent against a bar of 24 up (9.1
+ * against 9.7 per 1,000). KOs by a Voidwaker special with his reflect: 0.14 of the sim's against 0.20 spectated (0.07 with no Vengeance in the rule). A
+ * profile's vw_pm over the training profiles' mean RF_VW_PM_MEAN is his propensity, on the odds. Scripts that don't fight on the Dharok rules keep vw_pm. */
+static const int16_t RF_DHAROK_VW_SPEC_PM[3][3] = {{226, 64, 45}, {285, 205, 346}, {517, 609, 272}};
 enum { RF_VW_PM_MEAN = 202 }; /* RISKFIGHT_HUMAN_PROFILES' mean vw_pm over the training profiles */
 
 /** Weapon rolls are keyed on the tick the next attack comes off cooldown, so one attack gets one decision.
@@ -1061,8 +1066,10 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     if (actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO]) actions[RF_PRIMARY] = RF_STOP;
     uint8_t generic_spec = plain_spec != ITEM_NONE ? plain_spec : plain_main != ITEM_NONE && osrs_spec_cost(plain_main) > 0 ? plain_main : ITEM_NONE;
     int generic_cost = generic_spec == ITEM_NONE ? 100 : osrs_spec_cost(generic_spec);
+    const float spent_ago = obs[RF_SCRIPT_VENG_PROC_AGO];
+    const int veng_state = spent_ago >= 1 && spent_ago <= 2 ? 2 : obs[11] > 0.5f;
     const int vw_pm = profile->dharok_eating ?
-        riskfight_persona_odds(RF_DHAROK_VW_SPEC_PM[obs[11] > 0.5f][(opp_bar >= 12) + (opp_bar >= 24)], profile->vw_pm * 1000 / RF_VW_PM_MEAN) : profile->vw_pm;
+        riskfight_persona_odds(RF_DHAROK_VW_SPEC_PM[veng_state][(opp_bar >= 12) + (opp_bar >= 24)], profile->vw_pm * 1000 / RF_VW_PM_MEAN) : profile->vw_pm;
     int vw_spec = !combo_specs && has_vw && obs[6] >= 0.5f && opp_bar <= RF_VW_SPEC_BAR_MAX && riskfight_sample_event(seed, attack_tick, 21, vw_pm);
     int maul_cost = maul_item == ITEM_NONE ? 100 : osrs_spec_cost(maul_item);
     /* The ornate maul waits for the energy of two specials and lands both at once; the plain one costs 60 and gets one. */

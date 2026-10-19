@@ -1507,3 +1507,15 @@ p2's config, 150M steps, seeds 81-83. Argmax `session_probe` (300 sessions, `liv
 - The forced meal at ≤ 20 HP is worth +.03 to +.16 per fight on average in five of six p3/p4 seeds (four of them over 2 se), while the nets eat greedily .12-.33 of the time.
   - The pooled evidence that nets under-eat at very low HP holds. Which states they get wrong is not resolved at 6 rolls.
 - No candidate replaces n3r33.
+
+## 2026-10-19: the Voidwaker special after one's own Vengeance is spent (branch vw-after-proc)
+
+- **Real Dharok fighters spec right after their reflect lands.** Voidwaker specials per 1,000 ticks against a bar under 24, in the 1-2 ticks after their own "Taste vengeance!": 34.3 / 44.1 real, against 6.5 / 5.5 in the sim. With Vengeance up and unspent, it is 16.6 against 19.2.
+  - The special follows the reflect before the other side can eat. In the sim the spec rate fell after the proc, because Vengeance was down.
+- **Change:**
+  - New script observation float `RF_SCRIPT_VENG_PROC_AGO`: ticks since his own Vengeance was spent, from `inventory_use.vengeance_consumed_tick`, in the slot `RF_SCRIPT_OWN_BAR` left.
+  - `RF_DHAROK_VW_SPEC_PM[3][3]` gets a third Vengeance state, spent 1-2 ticks ago. Calibrated with `scripts/fit_dharok_vw.py`, 3 steps; every cell within 7% except spent against a bar of 24+ (9.1 against 9.7).
+- **After:**
+  - KOs by a Voidwaker special with his reflect: .07 → .14 (real .20). Such bursts: .03 → .06 (real .08).
+  - KO total per 10,000 fighter-ticks: 11.0 (real 9.9). At 40-59 HP: 24.6 (real 32).
+- Tests pass; goldens refreshed.
