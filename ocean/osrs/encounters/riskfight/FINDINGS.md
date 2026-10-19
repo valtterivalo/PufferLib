@@ -1565,7 +1565,10 @@ Session 20261019T190858, one fight against Sniffingbagz (ticks 386-573, Dharok v
 - **What it did:** it kept its HP between about 80 and 115.
   - Below about 84 (his range, a double granite maul special's 2 × 42) it ate marlin with a brew sip, then a combat sip, then a restore. That was 7 marlin, 4 halibut, 7 brew sips, 4 combat doses and 7 restore doses in 188 ticks.
   - The super combat ran out at tick 458. It tabbed at tick 570 at 86 HP when out of boosts (a kosher escape). He was at 62-64.
-  - He was at 7-10 HP on ticks 450-453, after two Voidwaker specials (443, 447). He was at 62 by tick 454.
+  - He was at 7-10 HP on ticks 450-453, after two Voidwaker specials (swing animations at 446 and 450). He ate on 453 and was at 62 by 454.
+    - Correction (advisories): `engine-explain`'s `lock` is the anglerfish overheal block (`pvp_overheal_block`), not the attack timer, and `atk` is the interaction.
+    - The kill window was not actionable by an attack. Our swings fell at 442, 446, 450 and 454: the Voidwaker's 4-tick clock with no idle tick, the next swing after the 450 special at the first tick it could.
+    - Spec energy was 0 after the two specials, so no instant maul special was available on 451-453.
 - **The death price doesn't drive its eating:**
   - Counterfactual on every tick of the fight (`engine-explain` with the price set to 0.4, 1.0 and 2.5): the eat decisions are identical, on the same 20 ticks.
   - In the sim at a fixed price (`session_probe`, 300 sessions, `live_loadout` 4), per session:
