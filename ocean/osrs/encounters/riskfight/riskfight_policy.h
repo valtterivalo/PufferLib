@@ -891,6 +891,15 @@ static int riskfight_hazard_power(int pm, int exponent) {
  * share of its Dharok v Dharok fights fell 0.56 -> 0.46 and its kills within 10 ticks of a hit to bar 1-6 0.39 -> 0.29 (spectated attackers: 0.07). */
 static const uint16_t RF_DHAROK_MEAL_VW_THREAT[2] = {6000, 3300};
 
+/* How soon a Dharok fighter low after a hit is fed again, over every rule above (clock, Voidwaker threat, persona): RF_DHAROK_MEAL_LOW_GAIN is the exponent,
+ * per mille, his per-tick meal hazard is raised to below bar 18 (meal bands 0-2). Calibrated in the sim (the script on both seats, probe_script_duels,
+ * 2 x 2000 fights) with one reader on real and sim duels (scripts/measure_quick_heals.py): of two consecutive hitsplats on a fighter 2 / 3 / 4 ticks apart, the
+ * first leaving his bar at 1-16, the share where he healed 8 or more in between is 0.61 / 0.74 / 0.91 spectated (n 611 / 528 / 1,369), 0.53 / 0.68 / 0.83
+ * in the sim before, 0.64 / 0.79 / 0.89 at 2000. With it a Voidwaker special on a fighter at bar 7-11 / 12-16 knocks him out 0.076 / 0.060 of the time
+ * (spectated 0.044 / 0.054, before 0.098 / 0.113), and 0.220 of the duels end in a knockout (spectated 0.251, before 0.291). Shown meals per tick stay where
+ * they were (182 / 151 per 1,000 ticks at bar 0-11 / 12-17 against spectated 147 / 139): the gap was when he eats after a hit, not how often he eats. */
+enum { RF_DHAROK_MEAL_LOW_GAIN = 2000 };
+
 static void riskfight_script_dharok_meal(const float* obs, const RiskfightObservedSelf* self, const RiskfightObservedInventory* inventory,
     const uint32_t* persona, uint32_t seed, uint32_t tick, int* actions) {
     int hp = self->hitpoints;
@@ -909,6 +918,7 @@ static void riskfight_script_dharok_meal(const float* obs, const RiskfightObserv
             meal_pm = riskfight_hazard_power(meal_pm, RF_DHAROK_MEAL_VW_THREAT[band]);
     }
     if (persona && band <= 4) meal_pm = riskfight_hazard_power(meal_pm, persona[RF_PERSONA_EAT]);
+    if (band <= 2) meal_pm = riskfight_hazard_power(meal_pm, RF_DHAROK_MEAL_LOW_GAIN);
     if (!riskfight_sample_event(seed, tick, 32, meal_pm)) return;
     int single = RF_DHAROK_MEAL_SINGLE_PM[hp / 10], doubles = RF_DHAROK_MEAL_DOUBLE_PM[hp / 10];
     if (persona && single < 1000) {

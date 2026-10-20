@@ -1724,3 +1724,44 @@ Same probes as p7 (p7 differs only in the cap). Brew and combat drinks are per s
 
   - With the cap, every p8 seed keeps strength boosted longer and runs out of combats less often than the p7 seeds. The seeds differ between arms, so this isn't a paired comparison, but all three p8 seeds beat the two worst p7 seeds with no overlap.
   - The installed seed moves from .73 to .84 str>=110 uptime and from .32 to .18 of fights running out.
+
+## 2026-10-20 night: why the nets never use the axe, and how hard low fighters are to finish (branch meal-prompt)
+
+- **The axe doesn't pay in the sim** (`probe_skip_axe`, new; p8s131, 240 sessions, 6 paired rolls per decision, session-clustered 90% intervals). At the net's own meal decisions in the Dharok kit, against the net's continuation, d = KO - price × death:
+
+  | our HP | skip one meal | skip 8 meals + axe | skip 8 meals | axe for 8 (net eats) |
+  |---|---|---|---|---|
+  | <= 20 | -.006 [-.038, +.025] | -.030 [-.067, +.008] | -.027 [-.056, .000] | +.019 [-.010, +.049] |
+  | 21-40 | -.019 [-.038, -.001] | -.136 [-.179, -.098] | -.143 [-.186, -.105] | -.031 [-.054, -.009] |
+  | 41-60 | -.004 [-.014, +.005] | -.087 [-.106, -.067] | -.077 [-.095, -.058] | -.022 [-.035, -.008] |
+  | 61-80 | +.002 [-.006, +.010] | -.044 [-.057, -.030] | -.032 [-.044, -.020] | -.029 [-.040, -.016] |
+  | > 80 | -.005 [-.014, +.004] | -.048 [-.064, -.033] | -.020 [-.034, -.005] | -.020 [-.035, -.005] |
+
+  Mode 1 (any hand-free decision where the axe's wield is offered) gives the same signs. In this sim the net's VW play and its eating beat both lines, so zero axe use is the sim's optimum (as in sweep 16), not an exploration failure.
+- **One reader, real against sim** (Dharok v Dharok, /tmp/risk scripts):
+  - **The p8 net never wields the axe** (0 of 110k ticks; real fighters 0.10 of ticks, axe share of plain swings .63 / .20 / .05 by own bar band) and never orbs.
+  - **Its knockouts:** VW special .49, reflect .30, other .18. Real: reflect .40, axe .34, VW special .21.
+  - **Its eating** per 1,000 ticks by its own bar 0-11 / 12-17 / 18-23 / 24-27 / 28-30 is 193 / 175 / 101 / 42 / 14, against real 147 / 139 / 64 / 42 / 20: the excess is at 40-77 HP.
+- **No within-fight contagion of safing in the spectated duels:**
+  - Own eat hazard by own bar band, after the opponent started a meal at bar >= 24 in the last 20 ticks, over without: 1.03 / 1.03 / 1.00 / 0.92 / 1.02 (90% intervals within 0.82-1.23).
+  - Duels with more high-bar meals end in a death less often (.31 / .25 / .19 by tercile), but that is correlational.
+- **The user's own safing, measured** (`scripts/measure_overeats.py` with an in-hand range: his chance range with only the weapon in his hand opening; October 1-13, 113 fights with his composition seen):
+  - 31.5% of his meals were above the in-hand range, p90 10.8 per fight, so the patience would be 11.
+  - The p8 net eats about 4.5-5 meals per fight in all, so that rule would never bind. Not merged.
+- **The world gap: low fighters are too easy to finish in the sim.**
+  - VW specials by the victim's bar 7-11 / 12-16 knock out .044 / .054 spectated, .098 / .113 scripts v scripts, and .223 / .150 when the p8 net specs.
+  - A spectated special 1-2 ticks after the victim's last hitsplat (bar 7-16) kills .056; the sim's .30.
+  - Spec damage itself matches (p10/50/90 24/42/62 both).
+  - Of two consecutive hitsplats 2 / 3 / 4 ticks apart on a fighter at bar 1-16, the share healed 8+ in between is real .61 / .74 / .91, scripts .53 / .68 / .83, scripts against the net .40 / .57 / .69.
+  - Shown meals per tick at low bars already match (177 / 141 against 147 / 139): the gap is when he eats after a hit.
+- **Change, `RF_DHAROK_MEAL_LOW_GAIN` = 2000** (riskfight_policy.h, `scripts/measure_quick_heals.py`): the per-tick meal hazard below bar 18 is raised to the 2.0th power-in-survival over every other rule. Calibrated script v script (2 x 2000 fights):
+
+  | gain | quick heal >= 8, gap 2 / 3 / 4 | VW special KO at bar 7-11 / 12-16 | duels ending in a knockout |
+  |---|---|---|---|
+  | spectated | .61 / .74 / .91 | .044 / .054 | .251 |
+  | 1000 (before) | .53 / .68 / .83 | .098 / .113 | .291 |
+  | 2000 | .64 / .79 / .89 | .076 / .060 | .223 |
+  | 3500 | .69 / .81 / .90 | .051 / .053 | .195 |
+
+  2000 fits the quick heals best and sits between the knockout and special targets. Two misses remain: gap 1 overshoots (.56 against .28), and heals of 20+ stay short (.39 / .46 / .64 against .50 / .63 / .79). Shown meals per tick don't move. Brew share, food-lock partial meals and the meal clock moved none of these.
+- A diagnostic x2.5 on `RF_DHAROK_MEAL_CLOCK` alone did nothing: under a persona, clock 3 takes 4000 minus the others, so the factor cancelled. Its two trained seeds wielded the axe 0.4-0.6 ticks per session.
