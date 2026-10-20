@@ -1325,7 +1325,7 @@ static float col_expected_dpt_for_equipment_vs_npc(
         &effects,
         weapon_item,
         style,
-        col_item_melee_style(weapon_item),
+        osrs_item_melee_style(weapon_item),
         npc,
         ns);
 }
@@ -1494,7 +1494,7 @@ static void col_build_best_gear_table(
             ? col_weapon_set_spell_base_damage(s, COLO_GEAR_MAGIC) : 0;
         int current_att_level, current_str_level;
         col_current_style_levels(&s->player, style, &current_att_level, &current_str_level);
-        MeleeStyle melee_style = col_item_melee_style(weapon);
+        MeleeStyle melee_style = osrs_item_melee_style(weapon);
         int two_h = item_is_two_handed(weapon);
 
         uint8_t shield_items[COLO_BEST_GEAR_MAX_CAND + 1];

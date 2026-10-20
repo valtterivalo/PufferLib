@@ -6682,7 +6682,7 @@ static void test_venator_bow_bounce_colosseum_integration(void) {
     const ColoNPC* primary = &s.npcs[0];
     const ColoNpcStats* primary_stats = &COLO_NPC_STATS[primary->type];
     int base_att_roll = osrs_player_att_roll(ls->eff_level, ls->attack_bonus);
-    MeleeStyle weapon_melee_style = col_item_melee_style(weapon_item);
+    MeleeStyle weapon_melee_style = osrs_item_melee_style(weapon_item);
     OsrsPreparedAttackEffects prepared =
         osrs_prepare_attack_effects_for_melee_style(
             effects,

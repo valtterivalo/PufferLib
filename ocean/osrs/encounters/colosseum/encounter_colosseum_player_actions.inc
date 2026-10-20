@@ -510,16 +510,6 @@ static int col_obs_slot_to_npc(const ColosseumState* s, int obs_slot) {
     return s->current_obs_slots[obs_slot];
 }
 
-static MeleeStyle col_item_melee_style(uint8_t weapon_item) {
-    const Item* weapon = get_item(weapon_item);
-    if (!weapon) return MELEE_STYLE_STAB;
-    MeleeStyle style = MELEE_STYLE_STAB;
-    int best = weapon->attack_stab;
-    if (weapon->attack_slash > best) { best = weapon->attack_slash; style = MELEE_STYLE_SLASH; }
-    if (weapon->attack_crush > best) { style = MELEE_STYLE_CRUSH; }
-    return style;
-}
-
 static int col_npc_effective_def_level(const ColoNPC* npc, const ColoNpcStats* ns) {
     int def = ns->def_level - npc->def_drained;
     return def < 0 ? 0 : def;
@@ -539,7 +529,7 @@ static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
 
     int eff_def = col_npc_effective_def_level(npc, ns);
     int def_bonus = encounter_npc_melee_def_bonus(
-        ns->stab_def, ns->slash_def, ns->crush_def, col_item_melee_style(item));
+        ns->stab_def, ns->slash_def, ns->crush_def, osrs_item_melee_style(item));
     int def_roll = osrs_npc_def_roll(eff_def, def_bonus);
     int att_roll = osrs_player_att_roll(ls->eff_level, ls->attack_bonus);
 
@@ -851,7 +841,7 @@ static void col_player_attack_target_ctx(
     EncounterProjectileTiming hit_timing =
         encounter_player_projectile_timing(ls->style, weapon_item, 0, projectile_dist);
     int base_att_roll = osrs_player_att_roll(ls->eff_level, ls->attack_bonus);
-    MeleeStyle weapon_melee_style = col_item_melee_style(weapon_item);
+    MeleeStyle weapon_melee_style = osrs_item_melee_style(weapon_item);
     OsrsPreparedAttackEffects prepared = osrs_prepare_attack_effects_for_melee_style(
         effects, &s->player.item_effect_state, weapon_item, ls->style,
         weapon_melee_style, OSRS_MAGIC_ATTACK_NONE, osrs_target_ref_none(), 1,
