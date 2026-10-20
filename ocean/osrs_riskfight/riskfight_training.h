@@ -162,10 +162,11 @@ static const RiskfightProfile* riskfight_training_profile(RiskfightTraining* tra
 
 /** A midfight prefix: both seats played by the script for `ticks` ticks from the regear, then the fight is handed over. A seat in a Dharok kit plays the
  * spectated Dharok rules (dharok_eating: meals, greataxe, orb and escapes as spectated Dharok fighters do), seat 1 as the persona of the opponent who steps up,
- * seat 0 as one drawn from `persona_roll`; so the hand-over lands in the states real Dharok fighters reach (the greataxe in hand, hitpoints run down). */
+ * seat 0 as one drawn from `persona_roll`; so the hand-over lands in the states real Dharok fighters reach (the greataxe in hand, hitpoints run down). Without a
+ * second seat (self_play 0) the step plays seat 1 itself, by his profile's script (riskfight_opponent_script; OppFit's hook is held back until the hand-over),
+ * and `second` goes unused. */
 static RiskfightTrainingStart riskfight_training_prefix(RiskfightState* state,
     RiskfightContext* context, const RiskfightProfile* first, const RiskfightProfile* second, int ticks, uint32_t persona_roll) {
-    assert(context->self_play);
     /* Both sides are scripts here, whoever will play him afterwards. */
     const int driven = context->opp_driven;
     void (*const hook)(void*, const void*, int*) = context->opp_hook;
@@ -179,7 +180,7 @@ static RiskfightTrainingStart riskfight_training_prefix(RiskfightState* state,
     }
     for (int tick = 0; tick < ticks; tick++) {
         int actions[2 * RF_HEADS];
-        for (int i = 0; i < 2; i++) {
+        for (int i = 0; i < 1 + context->self_play; i++) {
             float observation[RF_OBS_SIZE];
             riskfight_write_script_observation(state, i, observation);
             riskfight_script(observation, &scripts[i], state->script_seed[i], state->consume_ticks[i], actions + i * RF_HEADS);
