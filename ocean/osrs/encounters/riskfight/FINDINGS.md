@@ -1873,3 +1873,22 @@ Same probes as p7 (p7 differs only in the cap). Brew and combat drinks are per s
   - The orb as the script plays it costs .047 per fight. `RF_DHAROK_ORB_PM` is fitted on lone 10s at 19-65 per mille of visible ticks, at every HP band including 0-19. Either most lone 10s are not orbs, or real fighters time the orb in a way the per-tick rate doesn't carry. Open; the user's answer decides it.
   - Taking the orb away from the opponents changes nothing for p10 s183 (Dharok kit kills per session 2.75 / 2.38 with it against 2.58 / 2.47 without, two seeds, unpaired kits), so the orb fit is not what the net's kills feed on.
 - **Change: midfight prefixes play the Dharok rules** (`riskfight_training_prefix`). A seat in a Dharok kit plays `dharok_eating` (meals, greataxe, orb, escapes as spectated): seat 1 as the persona that steps up, seat 0 as one drawn per prefix. The prefix now runs at every new opponent (never a rematch) and without a second seat (self_play 0, the training recipe), where the step plays seat 1 by his profile and OppFit's hook waits for the hand-over. At midfight 1 in the Dharok kits, 1,404 of 2,033 fights were handed over midfight (the rest ended within the prefix): greataxe in hand .19, mean HP 79, below 60 .08. Off by default.
+- **p10's ladder (7.9) was scored with DR on:** its checkout's `[bot_eval]` predates the DR change. Every run since scores DR off, around 5.5. The two are not comparable.
+- **Training arms**, all on p10's recipe without DR, Dharok-kit duel tapes (`probe_risk_duels`, 2 x 300 sessions each), scorecard against real:
+
+  | arm | steps | midfight | ent_coef | ladder | eat/1000 at bar 18-23 | greataxe in hand | lone 10s/1000 | KOs per Dharok duel |
+  |---|---|---|---|---|---|---|---|---|
+  | p10 s181-183 | 150M | 0 | 1e-5 | (DR on) | 93 | 0 | 0 | .13 |
+  | p11 s191-193 | 150M | .5 | 1e-5 | 5.09-5.58 | 92-100 | 0 | 0 | .14-.17 |
+  | p12 s201-202 | 600M | 0 | 1e-5 | 5.41 / 5.76 | 110 / 81 | 0 | 0 | .13 / .19 |
+  | p12 s211-212 | 600M | .5 | 1e-5 | 5.00 / 5.68 | 101 / 81 | 0 | 0 | .14 / .17 |
+  | p13 s221-222 | 600M | .5 | 3e-4 | 5.44 / 5.68 | 92 / 96 | .072 / .040 | .06 / .24 | .12 / .12 |
+  | p13 s231-232 | 600M | .5 | 1e-3 | 4.55 / 4.66 | 110 / 108 | .140 / .263 | 4.67 / 3.99 | .08 / .07 |
+  | real | | | | | 64 | .100 | 5.51 | .25 (both sides) |
+
+  - Midfight starts and four times the steps leave the play as it was: no greataxe, the same HP occupancy (.22-.27 of ticks at bar 30), the same meals.
+  - Entropy brings the greataxe and the orb out at about real rates (1e-3: axe in hand .14-.26, lone 10s 4-4.7 per 1,000), spread over every band (axe share of swings at bar 24-30 .06-.14, real .05; at 0-11 .08-.14, real .63), and the kills halve. In this world the nets that use them do worse.
+- **Staying after the net's own teleport** (`probe_stay_dharok`, p10 s183, 3 seeds x 150 sessions, 8 rolls per decision, 248 decisions in a Dharok kit): branch B plays the rest of the fight as the Dharok script (spectated meals, greataxe, orb, escapes).
+  - The net leaves once its special is spent (.995 of its teleports; he could still spec in .34), at 82 HP with 9.4 eat items left (session probe), so food never runs short and a meal costs it only tempo.
+  - Staying is worth -.128 [-.158, -.099] per decision: kill .030, death .119. Every cell is negative: our HP <40 -.17, 40-59 -.12, 60-79 -.15, 80+ -.10; his bar <12 -.07 (n 6), 12-23 -.12, 24+ -.14.
+- **So far the sim says the nets are right.** The greataxe adds kills to the script's play, but from the net's states (one swing, staying past the spec, entropy) every way of using it loses. The world gaps that could change that, all open: whether leaving with the special spent while he can still spec is kosher in real fights (if not, fights go on past the spec and food and the greataxe start to matter); what the lone 10s are; why sim axe hits read smaller than real at the same HP.
