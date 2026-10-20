@@ -12,6 +12,7 @@
  *   D skip-K  C's meal rule alone: the net's weapon, special and every other head.
  *   E axe-K   C's axe rule alone: the net's meals and every other head.
  *   F axe-1   E's axe rule until the first swing with the axe (at most K hand-free decisions), then the net (which switches back when it wants).
+ *   G bait    no meals above BAIT_HP (argument 10, default 35) with Vengeance cast when offered, then one triple eat at or below it, then the net.
  * MODE 1 (argument 9) takes instead a sixth of the hand-free decisions in our Dharok's kit where the mask offers the axe's wield, whatever the net picks.
  * Each branch is played ROLLS times, roll r > 0 with the combat dice reseeded (OsrsEnv.rng_state), the same dice for every branch of a roll (paired).
  *
@@ -27,8 +28,8 @@
 #include "../../osrs_riskfight/osrs_riskfight.h"
 #include "rf_net.h"
 
-enum { BANDS = 5, BRANCHES = 6, MAX_DECISIONS = 1 << 20, BOOT = 1000 };
-enum { BR_GREEDY, BR_SKIP1, BR_AXE, BR_SKIPK, BR_AXEONLY, BR_AXE1 };
+enum { BANDS = 5, BRANCHES = 7, MAX_DECISIONS = 1 << 20, BOOT = 1000 };
+enum { BR_GREEDY, BR_SKIP1, BR_AXE, BR_SKIPK, BR_AXEONLY, BR_AXE1, BR_BAIT };
 static float obs[RF_OBS_SIZE], obs_saved[RF_OBS_SIZE], actions[RF_HEADS], reward, terminal, reset_flag;
 static unsigned char mask[RF_MASK_SIZE], mask_saved[RF_MASK_SIZE];
 
@@ -68,11 +69,21 @@ static int axe_entry(const Player* p) {
     return 0;
 }
 
+/** The first entry the mask offers on `head`, 0 when none; on the drink head only a brew. */
+static int first_offered(const Player* p, int head) {
+    const RiskfightBagOrder order = riskfight_bag_order(p);
+    for (int e = 1; e <= OSRS_INVENTORY_SIZE; e++)
+        if (allowed(head, e) && (head != RF_DRINK || entry_item(p, &order, e)->consumable_kind == OSRS_CONSUMABLE_BREW)) return e;
+    return 0;
+}
+
+static int g_bait_hp = 35;
+
 /** Plays branch `branch` from the current state to the end of this fight and counts its outcome; `greedy` is the net's choice at the decision. */
 static void play_out(Env* env, RfNet* net, uint32_t* rng, int branch, const int* greedy, int window, int floor_hp, Outcome* out) {
     const Log before = env->log;
     const int fights = env->session_fights;
-    int chosen[RF_HEADS], free_seen = 0, axe_swung = 0;
+    int chosen[RF_HEADS], free_seen = 0, axe_swung = 0, baited = 0;
     memcpy(chosen, greedy, sizeof(chosen));
     for (int step = 0; env->session_fights == fights && env->log.n == before.n; step++) {
         assert(step < 5000);
@@ -90,6 +101,19 @@ static void play_out(Env* env, RfNet* net, uint32_t* rng, int branch, const int*
             else if (us->equipped[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE) chosen[RF_WEAPON] = 0;
             if (axe || us->equipped[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE) chosen[RF_SHIELD] = chosen[RF_SPECIAL] = 0;
             if (allowed(RF_PRIMARY, RF_ATTACK)) chosen[RF_PRIMARY] = RF_ATTACK;
+        }
+        /* G bait: no meals while our hitpoints are above BAIT_HP (Vengeance cast whenever offered), for at most 3 K hand-free decisions; at BAIT_HP or below one
+         * triple eat (food, combo, brew, whatever the mask offers), then the net. */
+        if (branch == BR_BAIT && !baited && env->wait_left == 0 && !env->state.hand_busy[0] && free_seen <= 3 * window) {
+            if (us->current_hitpoints > g_bait_hp) {
+                chosen[RF_FOOD] = chosen[RF_COMBO] = chosen[RF_DRINK] = 0;
+                if (allowed(RF_VENGEANCE, 1)) chosen[RF_VENGEANCE] = 1;
+            } else {
+                chosen[RF_FOOD] = first_offered(us, RF_FOOD);
+                chosen[RF_COMBO] = first_offered(us, RF_COMBO);
+                chosen[RF_DRINK] = first_offered(us, RF_DRINK);
+                baited = 1;
+            }
         }
         if (in_window) out->window_meals += chosen[RF_FOOD] || chosen[RF_COMBO] || chosen[RF_DRINK];
         for (int h = 0; h < RF_HEADS; h++) actions[h] = (float)chosen[h];
@@ -127,13 +151,14 @@ static void session_interval(const double* sum, const long* n, int sessions, uin
 }
 
 int main(int argc, char** argv) {
-    if (argc < 5) { fprintf(stderr, "usage: probe_skip_axe CKPT HIDDEN LAYERS SESSIONS [seed] [rolls] [K] [FLOOR] [MODE]\n"); return 2; }
+    if (argc < 5) { fprintf(stderr, "usage: probe_skip_axe CKPT HIDDEN LAYERS SESSIONS [seed] [rolls] [K] [FLOOR] [MODE] [BAIT_HP]\n"); return 2; }
     const int sessions = atoi(argv[4]);
     const unsigned seed = argc > 5 ? (unsigned)atoi(argv[5]) : 1;
     const int rolls = argc > 6 ? atoi(argv[6]) : 6;
     const int window = argc > 7 ? atoi(argv[7]) : 8;
     const int floor_hp = argc > 8 ? atoi(argv[8]) : 20;
     const int mode = argc > 9 ? atoi(argv[9]) : 0;
+    if (argc > 10) g_bait_hp = atoi(argv[10]);
     if (sessions < 1 || rolls < 1 || window < 1) { fprintf(stderr, "probe_skip_axe: SESSIONS, rolls and K must be at least 1\n"); return 2; }
     DictItem items[] = {{.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 0}, {.key = "session_ticks", .value = 3000},
         {.key = "curveball_probability", .value = 0.1}, {.key = "death_price", .value = 0}, {.key = "price_table", .value = 1}, {.key = "live_loadout", .value = 4},
@@ -195,8 +220,8 @@ int main(int argc, char** argv) {
                     for (int b = 0; b < BRANCHES; b++) dec->d_sum[b] += value[b] - value[BR_GREEDY];
                 }
                 /* One row per decision for pooling runs offline: band, session, the mean d of B, C and D over the rolls. */
-                printf("ROW %d %d %.4f %.4f %.4f %.4f %.4f %d\n", band, dec->session, dec->d_sum[BR_SKIP1] / rolls, dec->d_sum[BR_AXE] / rolls, dec->d_sum[BR_SKIPK] / rolls,
-                    dec->d_sum[BR_AXEONLY] / rolls, dec->d_sum[BR_AXE1] / rolls, his_bar);
+                printf("ROW %d %d %.4f %.4f %.4f %.4f %.4f %d %.4f\n", band, dec->session, dec->d_sum[BR_SKIP1] / rolls, dec->d_sum[BR_AXE] / rolls, dec->d_sum[BR_SKIPK] / rolls,
+                    dec->d_sum[BR_AXEONLY] / rolls, dec->d_sum[BR_AXE1] / rolls, his_bar, dec->d_sum[BR_BAIT] / rolls);
             }
         }
         for (int h = 0; h < RF_HEADS; h++) actions[h] = (float)greedy[h];
