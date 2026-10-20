@@ -306,6 +306,30 @@ static inline EncounterProjectileDelayKind encounter_projectile_delay_kind_for_s
     abort();
 }
 
+/** Damage and visual timing of a player attack with `weapon` at `distance`. */
+static inline EncounterProjectileTiming encounter_player_projectile_timing(
+    AttackStyle style, uint8_t weapon, int is_special, int distance
+) {
+    EncounterProjectileDelayKind kind = encounter_projectile_delay_kind_for_style(style);
+    EncounterProjectileDelayOptions options = {0};
+    if (style == ATTACK_STYLE_MAGIC && weapon == ITEM_EYE_OF_AYAK) {
+        kind = ENCOUNTER_PROJECTILE_DELAY_EYE_OF_AYAK;
+    }
+    if (style == ATTACK_STYLE_RANGED) {
+        if (weapon == ITEM_TOXIC_BLOWPIPE) {
+            kind = ENCOUNTER_PROJECTILE_DELAY_THROWN;
+            options.visual_delay_ticks = 1;
+            if (is_special) {
+                options.reduce_delay = -1;
+                options.visual_hit_early_ticks = 1;
+            }
+        } else if (weapon == ITEM_TWISTED_BOW) {
+            options.visual_delay_ticks = 1;
+        }
+    }
+    return encounter_projectile_timing(distance, 1, kind, options);
+}
+
 static inline OffensivePrayer encounter_offensive_prayer_for_style(AttackStyle style) {
     switch (style) {
         case ATTACK_STYLE_MELEE:

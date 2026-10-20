@@ -600,8 +600,8 @@ static void col_emit_player_attack_projectiles(
         int dist = encounter_projectile_distance(
             s->player.x, s->player.y, 1, target->x, target->y, target_size,
             ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
-        timing = col_player_projectile_timing(
-            s->player_attack_style_id, weapon, dist);
+        timing = encounter_player_projectile_timing(
+            (AttackStyle)s->player_attack_style_id, weapon, 0, dist);
     }
     int p_duration = timing.visual_duration_ticks * 30;
     int p_start_delay = timing.visual_start_delay_ticks * 30;
@@ -698,7 +698,7 @@ static void col_emit_thrall_projectile(
         src_x, src_y, 1, target->x, target->y, target_size,
         ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
     EncounterProjectileTiming timing =
-        col_player_projectile_timing(ATTACK_STYLE_MAGIC, 0, dist);
+        encounter_player_projectile_timing(ATTACK_STYLE_MAGIC, 0, 0, dist);
 
     encounter_require_projectile_slots(ov, 1);
     OsrsProjectileEventSpec spec = {

@@ -103,10 +103,10 @@ static void test_timing_helper_matches_section8(void) {
         for (int d = 0; d <= 12; d++) {
             char label[96];
             snprintf(label, sizeof(label),
-                "col_player_projectile_timing %s d=%d matches section 8",
+                "encounter_player_projectile_timing %s d=%d matches section 8",
                 labels[i], d);
             EncounterProjectileTiming timing =
-                col_player_projectile_timing(styles[i], weapons[i], d);
+                encounter_player_projectile_timing(styles[i], weapons[i], 0, d);
             ASSERT_INT_EQ(label, timing.damage_delay_ticks,
                 section8_player_hit_delay(styles[i], d));
         }

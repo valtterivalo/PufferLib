@@ -560,26 +560,6 @@ static inline EncounterProjectileTiming inf_npc_projectile_timing(
         inf_npc_projectile_options(type, style));
 }
 
-static inline EncounterProjectileTiming inf_player_projectile_timing(
-    int style, uint8_t weapon, int is_special, int distance
-) {
-    EncounterProjectileDelayKind kind = encounter_projectile_delay_kind_for_style((AttackStyle)style);
-    EncounterProjectileDelayOptions options = {0};
-    if (style == ATTACK_STYLE_RANGED) {
-        if (weapon == ITEM_TOXIC_BLOWPIPE) {
-            kind = ENCOUNTER_PROJECTILE_DELAY_THROWN;
-            options.visual_delay_ticks = 1;
-            if (is_special) {
-                options.reduce_delay = -1;
-                options.visual_hit_early_ticks = 1;
-            }
-        } else if (weapon == ITEM_TWISTED_BOW) {
-            options.visual_delay_ticks = 1;
-        }
-    }
-    return encounter_projectile_timing(distance, 1, kind, options);
-}
-
 static inline AttackStyle inf_jad_roll_primary_style(uint32_t* rng_state) {
     return (encounter_rand_int(rng_state, 2) == 0)
         ? ATTACK_STYLE_RANGED

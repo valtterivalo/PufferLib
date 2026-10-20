@@ -545,29 +545,6 @@ static int zul_attack_anim_ticks_for_style(int style) {
     return ZUL_RANGED_ANIM_TICKS;
 }
 
-static inline EncounterProjectileTiming zul_player_projectile_timing(
-    int style, uint8_t weapon, int is_special, int distance
-) {
-    EncounterProjectileDelayKind kind = encounter_projectile_delay_kind_for_style((AttackStyle)style);
-    EncounterProjectileDelayOptions options = {0};
-    if (style == ATTACK_STYLE_MAGIC && weapon == ITEM_EYE_OF_AYAK) {
-        kind = ENCOUNTER_PROJECTILE_DELAY_EYE_OF_AYAK;
-    }
-    if (style == ATTACK_STYLE_RANGED) {
-        if (weapon == ITEM_TOXIC_BLOWPIPE) {
-            kind = ENCOUNTER_PROJECTILE_DELAY_THROWN;
-            options.visual_delay_ticks = 1;
-            if (is_special) {
-                options.reduce_delay = -1;
-                options.visual_hit_early_ticks = 1;
-            }
-        } else if (weapon == ITEM_TWISTED_BOW) {
-            options.visual_delay_ticks = 1;
-        }
-    }
-    return encounter_projectile_timing(distance, 1, kind, options);
-}
-
 static void zul_record_player_attack_visual(
     ZulrahState* s, int style, int damage, int is_special
 ) {
@@ -579,8 +556,8 @@ static void zul_record_player_attack_visual(
     s->player_attack_dmg = damage;
     s->player_attack_style_id = style;
     s->player_attack_is_special = is_special;
-    s->player_attack_timing = zul_player_projectile_timing(
-        style, s->player.equipped[GEAR_SLOT_WEAPON], is_special, distance);
+    s->player_attack_timing = encounter_player_projectile_timing(
+        (AttackStyle)style, s->player.equipped[GEAR_SLOT_WEAPON], is_special, distance);
 }
 
 static uint32_t zul_next_npc_instance_id(ZulrahState* s) {
@@ -1022,8 +999,8 @@ static void zul_queue_zulrah_hit(ZulrahState* s, int damage, AttackStyle style,
         s->player.x, s->player.y, 1,
         s->zulrah.x, s->zulrah.y, ZUL_NPC_SIZE,
         ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
-    int delay = zul_player_projectile_timing(
-        style, s->player.equipped[GEAR_SLOT_WEAPON], is_special, distance)
+    int delay = encounter_player_projectile_timing(
+        (AttackStyle)style, s->player.equipped[GEAR_SLOT_WEAPON], is_special, distance)
         .damage_delay_ticks;
 
     EncounterPendingHit hit = {

@@ -184,18 +184,6 @@ static const OsrsEquipmentEffectProfile* col_live_effects(ColosseumState* s) {
     return &s->effects_live;
 }
 
-static inline EncounterProjectileTiming col_player_projectile_timing(
-    AttackStyle style,
-    uint8_t weapon,
-    int distance
-) {
-    EncounterProjectileDelayKind kind = encounter_projectile_delay_kind_for_style(style);
-    EncounterProjectileDelayOptions options = {0};
-    if (style == ATTACK_STYLE_RANGED && weapon == ITEM_TWISTED_BOW)
-        options.visual_delay_ticks = 1;
-    return encounter_projectile_timing(distance, 1, kind, options);
-}
-
 static inline int col_npc_attack_anim_id(int npc_def_id) {
     const NpcModelMapping* nm = npc_model_lookup((uint16_t)npc_def_id);
     if (!nm)

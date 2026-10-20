@@ -5015,11 +5015,11 @@ static void test_player_projectile_timing_uses_reference_options(void) {
     ASSERT_INT_EQ("barrage distance uses target SW tile", sw_tile > closest, 1);
 
     EncounterProjectileTiming barrage =
-        inf_player_projectile_timing(ATTACK_STYLE_MAGIC, ITEM_KODAI_WAND, 0, sw_tile);
+        encounter_player_projectile_timing(ATTACK_STYLE_MAGIC, ITEM_KODAI_WAND, 0, sw_tile);
     ASSERT_INT_EQ("barrage damage delay uses SW distance",
         barrage.damage_delay_ticks, encounter_magic_hit_delay(sw_tile, 1));
 
-    EncounterProjectileTiming blowpipe_spec = inf_player_projectile_timing(
+    EncounterProjectileTiming blowpipe_spec = encounter_player_projectile_timing(
         ATTACK_STYLE_RANGED, ITEM_TOXIC_BLOWPIPE, 1, 12);
     ASSERT_INT_EQ("blowpipe spec adds one damage tick",
         blowpipe_spec.damage_delay_ticks, encounter_blowpipe_hit_delay(12, 1) + 1);
@@ -5028,7 +5028,7 @@ static void test_player_projectile_timing_uses_reference_options(void) {
         blowpipe_spec.visual_duration_ticks, encounter_blowpipe_hit_delay(12, 1) - 1);
 
     EncounterProjectileTiming tbow =
-        inf_player_projectile_timing(ATTACK_STYLE_RANGED, ITEM_TWISTED_BOW, 0, 12);
+        encounter_player_projectile_timing(ATTACK_STYLE_RANGED, ITEM_TWISTED_BOW, 0, 12);
     ASSERT_INT_EQ("tbow damage delay",
         tbow.damage_delay_ticks, encounter_ranged_hit_delay(12, 1));
     ASSERT_INT_EQ("tbow visual delay", tbow.visual_start_delay_ticks, 1);
@@ -7411,7 +7411,7 @@ static void test_player_projectile_render_uses_stored_reference_timing(void) {
         blowpipe_state.player.x, blowpipe_state.player.y, 1,
         blowpipe_state.npcs[0].x, blowpipe_state.npcs[0].y, blowpipe_state.npcs[0].size,
         ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
-    blowpipe_state.player_attack_timing = inf_player_projectile_timing(
+    blowpipe_state.player_attack_timing = encounter_player_projectile_timing(
         ATTACK_STYLE_RANGED, ITEM_TOXIC_BLOWPIPE, 1, blowpipe_dist);
 
     EncounterOverlay blowpipe_ov;
@@ -7456,7 +7456,7 @@ static void test_player_projectile_render_uses_stored_reference_timing(void) {
         tbow_state.player.x, tbow_state.player.y, 1,
         tbow_state.npcs[0].x, tbow_state.npcs[0].y, tbow_state.npcs[0].size,
         ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
-    tbow_state.player_attack_timing = inf_player_projectile_timing(
+    tbow_state.player_attack_timing = encounter_player_projectile_timing(
         ATTACK_STYLE_RANGED, ITEM_TWISTED_BOW, 0, tbow_dist);
 
     EncounterOverlay tbow_ov;
@@ -7497,7 +7497,7 @@ static void test_player_projectile_render_uses_stored_reference_timing(void) {
         bowfa_state.player.x, bowfa_state.player.y, 1,
         bowfa_state.npcs[0].x, bowfa_state.npcs[0].y, bowfa_state.npcs[0].size,
         ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
-    bowfa_state.player_attack_timing = inf_player_projectile_timing(
+    bowfa_state.player_attack_timing = encounter_player_projectile_timing(
         ATTACK_STYLE_RANGED, ITEM_BOW_OF_FAERDHINEN, 0, bowfa_dist);
 
     EncounterOverlay bowfa_ov;

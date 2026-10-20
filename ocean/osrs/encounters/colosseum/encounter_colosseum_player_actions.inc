@@ -849,7 +849,7 @@ static void col_player_attack_target_ctx(
         npc->x, npc->y, col_npc_effective_size(npc),
         ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
     EncounterProjectileTiming hit_timing =
-        col_player_projectile_timing(ls->style, weapon_item, projectile_dist);
+        encounter_player_projectile_timing(ls->style, weapon_item, 0, projectile_dist);
     int base_att_roll = osrs_player_att_roll(ls->eff_level, ls->attack_bonus);
     MeleeStyle weapon_melee_style = col_item_melee_style(weapon_item);
     OsrsPreparedAttackEffects prepared = osrs_prepare_attack_effects_for_melee_style(

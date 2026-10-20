@@ -627,7 +627,7 @@ static void inf_tick_player_ctx(
                     s->player.x, s->player.y, 1,
                     target_npc->x, target_npc->y, target_npc->size,
                     distance_mode);
-                EncounterProjectileTiming hit_timing = inf_player_projectile_timing(
+                EncounterProjectileTiming hit_timing = encounter_player_projectile_timing(
                     ls->style, player_weapon, is_blowpipe_spec_attack, projectile_dist);
                 int hit_delay = hit_timing.damage_delay_ticks;
 
