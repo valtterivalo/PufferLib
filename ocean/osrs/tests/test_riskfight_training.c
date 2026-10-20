@@ -90,13 +90,21 @@ int main(void) {
     Fixture* generated = fixture(&baseline, 1);
     Fixture* replay = fixture(&baseline, 1);
     RiskfightTrainingStart start = riskfight_training_prefix(&generated->env.state,
-        &generated->env.context, &STEADY, &STEADY, 64);
+        &generated->env.context, &STEADY, &STEADY, 64, 1);
     assert(start == RF_START_MIDFIGHT);
+    /* Both fixture kits are Dharok kits: the prefix plays them by the Dharok rules, seat 1 as the persona that steps up, seat 0 as one drawn from the roll. */
+    RiskfightProfile dharok[2] = {STEADY, STEADY};
+    for (int i = 0; i < 2; i++) {
+        assert(riskfight_player_dharok_pieces(&replay->env.state.env.players[i]) >= RF_DHAROK_KIT_PIECES);
+        dharok[i].dharok_eating = 1;
+    }
+    dharok[0].dharok_persona = riskfight_dharok_persona_draw(1);
+    dharok[1].dharok_persona = replay->env.state.opponent_persona;
     for (int tick = 0; tick < 64; tick++) {
         for (int i = 0; i < 2; i++) {
             float obs[RF_OBS_SIZE];
             riskfight_write_script_observation(&replay->env.state, i, obs);
-            riskfight_script(obs, &STEADY, replay->env.state.script_seed[i], replay->env.state.consume_ticks[i],
+            riskfight_script(obs, &dharok[i], replay->env.state.script_seed[i], replay->env.state.consume_ticks[i],
                 commands + i * RF_HEADS);
         }
         riskfight_step((EncounterState*)&replay->env.state,
@@ -111,7 +119,7 @@ int main(void) {
     }
     generated->env.state.env.players[0].current_hitpoints = 0;
     start = riskfight_training_prefix(&generated->env.state, &generated->env.context,
-        &STEADY, &STEADY, 1);
+        &STEADY, &STEADY, 1, 1);
     assert(start == RF_START_PREFIX_TERMINAL);
     assert(generated->env.state.env.tick == 0 && !generated->env.state.env.episode_over);
     assert(generated->env.state.env.players[0].current_hitpoints == 121);

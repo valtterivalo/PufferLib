@@ -160,21 +160,29 @@ static const RiskfightProfile* riskfight_training_profile(RiskfightTraining* tra
     return riskfight_pick_profile(pool, xorshift32(&training->rng));
 }
 
+/** A midfight prefix: both seats played by the script for `ticks` ticks from the regear, then the fight is handed over. A seat in a Dharok kit plays the
+ * spectated Dharok rules (dharok_eating: meals, greataxe, orb and escapes as spectated Dharok fighters do), seat 1 as the persona of the opponent who steps up,
+ * seat 0 as one drawn from `persona_roll`; so the hand-over lands in the states real Dharok fighters reach (the greataxe in hand, hitpoints run down). */
 static RiskfightTrainingStart riskfight_training_prefix(RiskfightState* state,
-    RiskfightContext* context, const RiskfightProfile* first, const RiskfightProfile* second, int ticks) {
+    RiskfightContext* context, const RiskfightProfile* first, const RiskfightProfile* second, int ticks, uint32_t persona_roll) {
     assert(context->self_play);
     /* Both sides are scripts here, whoever will play him afterwards. */
     const int driven = context->opp_driven;
     void (*const hook)(void*, const void*, int*) = context->opp_hook;
     context->opp_driven = 0;
     context->opp_hook = NULL;
-    const RiskfightProfile* scripts[2] = {first, second};
+    RiskfightProfile scripts[2] = {*first, *second};
+    for (int seat = 0; seat < 2; seat++) {
+        if (riskfight_player_dharok_pieces(&state->env.players[seat]) < RF_DHAROK_KIT_PIECES) continue;
+        scripts[seat].dharok_eating = 1;
+        scripts[seat].dharok_persona = seat == 1 ? state->opponent_persona : riskfight_dharok_persona_draw(persona_roll);
+    }
     for (int tick = 0; tick < ticks; tick++) {
         int actions[2 * RF_HEADS];
         for (int i = 0; i < 2; i++) {
             float observation[RF_OBS_SIZE];
             riskfight_write_script_observation(state, i, observation);
-            riskfight_script(observation, scripts[i], state->script_seed[i], state->consume_ticks[i], actions + i * RF_HEADS);
+            riskfight_script(observation, &scripts[i], state->script_seed[i], state->consume_ticks[i], actions + i * RF_HEADS);
         }
         riskfight_step((EncounterState*)state, (EncounterContext*)context, actions);
         if (state->env.episode_over) {
@@ -289,18 +297,18 @@ static void riskfight_training_draw_opponent(RiskfightTraining* training, Riskfi
 }
 
 /** A new opponent steps up to a freshly reset fight (riskfight_training_draw_opponent before the reset): his price, who plays him, and his randomized side.
- * A midfight start (a scaffold that is off by default) happens only at the first fight of a session. */
-static RiskfightTrainingStart riskfight_training_new_opponent(RiskfightTraining* training, RiskfightState* state,
-    RiskfightContext* context, int allow_midfight) {
+ * With midfight_probability the fight is first played midfight_max_ticks at most by the scripts (riskfight_training_prefix), at the first fight of a session
+ * and at every new opponent after it; a rematch never. */
+static RiskfightTrainingStart riskfight_training_new_opponent(RiskfightTraining* training, RiskfightState* state, RiskfightContext* context) {
     state->death_price = training->mirror ? 1.0f : training->config.death_price > 0 ? training->config.death_price :
         training->config.price_table ? RF_PRICE_TABLE[encounter_rand_int(&training->rng, RF_PRICE_TABLE_COUNT)] :
         0.4f * powf(RF_PRICE_MAX_X10 / 4.0f, encounter_rand_float(&training->rng));
     RiskfightTrainingStart start = RF_START_FRESH;
-    if (allow_midfight && riskfight_training_draw(training, training->config.midfight_probability)) {
+    if (riskfight_training_draw(training, training->config.midfight_probability)) {
         const RiskfightProfile* first = riskfight_training_profile(training);
         const RiskfightProfile* second = riskfight_training_profile(training);
         int ticks = 1 + encounter_rand_int(&training->rng, training->config.midfight_max_ticks);
-        start = riskfight_training_prefix(state, context, first, second, ticks);
+        start = riskfight_training_prefix(state, context, first, second, ticks, xorshift32(&training->rng));
     }
     if (training->scripted) state->opponent_profile = training->scripted;
     state->ragger = context->opp_ragger;
@@ -359,7 +367,7 @@ static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* traini
     riskfight_training_draw_opponent(training, context, frozen_policy);
     riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
     riskfight_training_shuffle_bags(training, state);
-    RiskfightTrainingStart start = riskfight_training_new_opponent(training, state, context, 1);
+    RiskfightTrainingStart start = riskfight_training_new_opponent(training, state, context);
     if (start == RF_START_PREFIX_TERMINAL) riskfight_training_shuffle_bags(training, state); /* the prefix ended in a fresh reset */
     training->start_tick = state->env.tick; /* the ticks of a midfight prefix: the swings of a recorded start are the first tick of the fight */
     if (start != RF_START_MIDFIGHT) (void)riskfight_training_start_fight(training, state, context, 0);
@@ -380,14 +388,18 @@ static void riskfight_training_next_fight(RiskfightTraining* training, Riskfight
     riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
     riskfight_training_shuffle_bags(training, state);
     context->keep_opp_kit = 0;
+    RiskfightTrainingStart start = RF_START_FRESH;
     if (t->rematch) {
         state->opponent_profile = profile;
         state->death_price = price;
         state->opp_lag = opp_lag;
-    } else riskfight_training_new_opponent(training, state, context, 0);
-    (void)riskfight_training_start_fight(training, state, context, t->rematch);
-    training->start_tick = 0;
-    training->start = RF_START_FRESH;
+    } else {
+        start = riskfight_training_new_opponent(training, state, context);
+        if (start == RF_START_PREFIX_TERMINAL) riskfight_training_shuffle_bags(training, state);
+    }
+    training->start_tick = start == RF_START_MIDFIGHT ? state->env.tick : 0;
+    if (start != RF_START_MIDFIGHT) (void)riskfight_training_start_fight(training, state, context, t->rematch);
+    training->start = start;
 }
 
 /** Whether the script or OppFit playing seat 1 of a self-play env does nothing this tick: scripted_omission_initial, annealed to 0 over

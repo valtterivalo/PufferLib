@@ -89,7 +89,7 @@ static void draw_and_check(Env* e, int rematch, Tally* t, long* seats) {
     RiskfightTraining* tr = &e->training;
     riskfight_training_draw_opponent(tr, c, e->tag);
     riskfight_reset((EncounterState*)s, (EncounterContext*)c, 0);
-    riskfight_training_new_opponent(tr, s, c, 0);
+    riskfight_training_new_opponent(tr, s, c);
     /* What the kit holds before the start touches it. */
     Player kit_before[2] = {s->env.players[0], s->env.players[1]};
     RiskfightStartDraw draw = riskfight_training_start_fight(tr, s, c, rematch);
@@ -275,7 +275,7 @@ static void test_price(void) {
     for (int i = 0; i < draws; i++) {
         riskfight_training_draw_opponent(&e->training, &e->context, e->tag);
         riskfight_reset((EncounterState*)&e->state, (EncounterContext*)&e->context, 0);
-        riskfight_training_new_opponent(&e->training, &e->state, &e->context, 0);
+        riskfight_training_new_opponent(&e->training, &e->state, &e->context);
         const float price = e->state.death_price;
         int on_table = 0;
         for (int k = 0; k < RF_PRICE_TABLE_COUNT; k++) on_table |= RF_PRICE_TABLE[k] == price;
@@ -298,7 +298,7 @@ static void test_price(void) {
     for (int i = 0; i < 4000; i++) {
         riskfight_training_draw_opponent(&e->training, &e->context, e->tag);
         riskfight_reset((EncounterState*)&e->state, (EncounterContext*)&e->context, 0);
-        riskfight_training_new_opponent(&e->training, &e->state, &e->context, 0);
+        riskfight_training_new_opponent(&e->training, &e->state, &e->context);
         lo = fminf(lo, e->state.death_price); hi = fmaxf(hi, e->state.death_price);
     }
     destroy(e);
@@ -335,7 +335,7 @@ static void test_off(void) {
     for (int i = 0; i < 50; i++) {
         riskfight_training_draw_opponent(&e->training, &e->context, e->tag);
         riskfight_reset((EncounterState*)&e->state, (EncounterContext*)&e->context, 0);
-        riskfight_training_new_opponent(&e->training, &e->state, &e->context, 0);
+        riskfight_training_new_opponent(&e->training, &e->state, &e->context);
         RiskfightStartDraw draw = riskfight_training_start_fight(&e->training, &e->state, &e->context, 0);
         assert(draw.row == NULL && e->state.env.tick == 0 && e->state.env.players[0].current_hitpoints == 121);
         assert(e->state.visible[0].last_attack_tick == -1 && e->state.visible[1].last_attack_tick == -1);
