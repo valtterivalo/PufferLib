@@ -1832,3 +1832,44 @@ Same probes as p7 (p7 differs only in the cap). Brew and combat drinks are per s
 
   Without DR the sim's kill difficulty is about real, and the nets were trained to farm a weakened opponent.
 - **Change:** DR is off in the ladder (`[bot_eval]`), in `scripts/sweep_riskfight_live.sh`, and in session_probe, probe_risk_duels, probe_lowhp_meals, probe_skip_axe, probe_lowvictim and probe_maul_chain. `[env]` was already 0. Ladder scores aren't comparable with earlier sweeps. p10 (seeds 181-183) trains with DR off.
+
+## 2026-10-20 midday: p10 on the DR-off env, where the overeating is, and what the axe and orb are worth to the scripts (branches midfight-dharok, midfight-solo)
+
+- **p10** (seeds 181-183, DR off, otherwise p8's recipe), session probe in the Dharok kit, per session:
+
+  | net | kills | deaths | net/h |
+  |---|---|---|---|
+  | s181 | 2.65 | .09 | 5.15 |
+  | s182 | 2.70 | .05 | 5.18 |
+  | s183 | 2.75 | .04 | 5.48 |
+  | p8s131, same env | 2.56 | .09 | 5.02 |
+
+  Greataxe in hand 0, orb 0, as before.
+- **The user's correction:** overeating is eating past need, mostly to 90+, not eating at 60-77. Read so, the net's overeating is where it sits and how much it eats at once, not how often it starts a meal:
+  - Share of ticks by own bar (Dharok v Dharok, same reader):
+
+    | bar | 0-11 | 12-17 | 18-20 | 21-23 | 24-25 | 26-27 | 28-29 | 30 |
+    |---|---|---|---|---|---|---|---|---|
+    | real | .08 | .13 | .10 | .28 | .18 | .07 | .03 | .12 |
+    | p8s131 | .03 | .09 | .09 | .13 | .14 | .18 | .15 | .19 |
+    | p10 s183 | .02 | .08 | .08 | .12 | .11 | .17 | .16 | .27 |
+
+    Real fighters sit at 69-85 HP (bars 21-25) .46 of the time; the nets sit at 86 up .52-.60.
+  - Bar gained by a meal started at bar 18-23 / 24-27 (4 ticks on, damage taken added back): real 2.3 / 0.3, nets 4.9-5.4 / 2.6-2.7.
+  - Meals started per 1,000 ticks at bar 18-23: real 64, the user's own tapes 79, the nets in the sim 92-93, the nets live (p5/p7/p8, 10 duels) 141.
+  - It is not the opponent's pressure: damage taken is 1.60-1.67 per tick against 1.86 real, splats of 30+ .020-.027 a tick in both at every band, his specials per 1,000 ticks at our bar 18-23 7-11 against 10 real, our deaths per 1,000 ticks at bar 12-17 0.1-0.4 against 2.4 real.
+- **How the nets' fights end** (p10, Dharok v Dharok): he tabs .55-.62, we kill .13-.20, we tab .14-.25, we die .00-.02. Real fighters die about as often as they kill (.125 each per fight). The nets trade almost no death risk for their kills.
+- **One greataxe swing still loses with DR off** (`probe_skip_axe` mode 1, p10 s183, the net's continuation after the swing): every cell at our HP 61+ is -.05 to -.14, and 41-60 HP against his bar 12-17 is +.042 [-.003, +.083]. The probe hands the fight back to a net that has never held the axe, so it prices the swing with a continuation from states the net never trained in.
+- **What the axe and orb are worth to the Dharok script** (`probe_script_duels` with seat 0's greataxe or orb removed, 3 seeds x 40,000 fights per arm, script on both seats):
+
+  | seat 0 | kills | deaths | kills - deaths per fight |
+  |---|---|---|---|
+  | as spectated | 14,218 | 12,265 | +.016 |
+  | no greataxe | 11,460 | 10,880 | +.005 |
+  | no orb | 16,434 | 8,795 | +.064 |
+  | neither | 13,825 | 8,036 | +.048 |
+
+  - The greataxe, played as real fighters play it, is worth +19% kills for +11% deaths (+.012 to +.015 per fight net, break-even at a death price near 2). That is its value under the script's own continuation, not under the net's.
+  - The orb as the script plays it costs .047 per fight. `RF_DHAROK_ORB_PM` is fitted on lone 10s at 19-65 per mille of visible ticks, at every HP band including 0-19. Either most lone 10s are not orbs, or real fighters time the orb in a way the per-tick rate doesn't carry. Open; the user's answer decides it.
+  - Taking the orb away from the opponents changes nothing for p10 s183 (Dharok kit kills per session 2.75 / 2.38 with it against 2.58 / 2.47 without, two seeds, unpaired kits), so the orb fit is not what the net's kills feed on.
+- **Change: midfight prefixes play the Dharok rules** (`riskfight_training_prefix`). A seat in a Dharok kit plays `dharok_eating` (meals, greataxe, orb, escapes as spectated): seat 1 as the persona that steps up, seat 0 as one drawn per prefix. The prefix now runs at every new opponent (never a rematch) and without a second seat (self_play 0, the training recipe), where the step plays seat 1 by his profile and OppFit's hook waits for the hand-over. At midfight 1 in the Dharok kits, 1,404 of 2,033 fights were handed over midfight (the rest ended within the prefix): greataxe in hand .19, mean HP 79, below 60 .08. Off by default.
