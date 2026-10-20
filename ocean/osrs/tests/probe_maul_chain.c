@@ -176,7 +176,7 @@ int main(int argc, char** argv) {
     const double live_loadout = argc > 6 ? atof(argv[6]) : 5;
     DictItem items[] = {{.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 0}, {.key = "session_ticks", .value = 3000},
         {.key = "curveball_probability", .value = 0.1}, {.key = "death_price", .value = 0}, {.key = "price_table", .value = 1}, {.key = "live_loadout", .value = live_loadout},
-        {.key = "deployable", .value = 1}, {.key = "motor", .value = 1}, {.key = "domain_randomization", .value = 1}, {.key = "oppfit_probability", .value = 0},
+        {.key = "deployable", .value = 1}, {.key = "motor", .value = 1}, {.key = "domain_randomization", .value = 0}, {.key = "oppfit_probability", .value = 0},
         {.key = "opponent_pool", .value = 1}, {.key = "fight_starts", .value = 1}};
     Dict kwargs = {.items = items, .size = sizeof(items) / sizeof(*items)};
     Env* env = calloc(1, sizeof(*env));

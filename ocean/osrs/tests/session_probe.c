@@ -30,7 +30,7 @@ int main(int argc, char** argv) {
     double live_loadout = argc > 13 ? atof(argv[13]) : 3;
     DictItem items[] = {{.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 0}, {.key = "session_ticks", .value = session_ticks},
         {.key = "curveball_probability", .value = 0.1}, {.key = "death_price", .value = price}, {.key = "live_loadout", .value = live_loadout}, {.key = "deployable", .value = 1},
-        {.key = "motor", .value = 1}, {.key = "domain_randomization", .value = 1}, {.key = "oppfit_probability", .value = oppfit}, {.key = "opponent_pool", .value = pool},
+        {.key = "motor", .value = 1}, {.key = "domain_randomization", .value = 0}, {.key = "oppfit_probability", .value = oppfit}, {.key = "opponent_pool", .value = pool},
         {.key = "fight_starts", .value = starts}, {.key = "price_table", .value = price_table}};
     Dict kwargs = {.items = items, .size = sizeof(items) / sizeof(*items)};
     Env* env = (Env*)calloc(1, sizeof(*env));
