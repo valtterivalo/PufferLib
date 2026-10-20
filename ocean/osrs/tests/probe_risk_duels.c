@@ -32,7 +32,7 @@ int main(int argc, char** argv) {
     int hard = !strcmp(argv[5], "argmax");
     DictItem items[] = {{.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 0}, {.key = "session_ticks", .value = atof(argv[8])},
         {.key = "curveball_probability", .value = 0.1}, {.key = "death_price", .value = atof(argv[10])}, {.key = "live_loadout", .value = atof(argv[13])},
-        {.key = "deployable", .value = 1}, {.key = "motor", .value = 1}, {.key = "domain_randomization", .value = 1}, {.key = "oppfit_probability", .value = atof(argv[6])},
+        {.key = "deployable", .value = 1}, {.key = "motor", .value = 1}, {.key = "domain_randomization", .value = 0}, {.key = "oppfit_probability", .value = atof(argv[6])},
         {.key = "opponent_pool", .value = atof(argv[9])}, {.key = "fight_starts", .value = atof(argv[11])}, {.key = "price_table", .value = atof(argv[12])}};
     Dict kwargs = {.items = items, .size = sizeof(items) / sizeof(*items)};
     unsigned seed = (unsigned)atoi(argv[7]);

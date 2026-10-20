@@ -203,7 +203,9 @@ static uint16_t riskfight_dr_scale(RiskfightTraining* training, uint16_t rate) {
 /** Domain randomization of his side after a reset: levels, defender, legs, body, amulet, food count, reaction lag and the
  * per-mille rates of his profile. Gear is varied only for the live loadout, whose slots all have fitted alternatives. Never in the mirror: seat 1 is then
  * the learning policy in our kits, and weakening it alone (levels down to 100, a third of the anglerfish and karambwans gone) made seat 0 win 56% of the
- * kills of one policy against itself. */
+ * kills of one policy against itself. Off in training, the ladder and the probes since 2026-10-20: every term weakens him (lower levels, fewer heals, and
+ * a lag that replays his physical-slot clicks against a bag that has moved, which left him unarmed 13.6% of the ticks against the net), and with it on the
+ * net's Voidwaker specials and low-hitpoint finishes killed 2-4 times as often as spectated attackers' (FINDINGS 2026-10-20 morning). */
 static void riskfight_training_randomize(RiskfightTraining* training, RiskfightState* state, const RiskfightContext* context) {
     if (!training->config.randomize || training->mirror) return;
     Player* p = &state->env.players[1];

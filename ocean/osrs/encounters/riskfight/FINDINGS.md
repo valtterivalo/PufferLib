@@ -1798,3 +1798,37 @@ Same probes as p7 (p7 differs only in the cap). Brew and combat drinks are per s
   - Greataxe hit share is .29-.37 at 80 and .28-.35 at 88-94 (real .27-.32).
   - Sim axe hits run 10-17% smaller than real at the same reader HP (mean 27 / 26 / 23 against 33 / 29 / 28 by attacker HP < 40 / 40-79 / 80+). Not explained: no strips (0.998 full set in both), Piety on, formula checked.
   - Not changed.
+
+## 2026-10-20 morning: the root cause of cheap kills and constant eating is domain randomization (branch no-dr)
+
+- **The user's live Dharok fight** (session 20261020T071732, p8s131, vs Perseveratie):
+  - The net ate at 52-80 HP.
+  - It armed and disarmed its special around every swing and never fired it. The sim does the same: it arms at attack timer 3 (0.24) and mostly disarms at 2 (0.84). The user reads it as waiting for a window and doesn't count it as a fault.
+  - The user took the kill by hand with two Voidwaker specials. The first went into the opponent's Vengeance; we took 68 and dropped to about 26 HP. The second landed before his meal.
+  - Opponents have typed "?" at the net's eating.
+- **The eating is not the opponent's damage.** A burst that would kill without a meal within 8 ticks, by own bar 12-17 / 18-23:
+  - real fighters .076 / .028;
+  - script v script .069 / .018;
+  - the p8 net as target .050 / .016.
+- **The user's bait line loses in the old env.** `probe_skip_axe` G (no meals and Vengeance up down to 35 or 50 HP, then a triple eat), p9 s152, 12 x 15 sessions, at the net's meal decisions, by our HP band:
+  - bait to 35: -.11 to -.04;
+  - bait to 50: -.05 to +.007.
+- **Meal promptness can't fix the net's kills.** Gain 2000 / 6000 / always-eat below bar 18, with p8s131 attacking: VW special KO at victim bar 7-11 is .157 / .125 / .186 (real .044).
+- **What does: `domain_randomization`.** It is on in training, in the ladder and in every probe; the script v script calibrations ran without it. Each term weakens the opponent:
+  - attack and strength 100-118;
+  - defence 90-110;
+  - 35% of his anglerfish and karambwans removed;
+  - rates scaled by 0.5-1.5;
+  - an action lag of 0-3 ticks that replays his physical-slot clicks against a bag that has moved since. That left the opponent with **no weapon on 13.6% of ticks** against the net (real fighters .26%, script v script 0).
+- **The same p8s131, same env, DR off:**
+
+  | | DR on | DR off | real |
+  |---|---|---|---|
+  | VW special KO at victim bar 0-6 / 7-11 / 12-16 / 17-22 | .359 / .157 / .098 / .063 | .169 / .080 / .041 / .073 | .188 / .044 / .054 / .082 |
+  | special 1-2 / 3-4 ticks after his hitsplat (bar 7-16) | .328 / .086 | .158 / .050 | .056 / .048 |
+  | low victims (first hit to bar <= 6) dead within 10 ticks | .22 [.18, .25] | .08 [.06, .10] | .07 |
+  | KOs per Dharok v Dharok duel | .35 | .20 | real .25 for both sides together |
+  | opponent unarmed share of ticks | .136 | 0 | .0026 |
+
+  Without DR the sim's kill difficulty is about real, and the nets were trained to farm a weakened opponent.
+- **Change:** DR is off in the ladder (`[bot_eval]`), in `scripts/sweep_riskfight_live.sh`, and in session_probe, probe_risk_duels, probe_lowhp_meals, probe_skip_axe, probe_lowvictim and probe_maul_chain. `[env]` was already 0. Ladder scores aren't comparable with earlier sweeps. p10 (seeds 181-183) trains with DR off.

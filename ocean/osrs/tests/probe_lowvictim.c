@@ -22,7 +22,7 @@ int main(int argc, char** argv) {
     int sessions = atoi(argv[4]);
     DictItem items[] = {{.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 0}, {.key = "session_ticks", .value = 3000},
         {.key = "curveball_probability", .value = 0.1}, {.key = "death_price", .value = 0}, {.key = "live_loadout", .value = 5},
-        {.key = "deployable", .value = 1}, {.key = "motor", .value = 1}, {.key = "domain_randomization", .value = 1}, {.key = "oppfit_probability", .value = atof(argv[6])},
+        {.key = "deployable", .value = 1}, {.key = "motor", .value = 1}, {.key = "domain_randomization", .value = 0}, {.key = "oppfit_probability", .value = atof(argv[6])},
         {.key = "opponent_pool", .value = 1}, {.key = "fight_starts", .value = 1}, {.key = "price_table", .value = 1}};
     Dict kwargs = {.items = items, .size = sizeof(items) / sizeof(*items)};
     unsigned seed = (unsigned)atoi(argv[5]);

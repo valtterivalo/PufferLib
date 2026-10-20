@@ -22,7 +22,7 @@ RUN=${1:?usage: sweep_riskfight_live.sh RUN_DIR}
 mkdir -p "$RUN/checkpoints" "$RUN/logs"
 exec ./puffer sweep \
   --base.seed=73 --base.checkpoint_dir="$RUN/checkpoints" --base.log_dir="$RUN/logs" --base.checkpoint_interval=128 --base.eval_episodes=0 \
-  --env.live_loadout=5 --env.deployable=1 --env.motor=1 --env.domain_randomization=1 --env.opponent_pool=1 --env.oppfit_probability=0.5 \
+  --env.live_loadout=5 --env.deployable=1 --env.motor=1 --env.domain_randomization=0 --env.opponent_pool=1 --env.oppfit_probability=0.5 \
   --env.death_price=0 --env.price_table=0 --env.fight_starts=1 --env.damage_reward_coeff=0 --env.chance_reward_coeff=0 --env.session_ticks=3000 \
   --selfplay.enabled=0 --vec.num_policies=2 --vec.total_agents=16384 --vec.num_threads=8 \
   --train.replay_ratio=1.63940668 --train.max_grad_norm=0.408098608 --train.momentum=0.980446517 \
