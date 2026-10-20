@@ -1765,3 +1765,27 @@ Same probes as p7 (p7 differs only in the cap). Brew and combat drinks are per s
 
   2000 fits the quick heals best and sits between the knockout and special targets. Two misses remain: gap 1 overshoots (.56 against .28), and heals of 20+ stay short (.39 / .46 / .64 against .50 / .63 / .79). Shown meals per tick don't move. Brew share, food-lock partial meals and the meal clock moved none of these.
 - A diagnostic x2.5 on `RF_DHAROK_MEAL_CLOCK` alone did nothing: under a persona, clock 3 takes 4000 minus the others, so the factor cancelled. Its two trained seeds wielded the axe 0.4-0.6 ticks per session.
+
+## 2026-10-20 night, later: p9 on the calibrated env; the axe still doesn't pay
+
+- **p9** (49749af49, seeds 151-153, 150M steps): ladder 8.04 / 8.21 / 7.99.
+  - Dharok kit per session: kills 3.71 / 4.05 / 3.71, deaths .07 / .11 / .01, net/h 7.30 / 7.89 / 7.42. The opponents are harder now, so these can't be compared with p8.
+  - Scorecard (probe_risk_duels, 2 x 300 sessions each):
+    - axe in hand 0 / 0 / .004 of ticks, no orb;
+    - KOs per duel .34-.37 (p8 .42), VW special .52-.58 of them;
+    - eating by bar 0-11 / 12-17 / 18-23 / 24-27 / 28-30 per 1,000 ticks: s151 206 / 193 / 123 / 48 / 20, s152 188 / 169 / 83 / 32 / 14, s153 218 / 172 / 109 / 39 / 16 (real 147 / 139 / 64 / 42 / 20).
+- **Against the p9 nets the scripts still heal late:**
+  - healed 8+ by gap 2 / 3 / 4: .47 / .62 / .76 (script v script .64 / .79 / .89; real .61 / .74 / .91);
+  - the nets' VW specials at bar 7-11 / 12-16 kill .198 / .114 (real .044 / .054);
+  - specs 1-2 ticks after his hitsplat (bar 7-16) kill .29 (real .056).
+- **Other contrasts already match within noise:**
+  - Eating under a VW special threat (VW in hand, estimated energy >= 50) over without, bar 0-11 / 12-17: real x1.16 / x1.11; scripts x1.21 / x1.05; scripts facing p9 x1.13 / x1.10.
+  - Meals after taking the other side's reflect (bar 1-16), shown by +1 / +2 / +3: real .22 / .40 / .48; scripts .29 / .42 / .51; facing p9 .19 / .35 / .48.
+  - VW special damage: p10 / 50 / 90 24 / 42 / 62 in both.
+  - The remaining gap is the net's choice of moment: per special it kills 2-4x more than spectated attackers at the same victim bar. Whether human victims are as exploitable can only be told from live Dharok fights. The live corpus holds 2 Dharok v Dharok duels; the other 166 use other kits.
+- **One axe swing doesn't pay either** (`probe_skip_axe` branch F: wield the axe and swing it once, then the net; p9 s152, mode 1, 16 x 15 sessions, by our HP x his bar). Every cell is <= 0 or within noise; the best are +.029 [-.063, +.144] and +.022 [-.035, +.094] at our 21-40 HP with him at bar 12-23. With him at bar 0-11 it loses (-.06 to -.13): the VW finishes better.
+- **Axe for 8 decisions (net eats)**, p9 s152: -.012 to -.044 at every band.
+- **Exploration arm** (ent_coef .005 against the sweep's 1e-5, 600M steps, seeds 161-162):
+  - ladder 5.24 / 4.55, Dharok kills 1.76 / 0.77 per session, 1.4-1.7 rude teleports per session;
+  - axe ticks 17.4 / 2.6 per session.
+  - More entropy only adds noise, not a better use of the axe.

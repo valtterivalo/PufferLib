@@ -11,6 +11,7 @@
  *            decisions the net plays on argmax.
  *   D skip-K  C's meal rule alone: the net's weapon, special and every other head.
  *   E axe-K   C's axe rule alone: the net's meals and every other head.
+ *   F axe-1   E's axe rule until the first swing with the axe (at most K hand-free decisions), then the net (which switches back when it wants).
  * MODE 1 (argument 9) takes instead a sixth of the hand-free decisions in our Dharok's kit where the mask offers the axe's wield, whatever the net picks.
  * Each branch is played ROLLS times, roll r > 0 with the combat dice reseeded (OsrsEnv.rng_state), the same dice for every branch of a roll (paired).
  *
@@ -26,8 +27,8 @@
 #include "../../osrs_riskfight/osrs_riskfight.h"
 #include "rf_net.h"
 
-enum { BANDS = 5, BRANCHES = 5, MAX_DECISIONS = 1 << 20, BOOT = 1000 };
-enum { BR_GREEDY, BR_SKIP1, BR_AXE, BR_SKIPK, BR_AXEONLY };
+enum { BANDS = 5, BRANCHES = 6, MAX_DECISIONS = 1 << 20, BOOT = 1000 };
+enum { BR_GREEDY, BR_SKIP1, BR_AXE, BR_SKIPK, BR_AXEONLY, BR_AXE1 };
 static float obs[RF_OBS_SIZE], obs_saved[RF_OBS_SIZE], actions[RF_HEADS], reward, terminal, reset_flag;
 static unsigned char mask[RF_MASK_SIZE], mask_saved[RF_MASK_SIZE];
 
@@ -71,7 +72,7 @@ static int axe_entry(const Player* p) {
 static void play_out(Env* env, RfNet* net, uint32_t* rng, int branch, const int* greedy, int window, int floor_hp, Outcome* out) {
     const Log before = env->log;
     const int fights = env->session_fights;
-    int chosen[RF_HEADS], free_seen = 0;
+    int chosen[RF_HEADS], free_seen = 0, axe_swung = 0;
     memcpy(chosen, greedy, sizeof(chosen));
     for (int step = 0; env->session_fights == fights && env->log.n == before.n; step++) {
         assert(step < 5000);
@@ -80,7 +81,8 @@ static void play_out(Env* env, RfNet* net, uint32_t* rng, int branch, const int*
         const int in_window = env->wait_left == 0 && !env->state.hand_busy[0] && free_seen++ < window;
         if (step == 0 && branch == BR_SKIP1) chosen[RF_FOOD] = chosen[RF_COMBO] = chosen[RF_DRINK] = 0;
         if (in_window && (branch == BR_AXE || branch == BR_SKIPK) && us->current_hitpoints > floor_hp) chosen[RF_FOOD] = chosen[RF_COMBO] = chosen[RF_DRINK] = 0;
-        if (in_window && (branch == BR_AXE || branch == BR_AXEONLY)) {
+        const int one_swing = branch == BR_AXE1 && !axe_swung;
+        if ((in_window && (branch == BR_AXE || branch == BR_AXEONLY)) || (one_swing && free_seen <= window)) {
             /* The axe in hand and kept there: wielded from the bag, else no weapon or shield swap (the net would switch back to its Voidwaker) and no
              * special (one would spend the bag's spec weapon). */
             const int axe = axe_entry(us);
@@ -92,6 +94,7 @@ static void play_out(Env* env, RfNet* net, uint32_t* rng, int branch, const int*
         if (in_window) out->window_meals += chosen[RF_FOOD] || chosen[RF_COMBO] || chosen[RF_DRINK];
         for (int h = 0; h < RF_HEADS; h++) actions[h] = (float)chosen[h];
         puf_step(env);
+        axe_swung |= env->state.env.players[0].just_attacked && env->state.env.players[0].equipped[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE;
         if (terminal || reset_flag) rf_net_reset(net);
     }
     out->n++;
@@ -162,6 +165,7 @@ int main(int argc, char** argv) {
                 assert(count < MAX_DECISIONS);
                 const int band = hp <= 20 ? 0 : hp <= 40 ? 1 : hp <= 60 ? 2 : hp <= 80 ? 3 : 4;
                 Decision* dec = &decisions[count++];
+                const int his_bar = st->visible[0].health_bar; /* his bar as we see it, for the ROW line */
                 *dec = (Decision){.band = band, .price = st->death_price, .session = (int)env->log.n};
                 /* The clone shares the command queues' heap buffers: grow them first so no branch reallocates a buffer the saved copy still points at. */
                 for (int seat = 0; seat < 2; seat++) human_command_queue_reserve(&env->context.policy_commands[seat].commands, 256);
@@ -191,8 +195,8 @@ int main(int argc, char** argv) {
                     for (int b = 0; b < BRANCHES; b++) dec->d_sum[b] += value[b] - value[BR_GREEDY];
                 }
                 /* One row per decision for pooling runs offline: band, session, the mean d of B, C and D over the rolls. */
-                printf("ROW %d %d %.4f %.4f %.4f %.4f\n", band, dec->session, dec->d_sum[BR_SKIP1] / rolls, dec->d_sum[BR_AXE] / rolls, dec->d_sum[BR_SKIPK] / rolls,
-                    dec->d_sum[BR_AXEONLY] / rolls);
+                printf("ROW %d %d %.4f %.4f %.4f %.4f %.4f %d\n", band, dec->session, dec->d_sum[BR_SKIP1] / rolls, dec->d_sum[BR_AXE] / rolls, dec->d_sum[BR_SKIPK] / rolls,
+                    dec->d_sum[BR_AXEONLY] / rolls, dec->d_sum[BR_AXE1] / rolls, his_bar);
             }
         }
         for (int h = 0; h < RF_HEADS; h++) actions[h] = (float)greedy[h];
