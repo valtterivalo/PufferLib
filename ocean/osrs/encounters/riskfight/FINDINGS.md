@@ -1789,3 +1789,12 @@ Same probes as p7 (p7 differs only in the cap). Brew and combat drinks are per s
   - ladder 5.24 / 4.55, Dharok kills 1.76 / 0.77 per session, 1.4-1.7 rude teleports per session;
   - axe ticks 17.4 / 2.6 per session.
   - More entropy only adds noise, not a better use of the axe.
+- **p8s131 on the calibrated env** (session_probe, 300 sessions): Dharok kills 4.23 / deaths .12 / net/h 8.15 per session, better than every p9 seed (7.30-7.89). p8s131 stays installed.
+- **Spec timing, script v script after the calibration:**
+  - Specials 1-2 / 3-4 ticks after the victim's last hitsplat (bar 7-16) kill .160 / .074 (before .315 / .113; real .056 / .048, about 4 knockouts in 72 real specials at 1-2).
+  - The rest of that gap sits in a state the readers don't see (food lock, his clock).
+- **Dharok opponents' base defence** (`RF_DHAROK_KIT_BASE_DEFENCE` 80), plain VW swings landing a damaging splat:
+  - real .271; script v script .310 at 80, .298 at 88, .289 at 94; scripts into the net's 99 defence .267.
+  - Greataxe hit share is .29-.37 at 80 and .28-.35 at 88-94 (real .27-.32).
+  - Sim axe hits run 10-17% smaller than real at the same reader HP (mean 27 / 26 / 23 against 33 / 29 / 28 by attacker HP < 40 / 40-79 / 80+). Not explained: no strips (0.998 full set in both), Piety on, formula checked.
+  - Not changed.
