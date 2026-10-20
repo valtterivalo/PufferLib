@@ -112,9 +112,8 @@ void puf_init(Env* env, Dict* kwargs) {
     env->training.config = riskfight_training_config(kwargs);
     env->training.rng = osrs_env_seed((uint32_t)env->rng, 1);
     /* Without a second seat every opponent is already the script or OppFit, so scripted_probability (the scripted share of the frozen seats) has nothing to
-     * choose: a sweep that also searches env.self_play carries a value for it in the self_play 0 trials. Midfight starts need the second seat. */
+     * choose: a sweep that also searches env.self_play carries a value for it in the self_play 0 trials. */
     if (!env->context.self_play) env->training.config.scripted_probability = 0;
-    assert(env->context.self_play || env->training.config.midfight_probability == 0);
     memset(&env->log, 0, sizeof(env->log));
     env->session_elapsed = env->session_fights = 0;
     env->session_stake = 0;
