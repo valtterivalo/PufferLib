@@ -322,9 +322,9 @@ static void scene_shape_tile(Soup* out, const Scene* s, int x, int y, int shape,
     }
 }
 
-static void scene_terrain_plane(Soup* out, Scene* s, int plane, int linked_only) {
+static int* scene_underlay_hsl(const Scene* s, int plane) {
     const MapGrid* g = s->g;
-    Defs* d = s->defs;
+    const Defs* d = s->defs;
     size_t n = (size_t)(g->width + 1) * (g->height + 1);
     long* sums[5];
     for (int k = 0; k < 5; k++) sums[k] = calloc(n, sizeof(long));
@@ -340,13 +340,9 @@ static void scene_terrain_plane(Soup* out, Scene* s, int plane, int linked_only)
             for (int k = 0; k < 5; k++)
                 sums[k][i] = add[k] + sums[k][i - 1] + sums[k][i - (g->width + 1)] - sums[k][i - (g->width + 1) - 1];
         }
-    for (int y = 1; y < g->height - 1; y++)
-        for (int x = 1; x < g->width - 1; x++) {
-            if (!scene_in_rect(s, x, y, 0)) continue;
-            if (linked_only && !(g->settings[map_tile(g, 1, x, y)] & 2)) continue;
-            int t = map_tile(g, plane, x, y);
-            int under = g->underlays[t], over = g->overlays[t];
-            if (!under && !over) continue;
+    int* out = malloc(sizeof(int) * (size_t)g->width * g->height);
+    for (int y = 0; y < g->height; y++)
+        for (int x = 0; x < g->width; x++) {
             int x0 = x - 4 < 0 ? 0 : x - 4, x1 = x + 5 >= g->width ? g->width - 1 : x + 5;
             int y0 = y - 4 < 0 ? 0 : y - 4, y1 = y + 5 >= g->height ? g->height - 1 : y + 5;
             long w[5];
@@ -355,6 +351,29 @@ static void scene_terrain_plane(Soup* out, Scene* s, int plane, int linked_only)
                 int W = g->width + 1;
                 w[k] = S[(size_t)(y1 + 1) * W + x1 + 1] - S[(size_t)y0 * W + x1 + 1] - S[(size_t)(y1 + 1) * W + x0] + S[(size_t)y0 * W + x0];
             }
+            out[y * g->width + x] = g->underlays[map_tile(g, plane, x, y)] > 0
+                ? hsl_encode((int)(w[0] * 256 / w[3]), (int)(w[1] / w[4]), (int)(w[2] / w[4])) : -1;
+        }
+    for (int k = 0; k < 5; k++) free(sums[k]);
+    return out;
+}
+
+static int overlay_hsl(const Defs* d, const Overlay* o) {
+    return o->texture >= 0 ? d->textures[o->texture].average_hsl
+        : o->rgb == 0xFF00FF ? -2 : hsl_encode(o->hue, o->saturation, o->lightness);
+}
+
+static void scene_terrain_plane(Soup* out, Scene* s, int plane, int linked_only) {
+    const MapGrid* g = s->g;
+    Defs* d = s->defs;
+    int* underlay = scene_underlay_hsl(s, plane);
+    for (int y = 1; y < g->height - 1; y++)
+        for (int x = 1; x < g->width - 1; x++) {
+            if (!scene_in_rect(s, x, y, 0)) continue;
+            if (linked_only && !(g->settings[map_tile(g, 1, x, y)] & 2)) continue;
+            int t = map_tile(g, plane, x, y);
+            int under = g->underlays[t], over = g->overlays[t];
+            if (!under && !over) continue;
             int h[4] = {
                 g->heights[map_corner(g, plane, x, y)], g->heights[map_corner(g, plane, x + 1, y)],
                 g->heights[map_corner(g, plane, x + 1, y + 1)], g->heights[map_corner(g, plane, x, y + 1)],
@@ -363,23 +382,20 @@ static void scene_terrain_plane(Soup* out, Scene* s, int plane, int linked_only)
                 s->light[map_corner(g, plane, x, y)], s->light[map_corner(g, plane, x + 1, y)],
                 s->light[map_corner(g, plane, x + 1, y + 1)], s->light[map_corner(g, plane, x, y + 1)],
             };
-            int underlay_hsl = under > 0 ? hsl_encode((int)(w[0] * 256 / w[3]), (int)(w[1] / w[4]), (int)(w[2] / w[4])) : -1;
+            int underlay_hsl = underlay[y * g->width + x];
             int uc[4];
             for (int k = 0; k < 4; k++) uc[k] = tile_light_underlay(underlay_hsl, l[k]);
             if (!over) {
                 scene_paint_tile(out, s, x, y, h, uc);
                 continue;
             }
-            const Overlay* o = &d->overlays[over - 1];
-            int overlay_hsl = o->texture >= 0 ? d->textures[o->texture].average_hsl
-                : o->rgb == 0xFF00FF ? -2 : hsl_encode(o->hue, o->saturation, o->lightness);
             int oc[4];
-            for (int k = 0; k < 4; k++) oc[k] = tile_light_overlay(overlay_hsl, l[k]);
+            for (int k = 0; k < 4; k++) oc[k] = tile_light_overlay(overlay_hsl(d, &d->overlays[over - 1]), l[k]);
             int shape = g->shapes[t] + 1;
             if (shape == 1) scene_paint_tile(out, s, x, y, h, oc);
             else scene_shape_tile(out, s, x, y, shape - 1, g->rotations[t], h, uc, oc);
         }
-    for (int k = 0; k < 5; k++) free(sums[k]);
+    free(underlay);
 }
 
 static int loc_model(Defs* d, const LocDef* def, int type, int rotation, Model* out) {
@@ -764,6 +780,167 @@ static void write_objects(const char* path, const Scene* s, const Soup* soup, in
     fclose(f);
 }
 
+
+static void png_write_rgba(const char* path, const uint32_t* pixels, int width, int height);
+
+enum { MINIMAP_TILE_PX = 4, MINIMAP_WALL_RGB = 0xEEEEEE, MINIMAP_DOOR_RGB = 0xEE0000 };
+
+static const uint8_t MINIMAP_TILE_SHAPE[13][16] = {
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+    {1, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1}, {1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0},
+    {0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1}, {0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+    {1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1}, {1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0},
+    {0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0}, {1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 1},
+    {1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1},
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1},
+};
+static const uint8_t MINIMAP_TILE_ROTATION[4][16] = {
+    {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}, {12, 8, 4, 0, 13, 9, 5, 1, 14, 10, 6, 2, 15, 11, 7, 3},
+    {15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0}, {3, 7, 11, 15, 2, 6, 10, 14, 1, 5, 9, 13, 0, 4, 8, 12},
+};
+
+typedef struct {
+    uint32_t* rgb;
+    int width, height;
+} MinimapImage;
+
+static void minimap_put(MinimapImage* m, int px, int py, int rgb) {
+    if (px >= 0 && py >= 0 && px < m->width && py < m->height) m->rgb[py * m->width + px] = (uint32_t)rgb;
+}
+
+static void minimap_tile(MinimapImage* m, const Scene* s, int* const underlay[MAP_PLANES], int plane, int x, int y, int px, int py) {
+    const MapGrid* g = s->g;
+    const Defs* d = s->defs;
+    int t = map_tile(g, plane, x, y);
+    int under = g->underlays[t], over = g->overlays[t];
+    if (!under && !over) return;
+    int under_rgb = under ? model_palette[tile_light_underlay(underlay[plane][y * g->width + x], 96)] : 0;
+    int shape = 0, over_rgb = 0;
+    if (over) {
+        const Overlay* o = &d->overlays[over - 1];
+        int hsl = o->secondary_rgb != -1
+            ? hsl_encode(o->secondary_hue, o->secondary_saturation, o->secondary_lightness) : overlay_hsl(d, o);
+        over_rgb = hsl == -2 ? 0 : model_palette[tile_light_overlay(hsl, 96)];
+        shape = g->shapes[t] + 1;
+    }
+    if (shape <= 1) {
+        int rgb = shape ? over_rgb : under_rgb;
+        if (!rgb) return;
+        for (int k = 0; k < 16; k++) minimap_put(m, px + (k & 3), py + (k >> 2), rgb);
+        return;
+    }
+    const uint8_t* mask = MINIMAP_TILE_SHAPE[shape];
+    const uint8_t* order = MINIMAP_TILE_ROTATION[g->rotations[t]];
+    for (int k = 0; k < 16; k++) {
+        int overlay = mask[order[k]];
+        if (!overlay && !under_rgb) continue;
+        minimap_put(m, px + (k & 3), py + (k >> 2), overlay ? over_rgb : under_rgb);
+    }
+}
+
+static void minimap_map_scene(MinimapImage* m, const SpriteGroup* scenes, const LocDef* def, int px, int py_top_of_loc) {
+    const SpriteFrame* f = &scenes->frames[def->map_scene];
+    int ox = px + (def->size_x * MINIMAP_TILE_PX - f->sub_width) / 2;
+    int oy = py_top_of_loc + (def->size_y * MINIMAP_TILE_PX - f->sub_height) / 2;
+    for (int y = 0; y < f->height; y++)
+        for (int x = 0; x < f->width; x++) {
+            uint32_t c = f->pixels[y * f->width + x];
+            if (c >> 24) minimap_put(m, ox + x, oy + y, (int)((c & 0xFF) << 16 | (c & 0xFF00) | (c >> 16 & 0xFF)));
+        }
+}
+
+static void minimap_locs(MinimapImage* m, Scene* s, const SpriteGroup* scenes, const int* boundary, const int* object,
+                         const int* deco, int x, int y, int px, int py) {
+    const MapGrid* g = s->g;
+    int i = y * g->width + x;
+    if (boundary[i] >= 0) {
+        const MapLoc* loc = &g->locs[boundary[i]];
+        const LocDef* def = defs_loc(s->defs, loc->id);
+        if (def->map_scene >= 0) minimap_map_scene(m, scenes, def, px, py - (def->size_y - 1) * MINIMAP_TILE_PX);
+        else {
+            static const int sides[4][4][2] = {
+                {{0, 0}, {0, 1}, {0, 2}, {0, 3}}, {{0, 0}, {1, 0}, {2, 0}, {3, 0}},
+                {{3, 0}, {3, 1}, {3, 2}, {3, 3}}, {{0, 3}, {1, 3}, {2, 3}, {3, 3}},
+            };
+            static const int corners[4][2] = {{0, 0}, {3, 0}, {3, 3}, {0, 3}};
+            int r = loc->rotation, rgb = def->interactive ? MINIMAP_DOOR_RGB : MINIMAP_WALL_RGB;
+            for (int k = 0; k < 4; k++) {
+                if (loc->type == 0 || loc->type == 2) minimap_put(m, px + sides[r][k][0], py + sides[r][k][1], rgb);
+                if (loc->type == 2) minimap_put(m, px + sides[(r + 1) & 3][k][0], py + sides[(r + 1) & 3][k][1], rgb);
+            }
+            if (loc->type == 3) minimap_put(m, px + corners[r][0], py + corners[r][1], rgb);
+        }
+    }
+    if (object[i] >= 0) {
+        const MapLoc* loc = &g->locs[object[i]];
+        const LocDef* def = defs_loc(s->defs, loc->id);
+        int rgb = def->interactive ? MINIMAP_DOOR_RGB : MINIMAP_WALL_RGB;
+        if (def->map_scene >= 0) {
+            minimap_map_scene(m, scenes, def, px, py - (def->size_y - 1) * MINIMAP_TILE_PX);
+        } else if (loc->type == 9) {
+            for (int k = 0; k < 4; k++)
+                minimap_put(m, px + k, py + ((loc->rotation & 1) ? k : 3 - k), rgb);
+        }
+    }
+    if (deco[i] >= 0) {
+        const LocDef* def = defs_loc(s->defs, g->locs[deco[i]].id);
+        if (def->map_scene >= 0) minimap_map_scene(m, scenes, def, px, py - (def->size_y - 1) * MINIMAP_TILE_PX);
+    }
+}
+
+static void write_minimap(const char* path, Scene* s, OsrsCache* cache, const int* exclude_ids, int exclude_count) {
+    const MapGrid* g = s->g;
+    RegionRect r = s->r;
+    int tiles_w = (r.x1 - r.x0 + 1) * MAP_REGION, tiles_h = (r.y1 - r.y0 + 1) * MAP_REGION;
+    MinimapImage m = {.width = tiles_w * MINIMAP_TILE_PX, .height = tiles_h * MINIMAP_TILE_PX};
+    m.rgb = malloc(sizeof(uint32_t) * (size_t)m.width * m.height);
+    for (int i = 0; i < m.width * m.height; i++) m.rgb[i] = 1;
+    CacheFile sf = cache_read_container(cache, CACHE_INDEX_SPRITES, cache_find_group(cache, CACHE_INDEX_SPRITES, "mapscene"));
+    SpriteGroup scenes = sprite_group_decode(sf.data, sf.size, 1.0, SPRITE_ALPHA_INDEX);
+    free(sf.data);
+    int* underlay[MAP_PLANES];
+    for (int p = 0; p < MAP_PLANES; p++) underlay[p] = scene_underlay_hsl(s, p);
+    size_t n = (size_t)MAP_PLANES * g->width * g->height;
+    int* boundary = malloc(sizeof(int) * n);
+    int* object = malloc(sizeof(int) * n);
+    int* deco = malloc(sizeof(int) * n);
+    for (size_t i = 0; i < n; i++) boundary[i] = object[i] = deco[i] = -1;
+    for (int i = 0; i < g->loc_count; i++) {
+        const MapLoc* loc = &g->locs[i];
+        int plane = loc->plane - ((g->settings[map_tile(g, 1, loc->x, loc->y)] & 2) ? 1 : 0);
+        if (plane < 0 || id_in_set(exclude_ids, exclude_count, loc->id)) continue;
+        int t = map_tile(g, plane, loc->x, loc->y);
+        if (loc->type <= 3) boundary[t] = i;
+        else if (loc->type >= 9 && loc->type <= 21 && object[t] < 0) object[t] = i;
+        else if (loc->type == 22) deco[t] = i;
+    }
+    size_t plane_tiles = (size_t)g->width * g->height;
+    for (int pass = 0; pass < 2; pass++)
+        for (int ty = 0; ty < tiles_h; ty++)
+            for (int tx = 0; tx < tiles_w; tx++) {
+                int x = r.x0 * MAP_REGION - g->base_x + tx, y = r.y0 * MAP_REGION - g->base_y + ty;
+                int px = tx * MINIMAP_TILE_PX, py = (tiles_h - 1 - ty) * MINIMAP_TILE_PX;
+                for (int p = 0; p < 2; p++) {
+                    int flags = g->settings[map_tile(g, p, x, y)];
+                    if (p == 0 ? (flags & 24) : !(flags & 8)) continue;
+                    int src = p + ((g->settings[map_tile(g, 1, x, y)] & 2) ? 1 : 0);
+                    if (pass == 0) minimap_tile(&m, s, underlay, src, x, y, px, py);
+                    else minimap_locs(&m, s, &scenes, boundary + plane_tiles * p, object + plane_tiles * p,
+                                      deco + plane_tiles * p, x, y, px, py);
+                }
+            }
+    for (int i = 0; i < m.width * m.height; i++) {
+        uint32_t c = m.rgb[i];
+        m.rgb[i] = 0xFF000000u | (c & 0xFF) << 16 | (c & 0xFF00) | (c >> 16 & 0xFF);
+    }
+    png_write_rgba(path, m.rgb, m.width, m.height);
+    printf("%s: %dx%d minimap\n", path, m.width, m.height);
+    for (int p = 0; p < MAP_PLANES; p++) free(underlay[p]);
+    free(boundary); free(object); free(deco);
+    sprite_group_free(&scenes);
+    free(m.rgb);
+}
+
 typedef struct {
     const char* name;
     int ids[64];
@@ -791,12 +968,16 @@ static void export_scene(OsrsCache* cache, const char* out_dir, const char* name
     scene_objects(&s, &objects, NULL, 0);
     snprintf(path, sizeof(path), "%s/%s.objects", out_dir, name);
     write_objects(path, &s, &objects, g.loc_count);
+    snprintf(path, sizeof(path), "%s/%s.minimap.png", out_dir, name);
+    write_minimap(path, &s, cache, NULL, 0);
     printf("%s: %d locs, %d terrain vertices, %d object vertices\n", name, g.loc_count, terrain.count, objects.count);
     if (alt) {
         Soup alt_objects = {0};
         scene_objects(&s, &alt_objects, alt->ids, alt->count);
         snprintf(path, sizeof(path), "%s/%s.objects", out_dir, alt->name);
         write_objects(path, &s, &alt_objects, g.loc_count);
+        snprintf(path, sizeof(path), "%s/%s.minimap.png", out_dir, alt->name);
+        write_minimap(path, &s, cache, alt->ids, alt->count);
         printf("%s: %d locs excluded, %d object vertices\n", alt->name, alt->count, alt_objects.count);
         free(alt_objects.xyz); free(alt_objects.rgba); free(alt_objects.uv);
     }

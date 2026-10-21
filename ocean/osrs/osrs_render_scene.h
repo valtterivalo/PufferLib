@@ -39,6 +39,7 @@ static void visual_load_scene_meshes(RenderClient* rc, const EncounterDef* encou
     terrain_offset(rc->terrain, origin_x, origin_y);
     objects_offset(rc->objects, origin_x, origin_y);
     objects_offset(rc->objects_zuk, origin_x, origin_y);
+    render_load_minimap(rc, visual_scene_asset(scene, "minimap.png"));
     rc->collision_map = collision_map_scene(scene);
     rc->collision_world_offset_x = origin_x;
     rc->collision_world_offset_y = origin_y;
