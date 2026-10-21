@@ -5,11 +5,31 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
     if (tp->life != TFA_LIFE_ALIVE) return;
     OverheadPrayer want = PRAYER_NONE;
     const TfaNpc* target = NULL;
-    int hide_x = -1, hide_y = -1;
+    int hide_x = -1, hide_y = -1, flee_x = -1, flee_y = -1;
     int flee = 0;
     if (s->room == TFA_ROOM_GUARDIAN) {
         target = tfa_npc_first(s, TFA_NPC_GUARDIAN);
         want = s->boss.guardian.phase == TFA_GUARDIAN_GROUNDED ? PRAYER_PROTECT_MELEE : PRAYER_PROTECT_RANGED;
+    } else if (s->room == TFA_ROOM_DREADNOTH) {
+        target = tfa_npc_first(s, TFA_NPC_DREADNOTH);
+        want = PRAYER_PROTECT_MELEE;
+        int soonest = 1 << 30;
+        for (int h = 0; h < tp->incoming.count; h++) {
+            const TfaIncomingHit* hit = &tp->incoming.hits[h];
+            if (hit->ticks_remaining < 2 || hit->ticks_remaining >= soonest || hit->damage == 0) continue;
+            soonest = hit->ticks_remaining;
+            want = hit->attack_style == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED : PRAYER_PROTECT_MELEE;
+        }
+        int best = target && target->attackable ? 4 : 1 << 30;
+        for (int i = 1; i < TFA_NUM_TARGET_SLOTS; i++) {
+            const TfaNpc* j = &s->npcs[i];
+            if (!j->active || j->kind != TFA_NPC_JELLY || !j->attackable) continue;
+            int d = chebyshev_distance(j->x, j->y, tp->player.x, tp->player.y);
+            if (d < best) { best = d; target = j; }
+        }
+        const TfaNpc* boss = tfa_npc_first(s, TFA_NPC_DREADNOTH);
+        if (boss && encounter_rect_distance(tp->player.x, tp->player.y, 1, boss->x, boss->y, boss->size) <= 1)
+            flee_x = boss->x, flee_y = boss->y;
     } else if (s->room == TFA_ROOM_MOIA) {
         target = tfa_npc_first(s, TFA_NPC_MOIA);
         want = s->boss.moia.magic_land_tick == s->tick + 1 ? PRAYER_PROTECT_MAGIC : PRAYER_PROTECT_RANGED;
@@ -102,6 +122,15 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
         }
     }
     if (flee) acts[OSRS_HEAD_PRIMARY] = flee;
+    if (flee_x >= 0) {
+        int best = encounter_rect_distance(tp->player.x, tp->player.y, 1, flee_x, flee_y, 5);
+        for (int a = 1; a < OSRS_PRIMARY_MOVE_ACTIONS; a++) {
+            int nx = tp->player.x + ENCOUNTER_MOVE_TARGET_DX[a], ny = tp->player.y + ENCOUNTER_MOVE_TARGET_DY[a];
+            if (tfa_layout_blocked(tfa_room_layout(s->room), nx, ny) || tfa_tile_danger(s, p, nx, ny) >= 0) continue;
+            int d = encounter_rect_distance(nx, ny, 1, flee_x, flee_y, 5);
+            if (d > best) { best = d; acts[OSRS_HEAD_PRIMARY] = a; }
+        }
+    }
     int here = tfa_tile_danger(s, p, tp->player.x, tp->player.y);
     if (here >= 0 && here <= 1) {
         for (int a = 1; a < OSRS_PRIMARY_MOVE_ACTIONS; a++) {

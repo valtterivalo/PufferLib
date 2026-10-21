@@ -1,5 +1,3 @@
-#define TFA_PI 3.14159265358979323846
-
 /* Archive Guardian. Every number below is measured from 24 recorded fights
    (fixtures/tfa_guardian_events.tsv) unless the comment says otherwise. */
 
@@ -32,7 +30,7 @@ typedef struct {
     int ranged_hit_ticks;         /* P0 hit at anim +4: 388/856 */
     int ranged_max_hit;           /* unprotected hits 20, 33, 14 (n=3): max observed 33 */
     int ranged_protected_pct;     /* protected hits uniform 0..10 (n=380), 33 * 30% rounds up to 10 */
-    int ranged_cone_degrees;      /* secondary targets mostly within ~60 degrees of the primary; provisional */
+    int ranged_splash;            /* other players within this distance of the primary also get a projectile: 55/75 of those within 4 did, 53/447 beyond; provisional */
     int ranged_keep_target_of_170;
     int special_intervals[2];     /* flying-phase special gaps 25 (38) or 30 (21) */
     int first_special;            /* first special of a flying phase, from fight start or rise */
@@ -64,7 +62,7 @@ static const TfaGuardianTuning TFA_GUARDIAN = {
     .ranged_hit_ticks = 4,
     .ranged_max_hit = 33,
     .ranged_protected_pct = 30,
-    .ranged_cone_degrees = 60,
+    .ranged_splash = 4,
     .ranged_keep_target_of_170 = 127,
     .special_intervals = { 25, 30 },
     .first_special = 20,
@@ -153,11 +151,6 @@ static int tfa_guardian_pick_target(TfaState* s, int current) {
     return n ? c[tfa_rand(s, n)] : -1;
 }
 
-static double tfa_guardian_bearing(const TfaNpc* g, int x, int y) {
-    double cx = tfa_guardian_center2(g, 0) * 0.5, cy = tfa_guardian_center2(g, 1) * 0.5;
-    return atan2((double)y - cy, (double)x - cx);
-}
-
 static void tfa_guardian_ranged(TfaState* s, TfaNpc* g) {
     TfaGuardianState* gs = &s->boss.guardian;
     int primary = tfa_guardian_pick_target(s, gs->target);
@@ -166,13 +159,11 @@ static void tfa_guardian_ranged(TfaState* s, TfaNpc* g) {
     g->target = (int8_t)primary;
     g->act = TFA_ACT_RANGED;
     tfa_npc_anim(s, g, GUARDIAN_ANIM_RANGED);
-    double aim = tfa_guardian_bearing(g, s->players[primary].player.x, s->players[primary].player.y);
-    double cone = TFA_GUARDIAN.ranged_cone_degrees * TFA_PI / 180.0;
+    const Player* aim = &s->players[primary].player;
     for (int p = 0; p < s->team_size; p++) {
         if (!tfa_alive(s, p)) continue;
-        double b = tfa_guardian_bearing(g, s->players[p].player.x, s->players[p].player.y);
-        double d = fabs(remainder(b - aim, 2.0 * TFA_PI));
-        if (p != primary && d > cone) continue;
+        if (p != primary && chebyshev_distance(s->players[p].player.x, s->players[p].player.y, aim->x, aim->y) > TFA_GUARDIAN.ranged_splash)
+            continue;
         int prayed = encounter_prayer_correct_for_style(s->players[p].player.prayer, ATTACK_STYLE_RANGED);
         int max_hit = prayed
             ? (TFA_GUARDIAN.ranged_max_hit * TFA_GUARDIAN.ranged_protected_pct + 99) / 100

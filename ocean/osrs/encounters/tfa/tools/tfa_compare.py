@@ -11,6 +11,7 @@ ATTACKS = {
     "xarth": {"14983", "14984", "14985", "14992", "14989"},
     "bork": {"14542", "14550", "14551", "14554", "14555"},
     "moia": {"14785", "14788"},
+    "dreadnoth": {"14779", "14777", "14780", "14782"},
 }
 
 
@@ -477,6 +478,145 @@ def moia(real, sim):
     print(f"{'ok ' if ok else 'BAD'} {'binder move phases':28s} real {sorted(rs)} sim {sorted(ss)}")
     exact("late binder spawn", moia_late_binders(real), moia_late_binders(sim), failures)
     exact("Moia tile after teleport", moia_teleports(real), moia_teleports(sim), failures)
+def boss_anims(ev, anim):
+    return sorted(e["t"] for e in ev if e["kind"] == "ANIM" and base(e["actor"]) == "16665" and e["id"] == anim)
+
+
+def slam_groups(ev):
+    groups = []
+    for t in boss_anims(ev, "14777"):
+        if groups and t - groups[-1][-1] <= 6:
+            groups[-1].append(t)
+        else:
+            groups.append([t])
+    return groups
+
+
+def slam_group_sizes(fights):
+    return hist(len(g) for ev in fights.values() for g in slam_groups(ev))
+
+
+def slam_gaps(fights):
+    return hist(b - a for ev in fights.values() for g in slam_groups(ev) for a, b in zip(g, g[1:]))
+
+
+def spawn_batches(ev):
+    first_jump = min(boss_anims(ev, "14780"), default=10**9)
+    per = collections.Counter(e["t"] for e in ev if e["kind"] == "NPC+" and e["id"] == "16666" and e["t"] < first_jump)
+    return sorted((t, n) for t, n in per.items() if n >= 7)
+
+
+def spawn_offset(fights):
+    out = []
+    for ev in fights.values():
+        batches = spawn_batches(ev)
+        for g in slam_groups(ev):
+            t = next((t for t, n in batches if 0 < t - g[-1] <= 20), None)
+            if t is not None:
+                out.append(t - g[-1])
+    return hist(out)
+
+
+def spawn_sizes(fights):
+    return hist(12 if n >= 11 else n for ev in fights.values() for t, n in spawn_batches(ev))
+
+
+def hp_pct_at_group_start(fights, scale_real):
+    out = [[], [], []]
+    for ev in fights.values():
+        hp = [(e["t"], int(e["id"]) * 100 / int(e["a"])) for e in ev if e["kind"] == "NHP" and base(e["actor"]) == "16665" and int(e["id"]) >= 0]
+        for i, g in enumerate(slam_groups(ev)[:3]):
+            v = [p for t, p in hp if t <= g[0]]
+            if v:
+                out[i].append(v[-1])
+    return out
+
+
+def changes(pos):
+    return [p for i, p in enumerate(pos) if i == 0 or p[1:] != pos[i - 1][1:]]
+
+
+def boss_step_gaps(fights):
+    out = []
+    for ev in fights.values():
+        pos = changes([(e["t"], int(e["x"]), int(e["y"])) for e in ev if e["kind"] == "NPOS" and base(e["actor"]) == "16665"])
+        jumps = set(boss_anims(ev, "14780"))
+        out += [b[0] - a[0] for a, b in zip(pos, pos[1:]) if max(abs(a[1] - b[1]), abs(a[2] - b[2])) == 1 and b[0] not in jumps and b[0] - a[0] <= 4]
+    return hist(out)
+
+
+def jelly_step_gaps(fights):
+    out = []
+    for ev in fights.values():
+        pos = collections.defaultdict(list)
+        for e in ev:
+            if e["kind"] == "NPOS" and base(e["actor"]) == "16666":
+                pos[e["actor"]].append((e["t"], int(e["x"]), int(e["y"])))
+        for p in pos.values():
+            p = changes(p)
+            out += [b[0] - a[0] for a, b in zip(p, p[1:]) if max(abs(a[1] - b[1]), abs(a[2] - b[2])) == 1 and b[0] - a[0] <= 4]
+    return hist(out)
+
+
+def jelly_hp(fights):
+    out = []
+    for ev in fights.values():
+        dmg = collections.Counter()
+        for e in ev:
+            if e["kind"] == "NPC+" and base(e["actor"]) == "16666":
+                dmg[e["actor"]] = 0
+            if e["kind"] == "HIT" and base(e["actor"]) == "16666":
+                dmg[e["actor"]] += int(e["id"])
+            if e["kind"] == "ANIM" and e["id"] == "1587" and dmg[e["actor"]] > 0:
+                out.append(dmg[e["actor"]])
+    return hist(out)
+
+
+def blood_after_slam(fights):
+    out = []
+    for ev in fights.values():
+        objs = collections.Counter(e["t"] for e in ev if e["kind"] == "OBJ+" and e["id"] == "62609")
+        out += [objs[t + 1] for g in slam_groups(ev) for t in g]
+    return hist(out)
+
+
+def slam_hit_offsets(fights):
+    count, slams = collections.Counter(), 0
+    for ev in fights.values():
+        hits = [e["t"] for e in ev if e["kind"] == "HIT" and e["actor"] == "P0" and e["a"] in ("16", "17", "12", "13")]
+        for t in boss_anims(ev, "14777"):
+            slams += 1
+            for off in {h - t for h in hits if 0 <= h - t <= 7}:
+                count[off] += 1
+    return {off for off, n in count.items() if n * 10 >= slams * 4}
+
+
+def set_law(name, real, sim, failures):
+    ok = real == sim
+    if not ok:
+        failures.append(name)
+    print(f"{'ok ' if ok else 'BAD'} {name:28s} real {sorted(real)!s:42s} sim {sorted(sim)}")
+
+
+def dreadnoth(real, sim):
+    failures = []
+    set_law("slams per group", set(slam_group_sizes(real)), set(slam_group_sizes(sim)), failures)
+    compare("slam gap within group", slam_gaps(real), slam_gaps(sim), failures)
+    compare("14779 next attack", next_attack(real, "dreadnoth", "14779"), next_attack(sim, "dreadnoth", "14779"), failures)
+    compare("jelly spawn after last slam", spawn_offset(real), spawn_offset(sim), failures)
+    set_law("jelly wave sizes", {n for n, c in spawn_sizes(real).items() if c >= 4}, {n for n, c in spawn_sizes(sim).items() if c >= 4}, failures)
+    for i, (r, m) in enumerate(zip(hp_pct_at_group_start(real, 1), hp_pct_at_group_start(sim, 1))):
+        median_law(f"HP pct at slam group {i + 1}", [round(x) for x in r], [round(x) for x in m], 3, failures)
+    compare("boss step gap", boss_step_gaps(real), boss_step_gaps(sim), failures)
+    compare("jelly step gap", jelly_step_gaps(real), jelly_step_gaps(sim), failures)
+    rh, sh = jelly_hp(real), jelly_hp(sim)
+    ok = max(sh) <= max(v for v, n in rh.items() if n >= 3)
+    if not ok:
+        failures.append("jelly hp")
+    print(f"{'ok ' if ok else 'BAD'} {'jelly hp (max damage taken)':28s} real {max(v for v, n in rh.items() if n >= 3):<42} sim {max(sh)}")
+    compare("blood tiles after slam", blood_after_slam(real), blood_after_slam(sim), failures)
+    compare("4211 launch, flight", projectile_offsets(real, "14777", "4211"), projectile_offsets(sim, "14777", "4211"), failures)
+    set_law("slam P0 hit offsets", slam_hit_offsets(real), slam_hit_offsets(sim), failures)
     return failures
 
 
@@ -488,7 +628,7 @@ def main():
         meta = {r["fight_id"]: r for r in csv.DictReader(open(FIXTURES / "tfa_fights.tsv"), delimiter="\t")}
         real = {k: v for k, v in real.items() if meta[k]["party_size"] == party}
     sim = load(sim_path)
-    failures = {"guardian": guardian, "xarth": xarth, "bork": bork, "moia": moia}[boss](real, sim)
+    failures = {"guardian": guardian, "xarth": xarth, "dreadnoth": dreadnoth, "bork": bork, "moia": moia}[boss](real, sim)
     print(f"{len(failures)} laws differ: {failures}" if failures else "all laws agree")
     sys.exit(1 if failures else 0)
 
