@@ -9,7 +9,7 @@ claimed = the note's count of attack-to-attack gaps equal to the stated value. c
 | Guardian 14754 next 15 | cycles-b | 72 (73) | 92 (93) | 72 (73) | match |
 | Guardian 14748 next 5 | cycles-b | 64 (65) | 64 (65) | 64 (65) | match |
 | Guardian 14745 next 4 | cycles-b | 18 (18) | 19 (19) | 19 (19) | DIFFERS |
-| Xarth 14985 next 4 | cycles-b | 302 (302) | 327 (327) | 327 (327) | DIFFERS |
+| Xarth 14985 next 4 | cycles-b | 302 (302) | 333 (333) | 333 (333) | DIFFERS |
 | Xarth 14983 next 4 | cycles-b | 4 (4) | 4 (4) | 4 (4) | match |
 | Xarth 14992 next 3 | cycles-b | 12 (12) | 15 (15) | 15 (15) | DIFFERS |
 | Dreadnoth 14780 next 8 | cycles-b | 44 (45) | 53 (58) | 53 (58) | DIFFERS |
@@ -44,4 +44,4 @@ claimed = the note's count of attack-to-attack gaps equal to the stated value. c
 | anim 14779 basic attack every 4t | 4:29 5:3 6:1 7:4 8:2 9:3 10:2 11:2 12:1 15:3 16:1 17:6 19:2 20:3 21:4 22:1 23:1 25:4 26:1 28:1 29:3 30:1 33:1 35:1 37:1 39:1 46:1 50:1 53:1 54:1 75:1 | match |
 | projectile 4213 magic dagger 5.5t flight | 5.5:3 | match |
 | anim 14785 dagger hits all players ~1t later | first P0 hit delay 1:4 5:1 6:1 | match |
-| projectile 4374 ranged flight 2t | 2.0:328 | match |
+| projectile 4374 ranged flight 2t | 2.0:336 | match |

@@ -81,3 +81,4 @@ xarth_02	xarth	session_20261020T182203.561Z	44210	44485	attack_anim	44479	44913	
 xarth_03	xarth	session_20261020T192913.215Z	50175	50193	attack_anim	50187	50617	failed_to_survive_chat	wipe	3	1	2	50619	-	uncapped
 xarth_04	xarth	session_20261020T192913.215Z	52876	52916	attack_anim	52910	53238	challenge_complete_chat	kill	3	0	0	53237	Challenge complete: Xarth. Duration: 3:17. Total: 22:16 (new personal best);ticks_start_to_complete=328	uncapped
 xarth_05	xarth	session_20261021T103603.940Z	16198	16237	attack_anim	16231	16483	challenge_complete_chat	kill	5	0	0	16482	Challenge complete: Xarth. Duration: 2:31. Total: 16:50 (new personal best);ticks_start_to_complete=252	uncapped
+xarth_06	xarth	session_20261021T213604.254Z	25199	25200	attack_anim	-	25241	last_boss_tick	unknown	6	0	0	25241	recording_joined_mid_fight;recording_ended_mid_fight	floored
