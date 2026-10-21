@@ -452,8 +452,6 @@ static void tfa_guardian_tick(TfaState* s, TfaContext* ctx) {
             }
             break;
         }
-        case TFA_GUARDIAN_LANDING:
-        case TFA_GUARDIAN_RISING:
         case TFA_GUARDIAN_DYING:
             break;
     }
