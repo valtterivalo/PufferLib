@@ -419,6 +419,7 @@ def dreadnoth(real, sim):
         failures.append("jelly hp")
     print(f"{'ok ' if ok else 'BAD'} {'jelly hp (max damage taken)':28s} real {max(v for v, n in rh.items() if n >= 3):<42} sim {max(sh)}")
     compare("blood tiles after slam", blood_after_slam(real), blood_after_slam(sim), failures)
+    compare("4211 launch, flight", projectile_offsets(real, "14777", "4211"), projectile_offsets(sim, "14777", "4211"), failures)
     set_law("slam P0 hit offsets", slam_hit_offsets(real), slam_hit_offsets(sim), failures)
     return failures
 
