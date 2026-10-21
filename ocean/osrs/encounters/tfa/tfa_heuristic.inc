@@ -194,6 +194,17 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
             go_y = boss->y + 1;
             if (tfa_layout_blocked(tfa_room_layout(s->room), go_x, go_y) || oc_quadrant(go_x, go_y) != oc_quadrant(boss->x + 1, boss->y + 1)) go_x = boss->x + 3;
         }
+        /* The Untether slam: inside his 3x3 for the S check of who is outside (decided by S-2, moved before S), out for the S+1 check of who is inside. */
+        if (os->slam_tick > 0 && s->tick >= os->slam_tick - 5 && s->tick <= os->slam_tick - 1) {
+            int best = 1 << 30, inside = s->tick <= os->slam_tick - 2;
+            for (int x = boss->x - 1; x <= boss->x + boss->size; x++)
+                for (int y = boss->y - 1; y <= boss->y + boss->size; y++) {
+                    int under = x >= boss->x && x < boss->x + boss->size && y >= boss->y && y < boss->y + boss->size;
+                    if (under != inside || tfa_layout_blocked(tfa_room_layout(s->room), x, y) || oc_quadrant(x, y) != oc_quadrant(boss->x + 1, boss->y + 1)) continue;
+                    int d = chebyshev_distance(x, y, tp->player.x, tp->player.y);
+                    if (d < best) { best = d; go_x = x; go_y = y; }
+                }
+        }
         if ((os->deflect == ATTACK_STYLE_RANGED || os->soul_split) && target && target->kind == TFA_NPC_OCELLUS) target = NULL;
         if (!target) {
             if (tp->player.prayer != want && want == PRAYER_NONE) acts[OSRS_HEAD_OVERHEAD] = ENCOUNTER_OVERHEAD_OFF;

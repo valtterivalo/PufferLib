@@ -14,10 +14,11 @@ typedef struct {
     int magic_delay;             /* 14851 -> hit +2 */
     int special_after_slash;     /* spin and Untether 4 after the slash, Insolence text at +4 and 14848 at +6 */
     int spin_hit_min, spin_hit_max; /* 14..26 on 14871, 17 on the first hit */
-    int spin_debris_short, spin_debris_long; /* gfx 4346 at +3, +6 after the quadrant destroyed (6/6 spins) */
+    int spin_debris_short, spin_debris_long; /* gfx 4346 at +3, +6 after the quadrant destroyed (6/6 spins); the long spin also checks the short spin's tick */
     int spin_loop;               /* 14870 at +5 in the long variant */
     int spin_to_next;            /* 14871 -> next attack +4 */
-    int injury_after, injury_ticks, hit_after; /* injured at G+1, locked for 3 ticks, unprotected hit at G+2 */
+    int injury_after, injury_ticks, hit_after; /* a protection prayer at t+4 injures (3 ticks locked) and the t+5 hit lands through it; off at t+4 and back
+                                                   by t+5 blocks it (run 5: 6/6 spins, 17363 the one clean flick); the long spin checks t+4 and t+7, hits t+5 and t+8 */
     int void_first_min, void_first_max, void_tick_min, void_tick_max, void_tick_count; /* 62702: 14..16 at G+5, 6..7 every 2 for 12 ticks */
     int void_first;
     int unt_loop;                /* 14858 at +2 */
@@ -25,10 +26,14 @@ typedef struct {
     int unt_dot_hit, unt_dot_min, unt_dot_max, unt_dot_decoys; /* hits 4 later, 23..27 (n=12), 12 tiles per batch */
     int unt_wave_min, unt_wave_max; /* waves 17..27 under no Magic, 0 under Magic (12/12) at +10 +14 +18 +22 */
     int unt_pray_on, unt_pray_off;
-    int unt_slam_tell, unt_slam_anim, unt_slam_hit; /* gfx 4320 +25, 14861 +29, the hit lands on the anim tick for 9 of 13 recorded hits and one later for 4 */
-    int unt_slam_radius, unt_slam_min, unt_slam_max; /* 13/13 hits at Chebyshev 0..4, 34..42 */
+    int unt_slam_tell, unt_slam_anim, unt_slam_hit; /* gfx 4320 on his centre +25, 14861 +29 = S */
+    int unt_slam_out_min, unt_slam_out_max; /* at S everyone outside his 3x3 at S-1: 34..42 */
+    int unt_slam_in_min, unt_slam_in_max;   /* at S+1 everyone inside it at S: 19..34 (runs 2-5, every player, both slams of run 5) */
     int unt_next;                /* 14857 -> next 14842 +37 */
-    int destroy_text, destroy_anim, destroy_end, destroy_move, destroy_boss, destroy_next; /* +31 +33 +42 +44 +49 +52 (f6, run 4) */
+    int destroy_hp_pct[2];       /* quadrant destroy at the first action slot with hp at or below 75% (run 4 crossed 76.7 -> 73.2, run 5 77.9 -> 75.1), then 50%: provisional */
+    int destroy_after_slam;      /* after an Untether 14860 comes 4 after the slam (run 4) */
+    int destroy_in;              /* elsewhere "Obliteration..." and 14859 2 before the 14860, on the slot the next attack had (run 5, after a spin) */
+    int destroy_end, destroy_move, destroy_boss, destroy_next; /* from the 14860: 14862 +9 (2/2), players moved +11, boss +16, first 14842 +19 (2/2) */
     int destroy_min, destroy_max;/* 6..7 crossing */
     int ins_text, ins_first, ins_gap, ins_count, ins_hit, ins_next; /* text -> 14848 +2, 5 apart x3, hit +3, next +8 after the third */
     int ins_min, ins_max;        /* 33 37 42 43 */
@@ -68,9 +73,12 @@ static const TfaOcellusP3Tuning TFA_OC3 = {
     .unt_wave_min = 17, .unt_wave_max = 27,
     .unt_pray_on = 5, .unt_pray_off = 22,
     .unt_slam_tell = 25, .unt_slam_anim = 29, .unt_slam_hit = 29,
-    .unt_slam_radius = 4, .unt_slam_min = 34, .unt_slam_max = 42,
+    .unt_slam_out_min = 34, .unt_slam_out_max = 42,
+    .unt_slam_in_min = 19, .unt_slam_in_max = 34,
     .unt_next = 37,
-    .destroy_text = 31, .destroy_anim = 33, .destroy_end = 42, .destroy_move = 44, .destroy_boss = 49, .destroy_next = 52,
+    .destroy_hp_pct = { 75, 50 },
+    .destroy_after_slam = 4, .destroy_in = 2,
+    .destroy_end = 9, .destroy_move = 11, .destroy_boss = 16, .destroy_next = 19,
     .destroy_min = 6, .destroy_max = 7,
     .ins_text = 0, .ins_first = 2, .ins_gap = 5, .ins_count = 3, .ins_hit = 3, .ins_next = 8,
     .ins_min = 33, .ins_max = 43,
@@ -271,10 +279,41 @@ static void oc_p3_magic(TfaState* s, TfaNpc* n) {
     }
 }
 
+static void oc_p3_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e);
+
+static int oc_destroy_due(const TfaState* s, const TfaNpc* n) {
+    const TfaOcellusState* os = &s->boss.ocellus;
+    return os->destroyed < 2 && n->hp * 100 <= TFA_OC3.destroy_hp_pct[os->destroyed] * n->max_hp;
+}
+
+/* The quadrant destroy from the 14860 at delay 0 (now) or later: it replaces the pending attack, the second one leads into phase 4. */
+static void oc_destroy(TfaState* s, TfaNpc* n, int delay) {
+    TfaOcellusState* os = oc_state(s);
+    oc_cancel(s, OCE_P3_ATTACK, OCE_P3_ATTACK);
+    if (delay) oc_at(s, delay, OCE_P3_DESTROY, 0, 0);
+    else {
+        TfaOcEvent now = { .tick = s->tick, .kind = OCE_P3_DESTROY };
+        oc_p3_event(s, n, &now);
+    }
+    oc_at(s, delay + TFA_OC3.destroy_end, OCE_P3_DESTROY_END, 0, 0);
+    oc_at(s, delay + TFA_OC3.destroy_move, OCE_P3_DESTROY_MOVE, 0, 0);
+    oc_at(s, delay + TFA_OC3.destroy_boss, OCE_P3_DESTROY_MOVE, 1, 0);
+    int next = delay + TFA_OC3.destroy_next;
+    oc_at(s, next, os->destroyed + (delay ? 1 : 0) == 2 ? OCE_P4_START : OCE_P3_ATTACK, 0, 0);
+    os->pause_until = s->tick + delay + TFA_OC3.destroy_boss + 2;
+    os->busy_until = s->tick + next;
+    os->next_attack_tick = s->tick + next;
+}
+
 static void oc_p3_attack(TfaState* s, TfaNpc* n) {
     TfaOcellusState* os = oc_state(s);
     n->act = TFA_ACT_IDLE;
     os->busy_until = s->tick;
+    if (oc_destroy_due(s, n)) {
+        tfa_npc_anim(s, n, OC_ANIM_DESTROY_IN);
+        oc_destroy(s, n, TFA_OC3.destroy_in);
+        return;
+    }
     if (os->quad_first) {
         os->quad_first = 0;
         oc_at(s, 1, OCE_P3_BOMB, 0, 0);
@@ -324,22 +363,25 @@ static void oc_spin(TfaState* s, TfaNpc* n) {
     os->spins++;
     if (os->spins % TFA_OC3.vine_every == 1) os->vine_pending = 1;
     oc_whole_room(s, s->tick + 1, TFA_OC3.spin_hit_min, TFA_OC3.spin_hit_max, ATTACK_STYLE_MELEE, 0);
-    oc_whole_room(s, s->tick + g + TFA_OC3.hit_after, TFA_OC3.spin_hit_min, TFA_OC3.spin_hit_max, ATTACK_STYLE_MELEE, 0);
     oc_at(s, g, OCE_P3_SPIN_DEBRIS, 0, 0);
-    oc_at(s, g + TFA_OC3.injury_after, OCE_P3_SPIN_INJURY, 0, 0);
-    oc_at(s, g, OCE_P3_WANT, PRAYER_NONE, 0);
-    oc_at(s, g + 1, OCE_P3_WANT, PRAYER_PROTECT_MELEE, 0);
+    for (int k = 0; k <= long_variant; k++) {
+        int check = (k ? TFA_OC3.spin_debris_long : TFA_OC3.spin_debris_short) + TFA_OC3.injury_after;
+        oc_whole_room(s, s->tick + check - TFA_OC3.injury_after + TFA_OC3.hit_after, TFA_OC3.spin_hit_min, TFA_OC3.spin_hit_max, ATTACK_STYLE_MELEE, 0);
+        oc_at(s, check, OCE_P3_SPIN_INJURY, 0, 0);
+        oc_at(s, check - 1, OCE_P3_WANT, PRAYER_NONE, 0);
+        oc_at(s, check, OCE_P3_WANT, PRAYER_PROTECT_MELEE, 0);
+    }
     if (long_variant) oc_at(s, TFA_OC3.spin_loop, OCE_P3_ANIM, OC_ANIM_SPIN_LOOP, 0);
     oc_at(s, g + TFA_OC3.hit_after, OCE_P3_ANIM, OC_ANIM_SPIN_END, 0);
     int next = g + TFA_OC3.hit_after + TFA_OC3.spin_to_next;
     oc_at(s, next, OCE_P3_ATTACK, 0, 0);
+    oc_at(s, next - TFA_OC3.destroy_in, OCE_P3_DESTROY_CHECK, 1, 0);
     os->next_attack_tick = s->tick + next;
     os->busy_until = s->tick + next;
 }
 
 static void oc_untether(TfaState* s, TfaNpc* n) {
     TfaOcellusState* os = oc_state(s);
-    int destroy = ++os->untethers % 2 == 0;
     n->act = TFA_ACT_SPECIAL;
     tfa_npc_anim(s, n, OC_ANIM_UNTETHER);
     oc_at(s, TFA_OC3.unt_loop, OCE_P3_ANIM, OC_ANIM_UNTETHER_LOOP, 0);
@@ -349,18 +391,10 @@ static void oc_untether(TfaState* s, TfaNpc* n) {
     oc_at(s, TFA_OC3.unt_slam_tell, OCE_P3_SLAM, 0, 0);
     oc_at(s, TFA_OC3.unt_slam_anim, OCE_P3_ANIM, OC_ANIM_SLAM, 0);
     int next = TFA_OC3.unt_next;
-    os->busy_until = s->tick + TFA_OC3.unt_slam_hit;
+    os->busy_until = s->tick + TFA_OC3.unt_slam_hit + 1;
     os->pause_until = s->tick + TFA_OC3.unt_slam_anim + 3;
-    if (destroy) {
-        oc_at(s, TFA_OC3.destroy_anim, OCE_P3_DESTROY, 0, 0);
-        oc_at(s, TFA_OC3.destroy_end, OCE_P3_DESTROY_END, 0, 0);
-        oc_at(s, TFA_OC3.destroy_move, OCE_P3_DESTROY_MOVE, 0, 0);
-        oc_at(s, TFA_OC3.destroy_boss, OCE_P3_DESTROY_MOVE, 1, 0);
-        next = TFA_OC3.destroy_next;
-        os->pause_until = s->tick + TFA_OC3.destroy_boss + 2;
-        os->busy_until = s->tick + next;
-    }
-    oc_at(s, next, destroy && os->destroyed == 2 ? OCE_P4_START : OCE_P3_ATTACK, 0, 0);
+    oc_at(s, next, OCE_P3_ATTACK, 0, 0);
+    oc_at(s, TFA_OC3.unt_slam_hit + TFA_OC3.destroy_after_slam, OCE_P3_DESTROY_CHECK, 0, 0);
     os->next_attack_tick = s->tick + next;
 }
 
@@ -409,7 +443,10 @@ static void oc_p3_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
         case OCE_P3_ARRIVE: oc_arrive(s, n); break;
         case OCE_P3_ATTACK: oc_p3_attack(s, n); break;
         case OCE_P3_SPECIAL:
-            if (e->arg % 2 == 0) oc_spin(s, n);
+            if (oc_destroy_due(s, n)) {
+                tfa_npc_anim(s, n, OC_ANIM_DESTROY_IN);
+                oc_destroy(s, n, TFA_OC3.destroy_in);
+            } else if (e->arg % 2 == 0) oc_spin(s, n);
             else if (e->arg == 1) oc_untether(s, n);
             else oc_insolence(s, n);
             break;
@@ -445,11 +482,25 @@ static void oc_p3_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
             if (e->arg + 1 < TFA_OC3.unt_dots_count) oc_at(s, TFA_OC3.unt_dots_gap, OCE_P3_UNTETHER_DOTS, e->arg + 1, 0);
             break;
         case OCE_P3_SLAM: {
-            int r = TFA_OC3.unt_slam_radius, c = 1;
-            oc_haz(s, n->x + c - r, n->y + c - r, 2 * r + 1, 2 * r + 1, s->tick + TFA_OC3.unt_slam_hit - TFA_OC3.unt_slam_tell,
-                TFA_OC3.unt_slam_min, TFA_OC3.unt_slam_max, ATTACK_STYLE_NONE, 100, OC_GFX_SLAM, -1);
+            int out = s->tick + TFA_OC3.unt_slam_hit - TFA_OC3.unt_slam_tell, fx = n->x, fy = n->y, w = n->size;
+            oc_haz(s, 0, 0, fx, TFA_ROOM_SIZE, out, TFA_OC3.unt_slam_out_min, TFA_OC3.unt_slam_out_max, ATTACK_STYLE_NONE, 100, 0, -1);
+            oc_haz(s, fx + w, 0, TFA_ROOM_SIZE - fx - w, TFA_ROOM_SIZE, out, TFA_OC3.unt_slam_out_min, TFA_OC3.unt_slam_out_max, ATTACK_STYLE_NONE, 100, 0, -1);
+            oc_haz(s, fx, 0, w, fy, out, TFA_OC3.unt_slam_out_min, TFA_OC3.unt_slam_out_max, ATTACK_STYLE_NONE, 100, 0, -1);
+            oc_haz(s, fx, fy + w, w, TFA_ROOM_SIZE - fy - w, out, TFA_OC3.unt_slam_out_min, TFA_OC3.unt_slam_out_max, ATTACK_STYLE_NONE, 100, 0, -1);
+            oc_haz(s, fx, fy, w, w, out + 1, TFA_OC3.unt_slam_in_min, TFA_OC3.unt_slam_in_max, ATTACK_STYLE_NONE, 100, 0, -1);
+            tfa_fx_ground(s, fx + w / 2, fy + w / 2, OC_GFX_SLAM, 0);
+            os->slam_tick = out;
             break;
         }
+        case OCE_P3_DESTROY_CHECK:
+            if (!oc_destroy_due(s, n)) break;
+            if (e->arg) {
+                tfa_npc_anim(s, n, OC_ANIM_DESTROY_IN);
+                oc_destroy(s, n, TFA_OC3.destroy_in);
+            } else {
+                oc_destroy(s, n, 0);
+            }
+            break;
         case OCE_P3_INSOLENCE: {
             int target = oc_random_alive(s);
             tfa_npc_anim(s, n, OC_ANIM_INSOLENCE);
@@ -458,7 +509,7 @@ static void oc_p3_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
         }
         case OCE_P3_DESTROY:
             tfa_npc_anim(s, n, OC_ANIM_DESTROY);
-            os->free_roam_until = s->tick + TFA_OC3.destroy_move - TFA_OC3.destroy_anim + 1;
+            os->free_roam_until = s->tick + TFA_OC3.destroy_move + 1;
             os->destroyed++;
             os->quad_index++;
             break;

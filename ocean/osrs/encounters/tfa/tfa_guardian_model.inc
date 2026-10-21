@@ -174,7 +174,7 @@ typedef struct {
     int slot;
     int groups;
     int specials;
-    int untethers;
+    int slam_tick;               /* the Untether slam S: outside his 3x3 at S-1 is hit at S, inside at S at S+1 */
     int spins;
     int pause_until;
     int debris_x[TFA_MAX_PLAYERS], debris_y[TFA_MAX_PLAYERS];

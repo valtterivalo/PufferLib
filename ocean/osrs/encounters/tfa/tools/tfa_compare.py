@@ -1538,6 +1538,63 @@ def ocellus_ground_laws(real, sim, failures):
         shapes_law(label, r, s, failures)
 
 
+def ocellus_slam_rule(fights):
+    """Per placed raider and Untether slam S (14861): ('out', outside his 3x3 at S-1, hit >= 15 at S) and ('in', inside it at S, hit >= 15 at S+1)."""
+    out = []
+    for ev in fights.values():
+        pos = {(e["t"], e["actor"]): (int(e["x"]), int(e["y"])) for e in ev if e["kind"] == "POS" and e["x"] != "-"}
+        boss = sorted((e["t"], (int(e["x"]), int(e["y"]))) for e in ev if e["kind"] == "NPOS" and base(e["actor"]) == "16677")
+        hits = {(e["t"], e["actor"]) for e in ev if e["kind"] == "HIT" and e["actor"].startswith("P") and int(e["id"]) >= 15}
+        for S in (e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14861"):
+            b = max((m for m in boss if m[0] < S), default=None)
+            if b is None:
+                continue
+            under = lambda xy: b[1][0] <= xy[0] <= b[1][0] + 2 and b[1][1] <= xy[1] <= b[1][1] + 2
+            for p in {a for (t, a) in pos if t == S - 1}:
+                if (S - 1, p) in pos:
+                    out.append(("out", not under(pos[(S - 1, p)]), (S, p) in hits))
+                if (S, p) in pos:
+                    out.append(("in", under(pos[(S, p)]), (S + 1, p) in hits))
+    return hist(out)
+
+
+def ocellus_destroys(fights):
+    """Per quadrant destroy (14860 at D): (form, 14862 - D, first attack after the 14862 - 14862): form 'spin' with 14859 at D-2, 'slam' with 14861 at D-4.
+    Destroys whose fight ends before the next attack are left out."""
+    out = []
+    for ev in fights.values():
+        anims = collections.defaultdict(list)
+        for e in ev:
+            if e["kind"] == "ANIM" and base(e["actor"]) == "16677":
+                anims[e["id"]].append(e["t"])
+        for d in anims["14860"]:
+            form = "spin" if d - 2 in anims["14859"] else "slam" if d - 4 in anims["14861"] else "other"
+            end = min((t for t in anims["14862"] if t > d), default=None)
+            nxt = min((t for a in ("14842", "14846", "14851") for t in anims[a] if end is not None and t > end), default=None)
+            if nxt is not None:
+                out.append((form, end - d, nxt - end))
+    return hist(out)
+
+
+def ocellus_first_destroy_hp(fights):
+    """The first destroy: (Ocellus' bar at or below 75 at the 14860, at least 75 the tick before the special before it began; the sim's bar rounds down,
+    the client's up)."""
+    out = []
+    for ev in fights.values():
+        bars = sorted((e["t"], int(e["id"])) for e in ev if e["kind"] == "NHP" and base(e["actor"]) == "16677" and e["id"] != "-1")
+        rays = sorted(e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14848")
+        specials = sorted([e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] in ("14869", "14857")] +
+            [t for i, t in enumerate(rays) if i == 0 or t - rays[i - 1] > 12])
+        destroys = sorted(e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14860")
+        if not destroys or not bars:
+            continue
+        d = destroys[0]
+        before = max((t for t in specials if t < d - 4), default=None)
+        bar = lambda t: max((b for b in bars if b[0] <= t), default=(0, 100))[1]
+        out.append((bar(d) <= 75, before is not None and bar(before - 1) >= 75))
+    return hist(out)
+
+
 def ocellus(real, sim):
     failures = []
     rs, ss = barrage_shapes(real), barrage_shapes(sim)
@@ -1570,6 +1627,9 @@ def ocellus(real, sim):
     compare("14842 P0 hit delay", anim_to_p0_hit(real, "14842", 1), anim_to_p0_hit(sim, "14842", 1), failures)
     compare("14861 -> siphon spawn", first_offsets(real, "14861", "NPC+", "16679", 10), first_offsets(sim, "14861", "NPC+", "16679", 10), failures)
     compare("14881 -> first 14842", anim_offsets(real, "14881", "14842", 20), anim_offsets(sim, "14881", "14842", 20), failures)
+    support("slam: (check, where, hit)", ocellus_slam_rule(real), ocellus_slam_rule(sim), failures)
+    support("destroy (form, end, next)", ocellus_destroys(real), ocellus_destroys(sim), failures)
+    support("first destroy at 75%", ocellus_first_destroy_hp(real), ocellus_first_destroy_hp(sim), failures)
     ocellus_ground_laws(real, sim, failures)
     damage_laws(real, sim, {"16673", "16674", "16675", "16677"}, failures, rate=False)
     return failures
