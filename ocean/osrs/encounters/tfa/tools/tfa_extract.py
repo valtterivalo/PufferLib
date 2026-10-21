@@ -24,6 +24,8 @@ WANTED = {
     "SCENE_COLLISION_OBSERVED",
     "INTERACTING_OBSERVED",
     "ACTOR_STATE_OBSERVED",
+    "ACTOR_SPOTANIMS_CHANGED_OBSERVED",
+    "NPC_OVERHEAD_ICON_CHANGED_OBSERVED",
 }
 NEEDLES = [f'"eventKind":"{k}"'.encode() for k in WANTED]
 
@@ -62,6 +64,14 @@ def reduce_record(rec):
             return None
         wp = p["state"]["worldPoint"]
         return ["Q", t, s, a["cleanName"], wp["x"], wp["y"], p["state"]["overheadIcon"]]
+    if kind == "ACTOR_SPOTANIMS_CHANGED_OBSERVED":
+        if p["kind"] == "NPC" and not is_boss_npc(p["npcId"]):
+            return None
+        return ["SP", t, s, actor(p), [[x["id"], x["startCycle"] - rec["lastObservedClientCycle"]] for x in p["spotAnims"]]]
+    if kind == "NPC_OVERHEAD_ICON_CHANGED_OBSERVED":
+        if not is_boss_npc(p["npcId"]):
+            return None
+        return ["OH", t, s, actor(p), p["overheadSpriteIds"]]
     if kind == "ANIMATION_OBSERVED":
         a = p["actor"]
         if a["kind"] != "NPC" or not is_boss_npc(a["npcId"]) or p["animation"] == -1:
@@ -456,6 +466,10 @@ def build_fight(rows, local, boss, first, last, first_row, gv, rule_ids):
             if last_mate_pray.get(lab) != pr:
                 add("PRAY", lab, 0, "-", "-", a=pr)
                 last_mate_pray[lab] = pr
+        elif k == "SP":
+            add("SPOT", label(r[3]), "+".join(str(x[0]) for x in r[4]) or "-", "-", "-", a="+".join(str(x[1]) for x in r[4]) or "-")
+        elif k == "OH":
+            add("OVH", label(r[3]), "+".join(str(x) for x in r[4]) or "-", "-", "-")
         elif k == "A":
             x, y = rel(r[5], r[6])
             add("ANIM", npc_label(r[3], r[4]), r[7], x, y, idx=r[4], nid=r[3])
