@@ -1,7 +1,7 @@
 #define TFA_MAX_PLAYERS 4
-#define TFA_MAX_NPCS 40
+#define TFA_MAX_NPCS 64
 #define TFA_NUM_TARGET_SLOTS 8
-#define TFA_MAX_HAZARDS 96
+#define TFA_MAX_HAZARDS 256
 #define TFA_ARENA_MAX ENCOUNTER_ARENA_TOPOLOGY_MAX_DIMENSION
 #define TFA_PLAYER_PRAYER 99
 #define TFA_ROOM_MAX_TICKS 3000
@@ -219,6 +219,7 @@ typedef struct {
     union {
         TfaGuardianState guardian;
         TfaXarthState xarth;
+        TfaDreadnothState dreadnoth;
     } boss;
 } TfaState;
 
