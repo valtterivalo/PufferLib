@@ -161,7 +161,7 @@ typedef struct {
     int eradicate_hits;          /* 6 hits per player after a full meter (fights 1, 2) */
     int eradicate_ticks[6];
     int resume;                  /* 14810 -> 14806 +7 (6/6) */
-    int death_out, death_in, death_transform, death_p2, death_centre; /* hit label of hp 0 +3 (so +2 after the tick that applied it), +3, +2, +7 (4/4); a boss already at the centre transforms +1 after (f4, f5) */
+    int death_out, death_in, death_transform, death_p2, death_centre; /* teleport out 3 after the hit that ends P1 lands, in 3, transform 2 later, P2 7 (4/4); a boss already at the centre transforms 4 after (f4, f5) */
     int hp_base_p1, hp_trio_p1;  /* 2500 duo (wiki), 3630 at 3 players (4/4 fights: damage 3630 incl. heals); the bar's max is 1% more (3667-3668, floor(100 hp / max)): P1 ends when it floors to 0 */
     int hp_base_p3;
 } TfaOcellusP1Tuning;
@@ -187,7 +187,7 @@ static const TfaOcellusP1Tuning TFA_OC1 = {
     .expend_hit_min = 17, .expend_hit_max = 19,
     .eradicate_hits = 6, .eradicate_ticks = { 1, 2, 2, 2, 3, 3 },
     .resume = 7,
-    .death_out = 2, .death_in = 3, .death_transform = 2, .death_p2 = 7, .death_centre = 3,
+    .death_out = 3, .death_in = 3, .death_transform = 2, .death_p2 = 7, .death_centre = 4,
     .hp_base_p1 = 2500, .hp_trio_p1 = 3630,
     .hp_base_p3 = 5250,
 };

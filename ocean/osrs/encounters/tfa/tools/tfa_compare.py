@@ -1708,15 +1708,21 @@ def ocellus_p4_overheads(fights, horizon=56):
     return out
 
 
-def ocellus_quad_tells(fights):
-    """(k, tell) for the k-th quadrant attack 14844 of a fight: the spotanim on Ocellus that tick (4328 melee, 4329 magic, 4330 ranged)."""
+def ocellus_quad_tells(fights, max_quads=None):
+    """The tell on Ocellus at each quadrant attack 14844 (4328 melee, 4329 magic, 4330 ranged): ('first', tell) and (previous, tell) for each
+    consecutive pair, over the first max_quads attacks of a fight."""
     out = collections.Counter()
     for ev in fights.values():
-        quads = sorted(e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14844")
-        for k, q in enumerate(quads):
-            tells = [i for e in ev if e["kind"] == "SPOT" and base(e["actor"]) == "16677" and e["t"] == q for i in e["id"].split("+") if i in ("4328", "4329", "4330")]
-            if tells:
-                out[(k, tells[0])] += 1
+        quads = sorted(e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14844")[:max_quads]
+        tells = []
+        for q in quads:
+            ts = [i for e in ev if e["kind"] == "SPOT" and base(e["actor"]) == "16677" and e["t"] == q for i in e["id"].split("+") if i in ("4328", "4329", "4330")]
+            if ts:
+                tells.append(ts[0])
+        if tells:
+            out[("first", tells[0])] += 1
+        for a, b in zip(tells, tells[1:]):
+            out[(a, b)] += 1
     return out
 
 
@@ -1743,9 +1749,8 @@ def ocellus_p4_laws(real, sim):
     support("phase 4", ocellus_p4(real), ocellus_p4(sim, rises), failures)
     support("P4 overheads", ocellus_p4_overheads(real), ocellus_p4_overheads(sim), failures)
     support("P4 void drops", ocellus_void_drops(real), ocellus_void_drops(sim), failures)
-    rq = ocellus_quad_tells(real)
-    last = max(k for k, _ in rq)
-    support("P4 quadrant tells", rq, collections.Counter({k: v for k, v in ocellus_quad_tells(sim).items() if k[0] <= last}), failures)
+    quads = max(len([e for e in ev if e["kind"] == "ANIM" and e["id"] == "14844"]) for ev in real.values())
+    support("P4 quadrant tells", ocellus_quad_tells(real), ocellus_quad_tells(sim, quads), failures)
     return failures
 
 

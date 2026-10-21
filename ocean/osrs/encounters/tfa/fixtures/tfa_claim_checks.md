@@ -20,11 +20,11 @@ claimed = the note's count of attack-to-attack gaps equal to the stated value. c
 | Ezekiel 14687 next 7 | cycles-a | 139 (160) | 139 (161) | 139 (161) | match |
 | Ezekiel 14688 next 5 | cycles-a | 30 (33) | 30 (33) | 30 (33) | match |
 | Ezekiel 14693 next 4 | cycles-a | 100 (103) | 101 (106) | 101 (106) | DIFFERS |
-| Ocellus P3 14842 next 3 | cycles-a | 23 (23) | 496 (496) | 496 (496) | DIFFERS |
-| Ocellus P3 14846 next 4 | cycles-a | 11 (12) | 225 (259) | 225 (259) | DIFFERS |
-| Ocellus P3 14851 next 6 | cycles-a | 3 (3) | 30 (32) | 30 (32) | DIFFERS |
-| Ocellus P1 14811 next 3 | cycles-a | 22 (55) | 62 (154) | 62 (154) | DIFFERS |
-| Ocellus P1 14810 next 7 | cycles-a | 6 (6) | 21 (23) | 21 (23) | DIFFERS |
+| Ocellus P3 14842 next 3 | cycles-a | 23 (23) | 562 (562) | 562 (562) | DIFFERS |
+| Ocellus P3 14846 next 4 | cycles-a | 11 (12) | 254 (295) | 254 (295) | DIFFERS |
+| Ocellus P3 14851 next 6 | cycles-a | 3 (3) | 36 (38) | 36 (38) | DIFFERS |
+| Ocellus P1 14811 next 3 | cycles-a | 22 (55) | 66 (166) | 66 (166) | DIFFERS |
+| Ocellus P1 14810 next 7 | cycles-a | 6 (6) | 23 (25) | 23 (25) | DIFFERS |
 
 ## rules.txt statements recomputed
 

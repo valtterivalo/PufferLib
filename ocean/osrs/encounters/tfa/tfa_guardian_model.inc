@@ -181,7 +181,7 @@ typedef struct {
     int deflect;
     int soul_split;
     int p4_cycle;
-    int p4_quads;
+    int p4_quads, p4_style, p4_switch_at;
     int p4_step;
     int dead;
     int barrage;

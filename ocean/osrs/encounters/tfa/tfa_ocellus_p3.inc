@@ -102,7 +102,8 @@ typedef struct {
                                     still there next tick it hits */
     int quad_hit;                /* quadrant attack hit 5 after the 14844 (6/6 across ocellus_08 and 11) */
     int quad_protected_pct;      /* one roll for everyone (equal hits on all raiders, 8/8), 6..10 lands through the right prayer; unprotected is unrecorded */
-    int magic_quads;             /* the tell 4329 (magic) on the first 5 attacks, then 4330 (ranged) 2/2 (ocellus_11, 12); 4328 (melee) never seen */
+    int switch_min, switch_max;  /* tells per fight (runs 11-13): 4329 x2; 4329 x5 then 4330 x2; 4328 x2 then 4330. The opening style is melee or magic
+                                    (ranged 0/3), held for 2..5 attacks, then ranged for good: provisional */
     int orb_a_from, orb_a_until; /* soul fragment 4311 spawns at wind-1, collectable (idle 4310) wind+12..wind+24, heals that raider's wind (+40 for a 40) */
     int orb_b_from, orb_b_until; /* the 6-tick variant 4309 after the second wind: wind+6..wind+18 */
     int split_from, split_ticks; /* soul split overhead (sprite 11) from 1 after each 14844 for 5 ticks, one 50 heal splat in it (ocellus_11, 2/2) */
@@ -123,7 +124,7 @@ static const TfaOcellusP4Tuning TFA_OC4 = {
     .drop_first = 5, .drops = 6, .drop_gap = 2,
     .quad_hit = 5,
     .quad_protected_pct = 20,
-    .magic_quads = 5,
+    .switch_min = 2, .switch_max = 5,
     .orb_a_from = 12, .orb_a_until = 24, .orb_b_from = 6, .orb_b_until = 18,
     .split_from = 1, .split_ticks = 5,
     .deflect_range_from = 7,
@@ -669,9 +670,10 @@ static void oc_p4_quadrant(TfaState* s, TfaNpc* n, int second) {
     oc_at(s, TFA_OC4.split_from, OCE_P4_DEFLECT, ATTACK_STYLE_NONE, 0);
     if (!second) oc_at(s, TFA_OC4.deflect_range_from, OCE_P4_DEFLECT, ATTACK_STYLE_RANGED, 0);
     TfaOcellusState* os = oc_state(s);
-    AttackStyle style = os->p4_quads++ < TFA_OC4.magic_quads ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED;
-    n->act = style == ATTACK_STYLE_RANGED ? TFA_ACT_RANGED : TFA_ACT_MAGIC;
-    oc_want(s, style == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED : PRAYER_PROTECT_MAGIC);
+    if (os->p4_quads++ == os->p4_switch_at) os->p4_style = ATTACK_STYLE_RANGED;
+    AttackStyle style = (AttackStyle)os->p4_style;
+    n->act = style == ATTACK_STYLE_MELEE ? TFA_ACT_MELEE : style == ATTACK_STYLE_RANGED ? TFA_ACT_RANGED : TFA_ACT_MAGIC;
+    oc_want(s, style == ATTACK_STYLE_MELEE ? PRAYER_PROTECT_MELEE : style == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED : PRAYER_PROTECT_MAGIC);
     int dmg = tfa_rand_range(s, TFA_OC4.quad_min, TFA_OC4.quad_max);
     for (int p = 0; p < s->team_size; p++)
         if (tfa_alive(s, p)) tfa_queue_npc_hit_land(s, p, dmg, style, TFA_OC4.quad_hit, TFA_OC4.quad_protected_pct, n);
@@ -727,6 +729,8 @@ static void oc_p4_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
         case OCE_P4_START:
             os->phase = TFA_OCELLUS_P4;
             os->phase_start = s->tick;
+            os->p4_style = tfa_rand(s, 2) ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_MELEE;
+            os->p4_switch_at = tfa_rand_range(s, TFA_OC4.switch_min, TFA_OC4.switch_max);
             oc_cancel(s, OCE_P3_ADD_DUE, OCE_P3_ADD_DUE);
             oc_cancel(s, OCE_P3_SIPHON_PULSE, OCE_P3_AUGMENTER_BLOW);
             n->attackable = 1;
