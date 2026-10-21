@@ -708,6 +708,106 @@ def ezekiel_player_hits(fights):
     return star, band4, band3
 
 
+EZ_RING = [(-2, 2), (-1, 2), (0, 2), (1, 2), (2, 2), (2, 1), (2, 0), (2, -1), (2, -2), (1, -2), (0, -2), (-1, -2), (-2, -2), (-2, -1), (-2, 0), (-2, 1)]
+EZ_STAR_IDS = {"4170": 35, "4171": 65, "4172": 95}
+EZ_CORNERS = {0, 4, 8, 12}
+
+
+def ez_star_template(bx, by):
+    """The 5x5 ring around the 3x3 body (level 0) plus four arms 3 wide, 1, 1 (levels 1-3), clipped to the arena x27..35 y27..35."""
+    tiles = {}
+    for dx in range(-1, 4):
+        for dy in range(-1, 4):
+            if not (0 <= dx <= 2 and 0 <= dy <= 2):
+                tiles[(bx + dx, by + dy)] = 0
+    for level in (1, 2, 3):
+        for o in (0, 1, 2) if level == 1 else (1,):
+            for tile in ((bx + o, by - 1 - level), (bx + o, by + 3 + level), (bx - 1 - level, by + o), (bx + 3 + level, by + o)):
+                tiles[tile] = level
+    return {k: v for k, v in tiles.items() if 27 <= k[0] <= 35 and 27 <= k[1] <= 35}
+
+
+def ezekiel_ground(fights):
+    """Star, cleave dust and finale ground gfx per event: exact star template at his tile, (id, delay) pairs, tiles per event, gfx
+    on ticks without the causing anim, cleave run centre on the 16-tile ring, finale layer shapes per boss side."""
+    out = {k: hist([]) for k in ("star exact", "star (id, delay)", "star tiles", "cleave run centre", "cleave tiles", "cleave delay",
+                                 "finale (id, delay)", "finale (u, entries)", "finale tiles", "finale layer sizes", "stray", "sword gfx")}
+    sigs = hist([])
+    for ev in fights.values():
+        npos = [(e["t"], int(e["x"]), int(e["y"])) for e in ev if e["kind"] == "NPOS" and base(e["actor"]) == "16652"]
+        gfx = collections.defaultdict(list)
+        for e in ev:
+            if e["kind"] == "GFX":
+                gfx[e["t"]].append(e)
+        anim_ticks = {k: {e["t"] for e in ev if e["kind"] == "ANIM" and base(e["actor"]) == "16652" and e["id"] == k} for k in ("14685", "14687")}
+        for t, rows in gfx.items():
+            out["sword gfx"][sum(e["id"] == "4181" for e in rows)] += 1
+            for e in rows:
+                if e["id"] in EZ_STAR_IDS and t not in anim_ticks["14687"] or e["id"] == "4394" and t not in anim_ticks["14685"]:
+                    out["stray"][e["id"]] += 1
+        for t in sorted(anim_ticks["14687"]):
+            bx, by = next((x, y) for tt, x, y in reversed(npos) if tt <= t)
+            rows = [e for e in gfx[t] if e["id"] in EZ_STAR_IDS]
+            expected = ez_star_template(bx, by)
+            for gid, base_delay in EZ_STAR_IDS.items():
+                got = {(int(e["x"]), int(e["y"])): int(e["a"]) for e in rows if e["id"] == gid}
+                out["star exact"][got == {k: base_delay + 2 * v for k, v in expected.items()} and len(got) == sum(e["id"] == gid for e in rows)] += 1
+            out["star tiles"][len({(e["x"], e["y"]) for e in rows})] += 1
+            for e in rows:
+                out["star (id, delay)"][(e["id"], int(e["a"]))] += 1
+        for t in sorted(anim_ticks["14685"]):
+            rows = [e for e in gfx[t] if e["id"] == "4394"]
+            xs, ys = [int(e["x"]) for e in rows], [int(e["y"]) for e in rows]
+            cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+            rel = {(int(e["x"]) - cx, int(e["y"]) - cy) for e in rows}
+            missing = [i for i, r in enumerate(EZ_RING) if r not in rel]
+            centre = next((m for m in missing if (m - 1) % 16 in missing and (m + 1) % 16 in missing), None)
+            run_ok = rel <= set(EZ_RING) and len(rows) == len(rel) and len(missing) == 3 and centre is not None
+            bx, by = next((x, y) for tt, x, y in reversed(npos) if tt <= t)
+            beside = (cx, cy) != (bx + 1, by + 1)
+            out["cleave run centre"]["bad" if not run_ok else "off his tile" if beside else "corner" if centre in EZ_CORNERS else "edge"] += 1
+            out["cleave tiles"][len(rows)] += 1
+            for e in rows:
+                out["cleave delay"][int(e["a"])] += 1
+        for t, rows in gfx.items():
+            rows = [e for e in rows if e["id"] in ("4197", "4198")]
+            if not rows:
+                continue
+            bx, by = next((x, y) for tt, x, y in reversed(npos) if tt <= t)
+            layers = collections.defaultdict(dict)
+            entries = collections.defaultdict(list)
+            for e in rows:
+                d = int(e["a"]) - 125
+                x, y = int(e["x"]) - 30, int(e["y"]) - 30
+                layers[d // 30][(x, y)] = d % 30 // 2
+                entries[(x, y)].append(d % 30 // 2)
+                out["finale (id, delay)"][(e["id"], int(e["a"]))] += 1
+            for (x, y), us in entries.items():
+                out["finale (u, entries)"][(us[0], len(us))] += 1
+            out["finale tiles"][len(rows)] += 1
+            out["finale layer sizes"][tuple(len(layers[l]) for l in range(3))] += 1
+            sigs[((bx, by), tuple(tuple(sorted(layers[l].items())) for l in range(3)))] += 1
+    return out, sigs
+
+
+def ezekiel_ground_laws(real, sim, failures):
+    """The star is the exact template at his tile and the dust a 13-tile ring with a straight run left out whose centre is never a corner
+    unless he moved that tick and the ring sits on his old tile (8/628 recorded, 5 of them corner runs), both checked on every sim event. Delays, tile counts, gfx on non-anim ticks and finale layer shapes match in both directions,
+    and every sim finale layer signature was recorded."""
+    (rg, rs), (sg, ss) = ezekiel_ground(real), ezekiel_ground(sim)
+    for key in ("star exact", "cleave run centre"):
+        bad = {k: n for k, n in sg[key].items() if k in (False, "bad", "corner")}
+        if bad or not sg[key]:
+            failures.append(key)
+        print(f"{'BAD' if bad or not sg[key] else 'ok '} {key:28s} real {fmt(rg[key]):42s} sim {fmt(sg[key])}")
+    for key in ("star (id, delay)", "star tiles", "cleave tiles", "cleave delay", "finale (id, delay)", "finale (u, entries)", "finale tiles", "finale layer sizes", "stray", "sword gfx"):
+        shapes_law(key, rg[key], sg[key], failures)
+    unseen = sorted(k for k in ss if not rs[k])
+    if unseen or not ss:
+        failures.append("finale layer signatures not in the recordings")
+    print(f"{'BAD' if unseen or not ss else 'ok '} {'finale layer signatures':28s} sim {len(ss)} distinct, {sum(ss.values())} waves, unseen {len(unseen)}")
+
+
 def ezekiel(real, sim):
     failures = []
     for anim in ("14685", "14686", "14687", "14688", "14691", "14693"):
@@ -731,6 +831,7 @@ def ezekiel(real, sim):
         compare(f"finale {label}", r, s, failures)
     for label, r, s in zip(("star damage", "4-sword band damage", "3-sword band damage"), ezekiel_player_hits(real), ezekiel_player_hits(sim)):
         median_law(label, r, s, 3, failures)
+    ezekiel_ground_laws(real, sim, failures)
     return failures
 
 
