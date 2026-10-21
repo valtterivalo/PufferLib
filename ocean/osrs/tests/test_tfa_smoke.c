@@ -1,11 +1,12 @@
 #include "tfa_scripted.h"
 #include "osrs_test_check.h"
 
-static void run_team(int team_size, int episodes) {
+static void run_team(int room, int team_size, int episodes) {
     TfaState* s = calloc(1, sizeof(TfaState));
     TfaContext* ctx = calloc(1, sizeof(TfaContext));
     tfa_init_context((EncounterContext*)ctx);
     ctx->config.team_size = team_size;
+    ctx->config.start_room = room;
     tfa_finalize_context((EncounterState*)s, (EncounterContext*)ctx);
     int clears = 0, wipes = 0, timeouts = 0;
     long ticks = 0;
@@ -43,14 +44,15 @@ static void run_team(int team_size, int episodes) {
         wipes += s->outcome == TFA_OUTCOME_WIPED;
         timeouts += s->outcome == TFA_OUTCOME_TIMEOUT;
     }
-    printf("team %d: clears %d wipes %d timeouts %d mean ticks %.1f\n",
-        team_size, clears, wipes, timeouts, (double)ticks / episodes);
+    printf("room %d team %d: clears %d wipes %d timeouts %d mean ticks %.1f\n",
+        room, team_size, clears, wipes, timeouts, (double)ticks / episodes);
     CHECK("every episode ends with an outcome", clears + wipes + timeouts == episodes);
     free(s);
     free(ctx);
 }
 
 int main(void) {
-    for (int team = 1; team <= TFA_MAX_PLAYERS; team++) run_team(team, 50);
+    for (int r = 0; r < TFA_NUM_IMPLEMENTED_ROOMS; r++)
+        for (int team = 1; team <= TFA_MAX_PLAYERS; team++) run_team(TFA_IMPLEMENTED_ROOMS[r], team, 30);
     return osrs_test_summary();
 }
