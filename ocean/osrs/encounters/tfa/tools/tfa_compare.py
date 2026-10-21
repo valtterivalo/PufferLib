@@ -718,6 +718,70 @@ def set_law(name, real, sim, failures):
     print(f"{'ok ' if ok else 'BAD'} {name:28s} real {sorted(real)!s:42s} sim {sorted(sim)}")
 
 
+def dreadnoth_ground(fights):
+    """Blood tiles and boss GFX per cause: blood orientation, tiles per event (slam +1, jump landing +3, jelly death 0), tile
+    offsets from the boss SW tile, GFX 4209 (offset, delay, centre), and the 4210 spawn markers of every slam group: start tick and
+    delay per tile, tiles per tick, distance of each derived tile from the nearest seed, last tick before the jellies emerge, and
+    whether the markers equal the emerged jelly tiles."""
+    orient, counts, offsets, jump_gfx = hist([]), hist([]), hist([]), hist([])
+    starts, per_tick, derived, ends, equal = hist([]), hist([]), hist([]), hist([]), hist([])
+    for ev in fights.values():
+        blood, marks = collections.defaultdict(list), collections.defaultdict(dict)
+        track0 = sorted((e["t"], int(e["x"]), int(e["y"])) for e in ev if e["kind"] == "NPOS" and base(e["actor"]) == "16665")
+        for e in sorted(ev, key=lambda e: e["t"]):
+            if e["kind"] == "OBJ+" and e["id"] == "62609":
+                orient[e["b"]] += 1
+                blood[e["t"]].append((int(e["x"]), int(e["y"])))
+            elif e["kind"] == "GFX" and e["id"] == "4209":
+                bx, by = next((x, y) for tt, x, y in reversed(track0) if tt <= e["t"])
+                jump_gfx[(e["a"], int(e["x"]) - bx, int(e["y"]) - by)] += 1
+            elif e["kind"] == "GFX" and e["id"] == "4210":
+                marks[e["t"]][(int(e["x"]), int(e["y"]))] = int(e["a"])
+        track = [(e["t"], int(e["x"]), int(e["y"])) for e in ev if e["kind"] == "NPOS" and base(e["actor"]) == "16665"]
+        boss_at = lambda t: next((x, y) for tt, x, y in reversed(track) if tt <= t)
+        for e in ev:
+            if e["kind"] != "ANIM":
+                continue
+            cause = {"14777": ("slam", 1), "14780": ("jump", 3), "1587": ("death", 0)}.get(e["id"])
+            if cause is None:
+                continue
+            counts[(cause[0], len(blood[e["t"] + cause[1]]))] += 1
+            if e["id"] != "1587":
+                for x, y in blood[e["t"] + cause[1]]:
+                    offsets[(cause[0], x - boss_at(e["t"])[0], y - boss_at(e["t"])[1])] += 1
+        spawns = {e["t"]: {(int(f["x"]), int(f["y"])) for f in ev if f["kind"] == "NPC+" and f["id"] == "16666" and f["t"] == e["t"]}
+                  for e in ev if e["kind"] == "NPC+" and e["id"] == "16666"}
+        groups = slam_groups(ev)
+        for g in groups:
+            emerge = next((t for t in spawns if 0 < t - g[-1] <= 20), None)
+            if emerge is None:
+                continue
+            ends[emerge - max(t for t in marks if t < emerge and marks[t])] += 1
+            equal[spawns[emerge] == set(marks[emerge - 1])] += 1
+            for t0 in g:
+                new = {tile: marks[t][tile] for t in range(t0 + 4, t0 + 7) for tile in marks[t] if tile not in marks[t - 1] and t - t0 <= 6}
+                per_tick[tuple(sum(1 for tile in new if tile in marks[t0 + k] and tile not in marks[t0 + k - 1]) for k in (4, 5, 6))] += 1
+                seeds = [tile for tile, a in new.items() if a == 1]
+                for t in range(t0 + 4, t0 + 7):
+                    for tile in marks[t]:
+                        if tile in marks[t - 1]:
+                            continue
+                        starts[(t - t0, marks[t][tile])] += 1
+                        if marks[t][tile] != 1 and seeds:
+                            derived[min(max(abs(tile[0] - sx), abs(tile[1] - sy)) for sx, sy in seeds)] += 1
+    return orient, counts, offsets, jump_gfx, starts, per_tick, derived, ends, equal
+
+
+def dreadnoth_ground_laws(real, sim, failures):
+    """Blood counts, marker starts and marker spread follow where the raiders stand and die (scripted raiders stack and rarely move),
+    so their sim values must be recorded ones. The rest are two-way histograms, and the markers must equal the emerged jelly tiles."""
+    labels = ("blood orientation", "blood tiles per event (cause, n)", "blood tile (cause, dx, dy) from boss SW", "4209 (delay, dx, dy)",
+              "4210 tile start (tick after slam, delay)", "4210 new tiles per tick +4,+5,+6", "4210 derived distance from seed",
+              "4210 last tick before emerge", "4210 markers == emerged tiles")
+    for i, (label, r, s) in enumerate(zip(labels, dreadnoth_ground(real), dreadnoth_ground(sim))):
+        (recorded_law if i in (1, 4, 6) else shapes_law)(label, r, s, failures)
+
+
 def dreadnoth(real, sim):
     failures = []
     set_law("slams per group", set(slam_group_sizes(real)), set(slam_group_sizes(sim)), failures)
@@ -737,6 +801,7 @@ def dreadnoth(real, sim):
     compare("blood tiles after slam", blood_after_slam(real), blood_after_slam(sim), failures)
     compare("4211 launch, flight", projectile_offsets(real, "14777", "4211"), projectile_offsets(sim, "14777", "4211"), failures)
     set_law("slam P0 hit offsets", slam_hit_offsets(real), slam_hit_offsets(sim), failures)
+    dreadnoth_ground_laws(real, sim, failures)
     return failures
 
 
@@ -1026,6 +1091,14 @@ def shapes_law(name, real, sim, failures):
     if missing or extra:
         failures.append(name)
     print(f"{'BAD' if missing or extra else 'ok '} {name:28s} real {fmt(real):42s} sim {fmt(sim)}")
+
+
+def recorded_law(name, real, sim, failures):
+    """Every common sim value (5 percent or more) appears in the recordings, for effects whose mix follows where the raiders stand."""
+    extra = [k for k in sim if sim[k] * 20 >= sum(sim.values()) and not real[k]]
+    if extra:
+        failures.append(name)
+    print(f"{'BAD' if extra else 'ok '} {name:28s} real {fmt(real):42s} sim {fmt(sim)}")
 
 
 OC_CRACK_IDS = range(4236, 4260)
