@@ -124,6 +124,8 @@ static void tfa_damage_player_now(TfaState* s, int p, int damage, AttackStyle st
     int before = tp->player.current_hitpoints;
     encounter_damage_player(&tp->player, damage, NULL);
     int applied = before - tp->player.current_hitpoints;
+    if (tp->player.render_hit_count < OSRS_RENDER_HITS_MAX)
+        tp->player.render_hit_damage[tp->player.render_hit_count++] = damage;
     tp->player.hit_style = style;
     tp->damage_taken_tick += (float)applied;
     tp->damage_taken_total += (float)applied;

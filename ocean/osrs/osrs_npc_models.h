@@ -4,6 +4,14 @@
 #include "data/npc_models_zulrah.h"
 #include "data/npc_models_inferno.h"
 #include "data/npc_models_colosseum.h"
+#include "data/npc_models_tfa_guardian.h"
+#include "data/npc_models_tfa_bork.h"
+#include "data/npc_models_tfa_ezekiel.h"
+#include "data/npc_models_tfa_dagonhai.h"
+#include "data/npc_models_tfa_moia.h"
+#include "data/npc_models_tfa_dreadnoth.h"
+#include "data/npc_models_tfa_xarth.h"
+#include "data/npc_models_tfa_ocellus.h"
 
 #define SNAKELING_MODEL_MELEE  (OSRS_NPC_MODEL_BASE | 2045u)
 #define SNAKELING_MODEL_MAGIC  (OSRS_NPC_MODEL_BASE | 2046u)
@@ -90,6 +98,14 @@ static const NpcModelMapping* npc_model_lookup(uint16_t npc_id) {
         {NPC_MODEL_MAP_ZULRAH_GEN, sizeof(NPC_MODEL_MAP_ZULRAH_GEN) / sizeof(*NPC_MODEL_MAP_ZULRAH_GEN)},
         {NPC_MODEL_MAP_INFERNO_GEN, sizeof(NPC_MODEL_MAP_INFERNO_GEN) / sizeof(*NPC_MODEL_MAP_INFERNO_GEN)},
         {NPC_MODEL_MAP_COLOSSEUM_GEN, sizeof(NPC_MODEL_MAP_COLOSSEUM_GEN) / sizeof(*NPC_MODEL_MAP_COLOSSEUM_GEN)},
+        {NPC_MODEL_MAP_TFA_GUARDIAN_GEN, sizeof(NPC_MODEL_MAP_TFA_GUARDIAN_GEN) / sizeof(*NPC_MODEL_MAP_TFA_GUARDIAN_GEN)},
+        {NPC_MODEL_MAP_TFA_BORK_GEN, sizeof(NPC_MODEL_MAP_TFA_BORK_GEN) / sizeof(*NPC_MODEL_MAP_TFA_BORK_GEN)},
+        {NPC_MODEL_MAP_TFA_EZEKIEL_GEN, sizeof(NPC_MODEL_MAP_TFA_EZEKIEL_GEN) / sizeof(*NPC_MODEL_MAP_TFA_EZEKIEL_GEN)},
+        {NPC_MODEL_MAP_TFA_DAGONHAI_GEN, sizeof(NPC_MODEL_MAP_TFA_DAGONHAI_GEN) / sizeof(*NPC_MODEL_MAP_TFA_DAGONHAI_GEN)},
+        {NPC_MODEL_MAP_TFA_MOIA_GEN, sizeof(NPC_MODEL_MAP_TFA_MOIA_GEN) / sizeof(*NPC_MODEL_MAP_TFA_MOIA_GEN)},
+        {NPC_MODEL_MAP_TFA_DREADNOTH_GEN, sizeof(NPC_MODEL_MAP_TFA_DREADNOTH_GEN) / sizeof(*NPC_MODEL_MAP_TFA_DREADNOTH_GEN)},
+        {NPC_MODEL_MAP_TFA_XARTH_GEN, sizeof(NPC_MODEL_MAP_TFA_XARTH_GEN) / sizeof(*NPC_MODEL_MAP_TFA_XARTH_GEN)},
+        {NPC_MODEL_MAP_TFA_OCELLUS_GEN, sizeof(NPC_MODEL_MAP_TFA_OCELLUS_GEN) / sizeof(*NPC_MODEL_MAP_TFA_OCELLUS_GEN)},
     };
     for (size_t p = 0; p < sizeof(packs) / sizeof(*packs); p++)
         for (size_t i = 0; i < packs[p].count; i++)

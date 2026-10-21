@@ -14,7 +14,7 @@ typedef struct {
     int special_timer;
     int vine_timer;
     int enraged;
-    int breath_timer;
+    int breath_tick;
     int breath_target;
     int breath_land_tick;
     int target;

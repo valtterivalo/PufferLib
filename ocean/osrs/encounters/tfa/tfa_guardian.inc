@@ -396,7 +396,7 @@ static void tfa_guardian_tick(TfaState* s, TfaContext* ctx) {
                 if (--gs->special_timer == 0) {
                     tfa_guardian_special(s, g);
                     gs->swoosh_tick = s->tick + 3;
-                    gs->breath_timer = 5;
+                    gs->breath_tick = s->tick + 5;
                     gs->special_timer = 20;
                 }
                 if (gs->swoosh_tick == s->tick) {
@@ -405,7 +405,7 @@ static void tfa_guardian_tick(TfaState* s, TfaContext* ctx) {
                     g->y = TFA_GUARDIAN_SWOOSH_TILES[k][1];
                     tfa_npc_anim(s, g, GUARDIAN_ANIM_SWOOSH);
                 }
-                if (gs->breath_timer > 0 && --gs->breath_timer == 0) {
+                if (gs->breath_tick == s->tick) {
                     g->act = TFA_ACT_MAGIC;
                     tfa_npc_anim(s, g, GUARDIAN_ANIM_BREATH);
                     int candidates[TFA_MAX_PLAYERS], n = 0;
@@ -459,5 +459,5 @@ static void tfa_guardian_tick(TfaState* s, TfaContext* ctx) {
         case TFA_GUARDIAN_DYING:
             break;
     }
-    g->attack_timer = (int16_t)(gs->enraged ? (gs->breath_timer > 0 ? gs->breath_timer : gs->special_timer) : gs->ranged_timer);
+    g->attack_timer = (int16_t)(gs->enraged ? (gs->breath_tick > s->tick ? gs->breath_tick - s->tick : gs->special_timer) : gs->ranged_timer);
 }

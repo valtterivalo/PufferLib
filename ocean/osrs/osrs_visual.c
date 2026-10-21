@@ -24,6 +24,7 @@
 #endif
 #include "encounters/encounter_inferno.h"
 #include "encounters/encounter_colosseum.h"
+#include "encounters/encounter_tfa.h"
 #if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
@@ -1716,6 +1717,8 @@ static void visual_frame(void* arg) {
                 ((RiskfightState*)env->encounter_state)->consume_ticks[0], enc_actions);
         } else if (strcmp(edef->name, "zulrah") == 0) {
             zul_heuristic_actions((ZulrahState*)env->encounter_state, enc_actions);
+        } else if (strncmp(edef->name, "tfa", 3) == 0) {
+            tfa_heuristic_actions((TfaState*)env->encounter_state, 0, enc_actions);
         } else {
             for (int h = 0; h < edef->num_action_heads; h++) {
                 enc_actions[h] = rand() % edef->action_head_dims[h];

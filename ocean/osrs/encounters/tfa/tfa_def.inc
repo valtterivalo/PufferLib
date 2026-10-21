@@ -154,8 +154,7 @@ static void tfa_step(EncounterState* state, EncounterContext* context, const int
     if (s->episode_over) return;
     int all[TFA_MAX_PLAYERS * TFA_NUM_ACTION_HEADS];
     memcpy(all, actions, sizeof(int) * TFA_NUM_ACTION_HEADS);
-    for (int p = 1; p < TFA_MAX_PLAYERS; p++)
-        memcpy(all + p * TFA_NUM_ACTION_HEADS, ctx->teammate_actions[p], sizeof(int) * TFA_NUM_ACTION_HEADS);
+    for (int p = 1; p < TFA_MAX_PLAYERS; p++) tfa_heuristic_actions(s, p, all + p * TFA_NUM_ACTION_HEADS);
     tfa_step_team(s, ctx, all);
     if (s->episode_over) tfa_log_episode(s, ctx);
 }
@@ -300,46 +299,79 @@ static void tfa_render_post_tick(EncounterState* state, EncounterContext* contex
     }
 }
 
+#define TFA_ENCOUNTER_FIELDS \
+    .obs_size = TFA_NUM_OBS, \
+    .num_action_heads = TFA_NUM_ACTION_HEADS, \
+    .action_head_dims = TFA_ACTION_DIMS, \
+    .mask_size = TFA_ACTION_MASK_SIZE, \
+    .state_size = sizeof(TfaState), \
+    .context_size = sizeof(TfaContext), \
+    .destroy_context = tfa_destroy_context, \
+    .init_state = tfa_init_state, \
+    .finalize_context = tfa_finalize_context, \
+    .create = tfa_create, \
+    .destroy = tfa_destroy, \
+    .reset = tfa_reset, \
+    .step = tfa_step, \
+    .write_obs = tfa_write_obs, \
+    .write_mask = tfa_write_mask, \
+    .get_reward = tfa_get_reward, \
+    .is_terminal = tfa_is_terminal, \
+    .get_entity_count = tfa_get_entity_count, \
+    .get_entity = tfa_get_entity, \
+    .fill_render_entities = tfa_fill_render_entities, \
+    .put_int = tfa_put_int, \
+    .put_float = tfa_put_float, \
+    .arena_base_x = 0, \
+    .arena_base_y = 0, \
+    .arena_width = TFA_ARENA_MAX, \
+    .arena_height = TFA_ARENA_MAX, \
+    .head_move = OSRS_HEAD_PRIMARY, \
+    .head_prayer = OSRS_HEAD_OVERHEAD, \
+    .head_target = -1, \
+    .render_post_tick = tfa_render_post_tick, \
+    .get_log = tfa_get_log, \
+    .get_tick = tfa_get_tick, \
+    .get_winner = tfa_get_winner
+
+static void tfa_init_context_room(EncounterContext* context, int room) {
+    tfa_init_context(context);
+    ((TfaContext*)context)->config.start_room = room;
+}
+
+#define TFA_ROOM_DEF(ROOM, NAME, DISPLAY, SCENE, OX, OY) \
+    static void tfa_init_context_##NAME(EncounterContext* context) { tfa_init_context_room(context, ROOM); } \
+    static const EncounterDef ENCOUNTER_TFA_##NAME = { \
+        .name = "tfa_" #NAME, .display_name = DISPLAY, TFA_ENCOUNTER_FIELDS, \
+        .init_context = tfa_init_context_##NAME, \
+        .scene = SCENE, .npc_pack = SCENE, .scene_origin_x = OX, .scene_origin_y = OY, \
+    };
+
+TFA_ROOM_DEF(TFA_ROOM_GUARDIAN, guardian, "TFA: Archive Guardian", "tfa_guardian", 4096, 5568)
+TFA_ROOM_DEF(TFA_ROOM_BORK, bork, "TFA: Bork and the Smorks", "tfa_bork", 4160, 5568)
+TFA_ROOM_DEF(TFA_ROOM_EZEKIEL, ezekiel, "TFA: Ezekiel", "tfa_ezekiel", 4032, 5504)
+TFA_ROOM_DEF(TFA_ROOM_DREADNOTH, dreadnoth, "TFA: Dreadnoth the Jellied", "tfa_dreadnoth", 4160, 5632)
+TFA_ROOM_DEF(TFA_ROOM_MOIA, moia, "TFA: Moia", "tfa_moia", 4032, 5632)
+TFA_ROOM_DEF(TFA_ROOM_XARTH, xarth, "TFA: Xarth", "tfa_xarth", 4160, 5504)
+TFA_ROOM_DEF(TFA_ROOM_DAGONHAI, dagonhai, "TFA: Dagon'hai Trio", "tfa_dagonhai", 4032, 5568)
+TFA_ROOM_DEF(TFA_ROOM_OCELLUS, ocellus, "TFA: Ocellus", "tfa_ocellus", 4096, 5632)
+
+/* The wrapper's definition: config decides the room, no scene of its own. */
 static const EncounterDef ENCOUNTER_TFA = {
-    .name = "tfa",
-    .display_name = "The Fractured Archive",
-    .obs_size = TFA_NUM_OBS,
-    .num_action_heads = TFA_NUM_ACTION_HEADS,
-    .action_head_dims = TFA_ACTION_DIMS,
-    .mask_size = TFA_ACTION_MASK_SIZE,
-    .state_size = sizeof(TfaState),
-    .context_size = sizeof(TfaContext),
+    .name = "tfa", .display_name = "The Fractured Archive", TFA_ENCOUNTER_FIELDS,
     .init_context = tfa_init_context,
-    .destroy_context = tfa_destroy_context,
-    .init_state = tfa_init_state,
-    .finalize_context = tfa_finalize_context,
-    .create = tfa_create,
-    .destroy = tfa_destroy,
-    .reset = tfa_reset,
-    .step = tfa_step,
-    .write_obs = tfa_write_obs,
-    .write_mask = tfa_write_mask,
-    .get_reward = tfa_get_reward,
-    .is_terminal = tfa_is_terminal,
-    .get_entity_count = tfa_get_entity_count,
-    .get_entity = tfa_get_entity,
-    .fill_render_entities = tfa_fill_render_entities,
-    .put_int = tfa_put_int,
-    .put_float = tfa_put_float,
-    .arena_base_x = 0,
-    .arena_base_y = 0,
-    .arena_width = TFA_ARENA_MAX,
-    .arena_height = TFA_ARENA_MAX,
-    .head_move = OSRS_HEAD_PRIMARY,
-    .head_prayer = OSRS_HEAD_OVERHEAD,
-    .head_target = -1,
-    .render_post_tick = tfa_render_post_tick,
-    .get_log = tfa_get_log,
-    .get_tick = tfa_get_tick,
-    .get_winner = tfa_get_winner,
 };
+
 
 __attribute__((constructor))
 static void tfa_register(void) {
     encounter_register(&ENCOUNTER_TFA);
+    encounter_register(&ENCOUNTER_TFA_guardian);
+    encounter_register(&ENCOUNTER_TFA_bork);
+    encounter_register(&ENCOUNTER_TFA_ezekiel);
+    encounter_register(&ENCOUNTER_TFA_dreadnoth);
+    encounter_register(&ENCOUNTER_TFA_moia);
+    encounter_register(&ENCOUNTER_TFA_xarth);
+    encounter_register(&ENCOUNTER_TFA_dagonhai);
+    encounter_register(&ENCOUNTER_TFA_ocellus);
 }

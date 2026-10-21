@@ -96,6 +96,8 @@ typedef struct {
     int16_t counter;
     uint32_t instance_id;
     int32_t damage_taken_tick;
+    int8_t hit_count_tick;
+    int16_t hits_tick[OSRS_RENDER_HITS_MAX];
     EncounterPendingHitQueue hits;
 } TfaNpc;
 
