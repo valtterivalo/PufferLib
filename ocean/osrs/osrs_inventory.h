@@ -142,7 +142,7 @@ static inline uint16_t osrs_inventory_content_code_from_item(uint16_t item_idx) 
     }
     /* A stat-priced row has no content code of its own: it is the inert occupant in observations (27281, same as other non-combat ids). */
     return osrs_inventory_content_code_from_raw_osrs_id(
-        item_idx >= NUM_ITEMS ? 27281 : ITEM_DATABASE[item_idx].item_id);
+        !osrs_item_has_fixed_row(item_idx) ? 27281 : ITEM_DATABASE[item_idx].item_id);
 }
 
 #define OSRS_CONSUMABLE_CONTENT_CODE_CASE(KIND, DOSE, CODE) \
@@ -206,7 +206,7 @@ static inline const OsrsItemContentMetadata* osrs_inventory_cell_metadata(
 }
 
 typedef struct {
-    uint8_t item_slot_plus_one[NUM_ITEMS];
+    uint8_t item_slot_plus_one[NUM_ITEM_ROWS];
     uint8_t consumable_slot_plus_one[OSRS_CONSUMABLE_COUNT];
 } OsrsInventoryIndex;
 

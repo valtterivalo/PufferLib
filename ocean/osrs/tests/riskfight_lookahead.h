@@ -855,13 +855,13 @@ static uint64_t la_fingerprint(const RiskfightState* w) {
     int parts[] = {him->current_hitpoints, him->special_energy, him->spec_regen_active, him->item_effect_state.special_regen_ticks, him->veng_active, him->veng_cooldown, him->attack_timer, him->attack_timer_uncapped, him->has_attack_timer,
         him->food_timer, him->potion_timer, him->karambwan_timer, him->current_attack, him->current_strength, w->env.pid_holder, w->visible[0].health_bar, (int)w->script_seed[1]};
     for (size_t i = 0; i < sizeof(parts) / sizeof(*parts); i++) { h ^= (uint64_t)(uint32_t)parts[i]; h *= 1099511628211ull; }
-    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) { h ^= him->equipped[slot] == ITEM_NONE ? 255u : him->equipped[slot]; h *= 1099511628211ull; }
-    int counts[NUM_ITEMS + OSRS_STAT_ITEM_SLOTS + 1][5] = {{0}}; /* ITEM_NONE counted at 255, as when it was the uint8 sentinel */
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) { h ^= (uint64_t)osrs_item_byte_code(him->equipped[slot]); h *= 1099511628211ull; }
+    int counts[256][5] = {{0}};
     for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
         const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&him->inventory_cells[i]);
-        counts[m->item_idx == ITEM_NONE ? 255 : m->item_idx][m->dose_count > 4 ? 4 : m->dose_count] += 1 + 16 * (int)m->consumable_kind;
+        counts[osrs_item_byte_code(m->item_idx)][m->dose_count > 4 ? 4 : m->dose_count] += 1 + 16 * (int)m->consumable_kind;
     }
-    for (int i = 0; i < NUM_ITEMS + OSRS_STAT_ITEM_SLOTS + 1; i++) for (int d = 0; d < 5; d++) if (counts[i][d]) { h ^= (uint64_t)(i * 5 + d) * 2654435761u + (uint64_t)counts[i][d]; h *= 1099511628211ull; }
+    for (int i = 0; i < 256; i++) for (int d = 0; d < 5; d++) if (counts[i][d]) { h ^= (uint64_t)(i * 5 + d) * 2654435761u + (uint64_t)counts[i][d]; h *= 1099511628211ull; }
     return h;
 }
 

@@ -105,14 +105,14 @@ static const GenConsumable GEN_CONSUMABLES[] = {
 #define GEN_EXISTING_ITEMS 151
 #define GEN_CONSUMABLE_BASE 145
 #define GEN_INERT_CODE 200
-#define GEN_CONTENT_COUNT (GEN_FROZEN_COUNT + NUM_ITEMS - GEN_FROZEN_ITEMS + GEN_CONSUMABLE_COUNT - GEN_FROZEN_CONSUMABLES)
+#define GEN_CONTENT_COUNT (GEN_FROZEN_COUNT + OSRS_ITEM_FIXED_ROW_COUNT - GEN_FROZEN_ITEMS + GEN_CONSUMABLE_COUNT - GEN_FROZEN_CONSUMABLES)
 
 static int gear_code(int index) {
     return index < GEN_LEGACY_ITEMS ? index + 1
         : index < GEN_FROZEN_ITEMS ? 201 + index - GEN_LEGACY_ITEMS
         : index < GEN_EXISTING_ITEMS
             ? GEN_FROZEN_COUNT + index - GEN_FROZEN_ITEMS
-            : GEN_CONTENT_COUNT - NUM_ITEMS + index;
+            : GEN_CONTENT_COUNT - OSRS_ITEM_FIXED_ROW_COUNT + index;
 }
 
 static int consumable_code(int index) {
@@ -160,9 +160,9 @@ static int gear_slot_for_item_slot(uint8_t slot) {
 
 static int content_code_for_raw_osrs_id(uint16_t raw_osrs_id) {
     if (raw_osrs_id == 0) return 0;
-    for (int item_idx = 0; item_idx < NUM_ITEMS; item_idx++) {
-        if (ITEM_DATABASE[item_idx].item_id == raw_osrs_id) {
-            return gear_code(item_idx);
+    for (int index = 0; index < OSRS_ITEM_FIXED_ROW_COUNT; index++) {
+        if (ITEM_DATABASE[osrs_item_fixed_row(index)].item_id == raw_osrs_id) {
+            return gear_code(index);
         }
     }
     for (int index = 0; index < GEN_CONSUMABLE_COUNT; index++) {
@@ -244,13 +244,14 @@ static void emit_content_row(
     fprintf(out, ")%s\n", final_row ? "" : " \\");
 }
 
-static void emit_gear_row(FILE* out, int item_idx) {
+static void emit_osrs_item_fixed_row(FILE* out, int index) {
+    int item_idx = osrs_item_fixed_row(index);
     float row[OSRS_INVENTORY_CELL_OBS_FEATURES_COMPACT];
     char item_pointer[64];
     snprintf(item_pointer, sizeof(item_pointer), "&ITEM_DATABASE[%d]", item_idx);
     const Item* item = &ITEM_DATABASE[item_idx];
     build_row(row, (uint16_t)item_idx, item->item_id, OSRS_CONSUMABLE_NONE, 0);
-    emit_content_row(out, gear_code(item_idx), item_pointer,
+    emit_content_row(out, gear_code(index), item_pointer,
         (uint16_t)item_idx, item->item_id, gear_slot_for_item_slot(item->slot),
         OSRS_CLICK_EQUIP, OSRS_CONSUMABLE_NONE, 0, 0,
         get_item_attack_style(item_idx), row, 0);
@@ -274,19 +275,19 @@ static void write_content_rows(FILE* out) {
     build_row(row, ITEM_NONE, 0, OSRS_CONSUMABLE_NONE, 0);
     emit_content_row(out, 0, "NULL", ITEM_NONE, 0, -1,
         OSRS_CLICK_NONE, OSRS_CONSUMABLE_NONE, 0, 0, 0, row, 0);
-    for (int i = 0; i < GEN_LEGACY_ITEMS; i++) emit_gear_row(out, i);
+    for (int i = 0; i < GEN_LEGACY_ITEMS; i++) emit_osrs_item_fixed_row(out, i);
     for (int i = 0; i < GEN_LEGACY_CONSUMABLES; i++) emit_consumable_row(out, i);
     build_row(row, ITEM_NONE, GEN_INERT_RAW_OSRS_ID, OSRS_CONSUMABLE_NONE, 0);
     emit_content_row(out, GEN_INERT_CODE, "NULL", ITEM_NONE,
         GEN_INERT_RAW_OSRS_ID, -1, OSRS_CLICK_NONE, OSRS_CONSUMABLE_NONE,
         0, 0, 0, row, 0);
-    for (int i = GEN_LEGACY_ITEMS; i < GEN_FROZEN_ITEMS; i++) emit_gear_row(out, i);
+    for (int i = GEN_LEGACY_ITEMS; i < GEN_FROZEN_ITEMS; i++) emit_osrs_item_fixed_row(out, i);
     for (int i = GEN_LEGACY_CONSUMABLES; i < GEN_FROZEN_CONSUMABLES; i++)
         emit_consumable_row(out, i);
-    for (int i = GEN_FROZEN_ITEMS; i < GEN_EXISTING_ITEMS; i++) emit_gear_row(out, i);
+    for (int i = GEN_FROZEN_ITEMS; i < GEN_EXISTING_ITEMS; i++) emit_osrs_item_fixed_row(out, i);
     for (int i = GEN_FROZEN_CONSUMABLES; i < GEN_CONSUMABLE_COUNT; i++)
         emit_consumable_row(out, i);
-    for (int i = GEN_EXISTING_ITEMS; i < NUM_ITEMS; i++) emit_gear_row(out, i);
+    for (int i = GEN_EXISTING_ITEMS; i < OSRS_ITEM_FIXED_ROW_COUNT; i++) emit_osrs_item_fixed_row(out, i);
 }
 
 static void write_consumable_rows(FILE* out) {
@@ -363,8 +364,8 @@ int main(int argc, char** argv) {
         fprintf(stderr, "OSRS item metadata: existing item boundary exceeds database\n");
         return 1;
     }
-    for (int item_idx = 0; item_idx < NUM_ITEMS; item_idx++) {
-        if (content_code_for_raw_osrs_id(ITEM_DATABASE[item_idx].item_id) !=
+    for (int item_idx = 0; item_idx < OSRS_ITEM_FIXED_ROW_COUNT; item_idx++) {
+        if (content_code_for_raw_osrs_id(ITEM_DATABASE[osrs_item_fixed_row(item_idx)].item_id) !=
                 gear_code(item_idx)) {
             fprintf(stderr, "OSRS item metadata: item %d raw id is ambiguous\n",
                 item_idx);

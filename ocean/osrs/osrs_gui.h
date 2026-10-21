@@ -738,7 +738,7 @@ static Texture2D gui_get_sprite_by_osrs_id(GuiState* gs, int osrs_id);
 
 static Texture2D gui_get_item_sprite(GuiState* gs, uint16_t item_idx) {
     Texture2D empty = { 0 };
-    if (item_idx == ITEM_NONE || item_idx >= NUM_ITEMS) return empty;
+    if (item_idx == ITEM_NONE || !osrs_item_has_fixed_row(item_idx)) return empty;
     int item_id = ITEM_DATABASE[item_idx].item_id;
     return gui_get_sprite_by_osrs_id(gs, item_id);
 }
@@ -784,7 +784,7 @@ static Texture2D gui_get_item_sprite_for_quantity(
     uint16_t item_idx,
     int quantity
 ) {
-    if (item_idx == ITEM_NONE || item_idx >= NUM_ITEMS) return (Texture2D){0};
+    if (item_idx == ITEM_NONE || !osrs_item_has_fixed_row(item_idx)) return (Texture2D){0};
     int item_id = ITEM_DATABASE[item_idx].item_id;
     int display_id = gui_item_display_id_for_quantity(gs, item_id, quantity);
     return gui_get_sprite_by_osrs_id(gs, display_id);
@@ -839,7 +839,7 @@ static void gui_unload_sprites(GuiState* gs) {
 }
 
 static const char* gui_item_short_name(uint16_t item_idx) {
-    if (item_idx == ITEM_NONE || item_idx >= NUM_ITEMS) return "";
+    if (item_idx == ITEM_NONE || !osrs_item_has_fixed_row(item_idx)) return "";
     const char* full = ITEM_DATABASE[item_idx].name;
     switch (item_idx) {
         case ITEM_HELM_NEITIZNOT:    return "Neit helm";
@@ -964,7 +964,7 @@ static void gui_draw_equip_slot(GuiState* gs, int x, int y, int w, int h,
     Rectangle dst = {(float)x, (float)y, (float)w, (float)h};
     DrawTexturePro(gs->slot_tile, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
 
-    if (item_idx != ITEM_NONE && item_idx < NUM_ITEMS) {
+    if (item_idx != ITEM_NONE && osrs_item_has_fixed_row(item_idx)) {
         gui_draw_texture_centered(gui_get_item_sprite(gs, item_idx), dst, WHITE);
         return;
     }
@@ -2644,7 +2644,7 @@ static void gui_draw_prayer(GuiState* gs, Player* p) {
 static void gui_draw_combat(GuiState* gs, Player* p) {
     const char* wpn_name = "Unarmed";
     if (p->equipped[GEAR_SLOT_WEAPON] != ITEM_NONE &&
-        p->equipped[GEAR_SLOT_WEAPON] < NUM_ITEMS) {
+        osrs_item_has_fixed_row(p->equipped[GEAR_SLOT_WEAPON])) {
         wpn_name = gui_item_short_name(p->equipped[GEAR_SLOT_WEAPON]);
     }
 

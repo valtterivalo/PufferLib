@@ -172,11 +172,18 @@ typedef enum {
 #undef OSRS_WIKI_ITEM_ENUM
     NUM_HAND_ITEMS = 163,
     NUM_ITEMS = NUM_HAND_ITEMS + OSRS_ITEM_WIKI_ROW_COUNT,
+    OSRS_ITEM_EXT_BASE = 256,
+    OSRS_ITEM_EXT_BEFORE = OSRS_ITEM_EXT_BASE - 1,
+#define OSRS_WIKI_ITEM_ENUM(ENUM, ...) ENUM,
+    OSRS_ITEM_WIKI_EXT_ROWS(OSRS_WIKI_ITEM_ENUM)
+#undef OSRS_WIKI_ITEM_ENUM
+    NUM_ITEM_ROWS,
     ITEM_NONE = 0xFFFF
 } ItemIndex;
 
-/* Mutable only past NUM_ITEMS: the OSRS_STAT_ITEM_SLOTS spare rows hold stat-priced items (osrs_stat_item_register). */
-static Item ITEM_DATABASE[NUM_ITEMS + OSRS_STAT_ITEM_SLOTS] = {
+/* Mutable only in [NUM_ITEMS, NUM_ITEMS + OSRS_STAT_ITEM_SLOTS): the stat-priced rows (osrs_stat_item_register). Rows from OSRS_ITEM_EXT_BASE on
+   are fixed wiki rows kept above the riskfight one-byte item code. */
+static Item ITEM_DATABASE[NUM_ITEM_ROWS] = {
     [ITEM_HELM_NEITIZNOT] = {
         .item_id = 10828, .name = "Helm of neitiznot", .slot = SLOT_HEAD,
         .attack_speed = 0, .attack_range = 0,
@@ -1624,13 +1631,13 @@ static Item ITEM_DATABASE[NUM_ITEMS + OSRS_STAT_ITEM_SLOTS] = {
         .melee_strength = MS, .ranged_strength = RS, .magic_damage = MD, .prayer = PR \
     },
     OSRS_ITEM_WIKI_ROWS(OSRS_WIKI_ITEM_DB_ROW)
+    OSRS_ITEM_WIKI_EXT_ROWS(OSRS_WIKI_ITEM_DB_ROW)
 #undef OSRS_WIKI_ITEM_DB_ROW
 };
-static_assert(
-    sizeof(ITEM_DATABASE) / sizeof(ITEM_DATABASE[0]) == NUM_ITEMS + OSRS_STAT_ITEM_SLOTS,
-    "item database row count must match ItemIndex plus the stat-priced rows");
-static_assert(NUM_ITEMS + OSRS_STAT_ITEM_SLOTS < ITEM_NONE,
-    "generated item indexes must remain distinct from ITEM_NONE");
+static_assert(sizeof(ITEM_DATABASE) / sizeof(ITEM_DATABASE[0]) == NUM_ITEM_ROWS, "item database row count must match ItemIndex");
+static_assert(NUM_ITEMS + OSRS_STAT_ITEM_SLOTS <= 254,
+    "fixed rows and stat-priced rows keep a one-byte code (riskfight observations): indices 0..253");
+static_assert(NUM_ITEM_ROWS < ITEM_NONE, "generated item indexes must remain distinct from ITEM_NONE");
 static_assert(ITEM_ELITE_BLACK_PLATELEGS + 1 == NUM_HAND_ITEMS,
     "hand rows are frozen: new items are wiki rows (items/wiki_item_rows.tsv), appended after them");
 

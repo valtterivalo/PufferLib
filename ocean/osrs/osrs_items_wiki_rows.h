@@ -2,10 +2,13 @@
 #ifndef OSRS_ITEMS_WIKI_ROWS_H
 #define OSRS_ITEMS_WIKI_ROWS_H
 
-#define OSRS_ITEM_WIKI_ROW_COUNT 53
+#define OSRS_ITEM_WIKI_ROW_COUNT 51
+#define OSRS_ITEM_WIKI_EXT_ROW_COUNT 2
 
 /* X(enum, raw_id, name, slot, two_handed, speed, range, attack_style, attack stab/slash/crush/magic/ranged, defence stab/slash/crush/magic/ranged,
- *   melee_strength, ranged_strength, magic_damage, prayer); attack_style: 0 none, 1 melee, 2 ranged, 3 magic (get_item_attack_style). */
+ *   melee_strength, ranged_strength, magic_damage, prayer); attack_style: 0 none, 1 melee, 2 ranged, 3 magic (get_item_attack_style).
+ * OSRS_ITEM_WIKI_ROWS fill the indices below the stat-priced slots, OSRS_ITEM_WIKI_EXT_ROWS start at OSRS_ITEM_EXT_BASE (256), above the
+ * one-byte item code of the riskfight observations. */
 #define OSRS_ITEM_WIKI_ROWS(X) \
     X(ITEM_ECLIPSE_ATLATL, 29000, "Eclipse atlatl", SLOT_WEAPON, 1, 4, 5, 2, 0, 0, 0, 0, 87, 0, 0, 0, 0, 0, 40, 0, 0, 0) \
     X(ITEM_NOXIOUS_HALBERD, 29796, "Noxious halberd", SLOT_WEAPON, 1, 5, 2, 1, 80, 132, 0, 0, 0, 0, 0, 0, 0, 0, 142, 0, 0, 0) \
@@ -58,6 +61,8 @@
     X(ITEM_TORAGS_PLATEBODY, 4749, "Torag's platebody", SLOT_BODY, 0, 0, 0, 0, 0, 0, 0, -30, -10, 122, 120, 107, -6, 132, 0, 0, 0, 0) \
     X(ITEM_BARRELCHEST_ANCHOR, 10887, "Barrelchest anchor", SLOT_WEAPON, 1, 6, 1, 1, -2, 10, 92, 0, 0, 0, 0, 0, 0, 0, 100, 0, 0, 0) \
     X(ITEM_ARKAN_BLADE, 30955, "Arkan blade", SLOT_WEAPON, 0, 4, 1, 1, 55, 70, 0, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 1) \
+
+#define OSRS_ITEM_WIKI_EXT_ROWS(X) \
     X(ITEM_DRAGON_WARHAMMER, 13576, "Dragon warhammer", SLOT_WEAPON, 0, 6, 1, 1, -4, -4, 95, -4, 0, 0, 0, 0, 0, 0, 85, 0, 0, 0) \
     X(ITEM_TONALZTICS_OF_RALOS, 28922, "Tonalztics of ralos", SLOT_WEAPON, 0, 7, 7, 2, 0, 0, 0, 0, 115, 0, 0, 0, 0, 0, 0, 55, 0, 2) \
 

@@ -10,7 +10,8 @@
  *   cc -std=c11 -O2 -I. -o /tmp/test_wiki_item_rows ocean/osrs/tests/test_wiki_item_rows.c -lm && /tmp/test_wiki_item_rows */
 
 static_assert(OSRS_STAT_ITEM_SLOTS >= 40, "the live server keeps at least 40 stat-priced rows");
-static_assert(NUM_ITEMS + OSRS_STAT_ITEM_SLOTS < ITEM_NONE, "every row index stays below ITEM_NONE");
+static_assert(NUM_ITEMS + OSRS_STAT_ITEM_SLOTS <= 254, "rows below the stat slots and the stat slots keep one-byte codes");
+static_assert(NUM_ITEM_ROWS < ITEM_NONE, "every row index stays below ITEM_NONE");
 static_assert(NUM_ITEMS == NUM_HAND_ITEMS + OSRS_ITEM_WIKI_ROW_COUNT, "wiki rows follow the frozen hand rows");
 
 #define FIELDS 25
@@ -43,8 +44,8 @@ static void check_row(char* line, int order) {
     assert(n >= 22 + 1);
     int raw = atoi(f[0]);
     int idx = osrs_item_index_from_raw_id(raw);
-    assert(idx == NUM_HAND_ITEMS + order);          /* appended in TSV order, indexes of existing rows never move */
-    assert(idx < NUM_ITEMS && idx < ITEM_NONE && osrs_item_row_valid(idx));
+    assert(idx == osrs_item_fixed_row(NUM_HAND_ITEMS + order));          /* appended in TSV order, indexes of existing rows never move */
+    assert(osrs_item_has_fixed_row(idx) && osrs_item_row_valid(idx));
     const Item* it = &ITEM_DATABASE[idx];
     assert(it->item_id == raw && !strcmp(it->name, f[2]));
     assert(it->slot == slot_of(f[3]) && it->two_handed == atoi(f[4]));
@@ -79,7 +80,8 @@ int main(void) {
         check_row(line, rows++);
     }
     fclose(fh);
-    assert(rows == OSRS_ITEM_WIKI_ROW_COUNT && rows > 0);
+    assert(rows == OSRS_ITEM_WIKI_ROW_COUNT + OSRS_ITEM_WIKI_EXT_ROW_COUNT && rows > 0);
+    assert(ITEM_DRAGON_WARHAMMER == OSRS_ITEM_EXT_BASE && ITEM_TONALZTICS_OF_RALOS == OSRS_ITEM_EXT_BASE + 1);
 
     /* Exact wiki numbers of three weapons (OSRS Wiki Combat stats infoboxes). Belle's folly: one-handed stab sword, no special attack. */
     int belle = osrs_item_index_from_raw_id(31248);
@@ -110,8 +112,9 @@ int main(void) {
     assert(osrs_item_index_from_raw_id(28951) == ITEM_DIZANAS_QUIVER && osrs_item_index_from_raw_id(29605) == ITEM_AGS);
 
     /* No raw id names two rows. */
-    for (int i = 0; i < NUM_ITEMS; i++)
-        for (int j = i + 1; j < NUM_ITEMS; j++) assert(ITEM_DATABASE[i].item_id != ITEM_DATABASE[j].item_id);
+    for (int i = 0; i < OSRS_ITEM_FIXED_ROW_COUNT; i++)
+        for (int j = i + 1; j < OSRS_ITEM_FIXED_ROW_COUNT; j++)
+            assert(ITEM_DATABASE[osrs_item_fixed_row(i)].item_id != ITEM_DATABASE[osrs_item_fixed_row(j)].item_id);
 
     printf("Wiki item rows passed: %d rows, NUM_ITEMS %d, stat slots %d\n", rows, NUM_ITEMS, OSRS_STAT_ITEM_SLOTS);
     return 0;

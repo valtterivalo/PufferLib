@@ -260,12 +260,12 @@ static void opp_fit_actions(const OppFit* fit, const RiskfightState* s, const Hi
     int armed = obs[13] >= 0.5f;
     int holding_maul = pvp_is_maul(self.weapon);
     if (maul) {
-        actions[RF_WEAPON] = inventory.item_slot[riskfight_item_slot(ITEM_GRANITE_MAUL_ORNATE)];
+        actions[RF_WEAPON] = inventory.item_slot[osrs_item_byte_code(ITEM_GRANITE_MAUL_ORNATE)];
         actions[RF_SHIELD] = 0;
         actions[RF_SPECIAL] = 2;
         actions[RF_PRIMARY] = RF_ATTACK;
     } else if (kind != WK_NONE) {
-        actions[RF_WEAPON] = inventory.item_slot[riskfight_item_slot(WK_ITEM[kind])];
+        actions[RF_WEAPON] = inventory.item_slot[osrs_item_byte_code(WK_ITEM[kind])];
         if (item_is_two_handed(WK_ITEM[kind])) actions[RF_SHIELD] = 0;
         actions[RF_SPECIAL] = !holding_maul && (WK_COST[kind] > 0 ? !armed : armed);
     } else if (!eating) {

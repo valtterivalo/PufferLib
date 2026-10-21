@@ -69,14 +69,26 @@ typedef struct {
 /* Rows after the fixed table hold items the sim has no hand-written row for, priced from their stats at run time (gearswapper/gs_stat_items.h
  * fills them from the Java item table: bonuses, speed, style, two-handedness; no special attack, no effects). The table is rewritten only at a
  * request boundary (osrs_stat_items_clear), never while worlds run. */
-#define OSRS_STAT_ITEM_SLOTS 40 /* NUM_ITEMS + slots must stay below ITEM_NONE; 40 is the floor scripts/gen_osrs_item_rows.py keeps */
+#define OSRS_STAT_ITEM_SLOTS 40 /* NUM_ITEMS + slots stays at most 254 (one-byte codes); 40 is the floor scripts/gen_osrs_item_rows.py keeps */
 #include "osrs_items_generated.h"
 
 static int osrs_stat_item_count;
 static uint8_t osrs_stat_item_style[OSRS_STAT_ITEM_SLOTS]; /* AttackStyle of a stat row: 1 melee, 2 ranged, 3 magic */
 
+/** A fixed row: hand and wiki rows below the stat slots, or wiki rows from OSRS_ITEM_EXT_BASE. */
+static inline int osrs_item_has_fixed_row(int item_index) {
+    return (item_index >= 0 && item_index < NUM_ITEMS) || (item_index >= OSRS_ITEM_EXT_BASE && item_index < NUM_ITEM_ROWS);
+}
+
+#define OSRS_ITEM_FIXED_ROW_COUNT (NUM_ITEMS + OSRS_ITEM_WIKI_EXT_ROW_COUNT)
+
+/** The fixed row at a dense position 0..OSRS_ITEM_FIXED_ROW_COUNT-1. */
+static inline int osrs_item_fixed_row(int position) {
+    return position < NUM_ITEMS ? position : OSRS_ITEM_EXT_BASE + position - NUM_ITEMS;
+}
+
 static inline int osrs_item_row_valid(int item_index) {
-    return item_index >= 0 && item_index < NUM_ITEMS + osrs_stat_item_count;
+    return osrs_item_has_fixed_row(item_index) || (item_index >= NUM_ITEMS && item_index < NUM_ITEMS + osrs_stat_item_count);
 }
 
 static inline void osrs_stat_items_clear(void) { osrs_stat_item_count = 0; }
@@ -180,6 +192,8 @@ static inline int osrs_item_index_from_raw_id(int raw) {
 #undef OSRS_RAW_GEAR_ALIAS_CASE
     for (int i = 0; i < NUM_ITEMS + osrs_stat_item_count; i++)
         if (ITEM_DATABASE[i].item_id == raw) return i;
+    for (int i = OSRS_ITEM_EXT_BASE; i < NUM_ITEM_ROWS; i++)
+        if (ITEM_DATABASE[i].item_id == raw) return i;
     return -1;
 }
 
@@ -269,9 +283,10 @@ static inline int get_item_attack_style(uint16_t item_index) {
 #define OSRS_WIKI_ITEM_STYLE_CASE(ENUM, RAW, NAME, SLOT, TWO, SPEED, RANGE, STYLE, ...) \
         case ENUM: return STYLE;
         OSRS_ITEM_WIKI_ROWS(OSRS_WIKI_ITEM_STYLE_CASE)
+        OSRS_ITEM_WIKI_EXT_ROWS(OSRS_WIKI_ITEM_STYLE_CASE)
 #undef OSRS_WIKI_ITEM_STYLE_CASE
         default:
-            return item_index >= NUM_ITEMS && osrs_item_row_valid(item_index) ? osrs_stat_item_style[item_index - NUM_ITEMS] : 0;
+            return !osrs_item_has_fixed_row(item_index) && osrs_item_row_valid(item_index) ? osrs_stat_item_style[item_index - NUM_ITEMS] : 0;
     }
 }
 

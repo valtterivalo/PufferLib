@@ -57,9 +57,10 @@ static int expected_gear_slot(EquipmentSlot slot) {
 
 static int verify_generated_gear_metadata(void) {
     int failures = 0;
-    for (int item_idx = 0; item_idx < NUM_ITEMS; item_idx++) {
+    for (int position = 0; position < OSRS_ITEM_FIXED_ROW_COUNT; position++) {
+        int item_idx = osrs_item_fixed_row(position);
         uint16_t content_code =
-            osrs_inventory_content_code_from_item((uint8_t)item_idx);
+            osrs_inventory_content_code_from_item((uint16_t)item_idx);
         const OsrsItemContentMetadata* metadata =
             osrs_item_content_metadata(content_code);
         const Item* item = &ITEM_DATABASE[item_idx];
@@ -99,7 +100,7 @@ int main(void) {
 
     for (size_t e = 0; e < n_expected_effect_free; e++) {
         int item = EXPECTED_ITEM_EFFECT_FREE_ITEMS[e];
-        if (item < 0 || item >= NUM_ITEMS) {
+        if (!osrs_item_has_fixed_row(item)) {
             fprintf(stderr,
                     "FAIL: EXPECTED_ITEM_EFFECT_FREE_ITEMS row %zu has invalid "
                     "item index %d\n",
@@ -118,7 +119,8 @@ int main(void) {
     }
 
     int non_none_seen = 0;
-    for (int i = 0; i < NUM_ITEMS; i++) {
+    for (int position = 0; position < OSRS_ITEM_FIXED_ROW_COUNT; position++) {
+        int i = osrs_item_fixed_row(position);
         uint32_t expected = OSRS_ITEM_EFFECT_NONE;
         for (size_t e = 0; e < n_expected; e++) {
             if (EXPECTED_ITEM_EFFECTS[e].item == i) {
@@ -152,6 +154,6 @@ int main(void) {
     }
 
     printf("test_osrs_item_effect_masks: OK (%zu effect items pinned, %d/%d effect-free)\n",
-           n_expected, NUM_ITEMS - (int)n_expected, NUM_ITEMS);
+           n_expected, OSRS_ITEM_FIXED_ROW_COUNT - (int)n_expected, OSRS_ITEM_FIXED_ROW_COUNT);
     return 0;
 }

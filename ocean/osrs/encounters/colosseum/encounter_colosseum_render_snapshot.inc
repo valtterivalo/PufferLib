@@ -638,7 +638,7 @@ static void col_emit_player_attack_projectiles(
         osrs_combat_visual_ranged_projectile_profile(
             weapon, OSRS_COMBAT_PROJECTILE_NONE);
     const OsrsCombatVisualRow* effect = NULL;
-    if (s->player.used_special_this_tick && weapon < NUM_ITEMS) {
+    if (s->player.used_special_this_tick && osrs_item_has_fixed_row(weapon)) {
         effect = osrs_combat_visual_find_special_projectile_item_id(
             ITEM_DATABASE[weapon].item_id, ATTACK_STYLE_RANGED);
     }

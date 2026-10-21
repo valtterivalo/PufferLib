@@ -9,7 +9,8 @@ int main(void) {
             cells[slot] = osrs_inventory_cell_from_content_code(
                 (base + (slot / 2) * 17) % OSRS_ITEM_CONTENT_COUNT);
         OsrsInventoryIndex index = osrs_inventory_index(cells);
-        for (int item = 0; item < NUM_ITEMS; item++) {
+        for (int position = 0; position < OSRS_ITEM_FIXED_ROW_COUNT; position++) {
+            int item = osrs_item_fixed_row(position);
             int expected = 0;
             for (int slot = 0; slot < OSRS_INVENTORY_SIZE && !expected; slot++)
                 if (osrs_inventory_cell_metadata(&cells[slot])->item_idx == item) expected = slot + 1;

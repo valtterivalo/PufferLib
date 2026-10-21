@@ -36,6 +36,9 @@ nice -n 19 $out/assets 2>/dev/null | tail -1 || exit 1
 nice -n 19 cc -std=c11 -O2 -Wno-unused-function -I. -o $out/human ocean/osrs/tests/test_tfa_human.c -lm || exit 1
 echo "== human walk and attack clicks"
 nice -n 19 $out/human | tail -1 || exit 1
+nice -n 19 cc -std=c11 -O2 -Wno-unused-function -I. -o $out/byte_codes ocean/osrs/tests/test_stat_item_byte_codes.c -lm || exit 1
+echo "== stat slot one-byte codes"
+nice -n 19 $out/byte_codes | tail -1 || exit 1
 fail=0
 for spec in "guardian_slam 0 1" "guardian 0 2" "guardian 0 3" "xarth 5 3" "bork 1 2" "moia 4 3" "dreadnoth 3 3" "ezekiel 2 3" "ocellus 7 3"; do
     set -- ${=spec}

@@ -534,7 +534,7 @@ static int render_offhand_uses_shield_block_anim(uint16_t item_idx) {
         case ITEM_DRAGONFIRE_SHIELD:
             return 1;
         default:
-            return item_idx < NUM_ITEMS && ITEM_DATABASE[item_idx].slot == SLOT_SHIELD;
+            return osrs_item_has_fixed_row(item_idx) && ITEM_DATABASE[item_idx].slot == SLOT_SHIELD;
     }
 }
 
@@ -4158,7 +4158,7 @@ static int render_weapon_anim_or_fallback(
     RenderClient* rc, const RenderEntity* p, RenderItemAnimKind kind, int fallback
 ) {
     uint16_t weapon_idx = p->equipped[GEAR_SLOT_WEAPON];
-    if (weapon_idx >= NUM_ITEMS) return fallback;
+    if (!osrs_item_has_fixed_row(weapon_idx)) return fallback;
 
     uint16_t item_id = ITEM_DATABASE[weapon_idx].item_id;
     uint32_t anim_id = render_item_anim_id(item_id, kind);

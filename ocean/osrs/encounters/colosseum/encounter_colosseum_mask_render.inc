@@ -172,7 +172,7 @@ static void col_prepare_render_player(const ColosseumState* s, int spec_fired_ki
     GearSet gear = col_gear_set_for_attack_style(col_equipped_weapon_attack_style(&s->player));
     out->current_gear = gear;
     out->visible_gear = gear;
-    if (spec_fired_kind > 0 && spec_fired_kind < NUM_ITEMS) {
+    if (spec_fired_kind > 0 && osrs_item_has_fixed_row(spec_fired_kind)) {
         out->equipped[GEAR_SLOT_WEAPON] = (uint8_t)spec_fired_kind;
         out->equipped[GEAR_SLOT_SHIELD] = osrs_suppress_shield_for_two_handed_weapon(
             out->equipped[GEAR_SLOT_WEAPON], out->equipped[GEAR_SLOT_SHIELD]);

@@ -173,7 +173,7 @@ static inline void osrs_derive_equipment_effect_profile(
 
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
         uint16_t item_index = equipped[slot];
-        if (item_index >= NUM_ITEMS) {
+        if (!osrs_item_has_fixed_row(item_index)) {
             continue;
         }
 

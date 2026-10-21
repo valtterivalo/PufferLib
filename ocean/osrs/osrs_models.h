@@ -506,7 +506,7 @@ static OsrsPlayerAppearance osrs_resolve_player_appearance(
 
     uint16_t weapon_index = equipped[GEAR_SLOT_WEAPON];
     int suppress_shield = 0;
-    if (weapon_index < NUM_ITEMS) {
+    if (osrs_item_has_fixed_row(weapon_index)) {
         uint16_t weapon_item_id = ITEM_DATABASE[weapon_index].item_id;
         suppress_shield = item_is_two_handed(weapon_index) ||
             item_render_is_two_handed(weapon_item_id);
@@ -515,7 +515,7 @@ static OsrsPlayerAppearance osrs_resolve_player_appearance(
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
         if (slot == GEAR_SLOT_SHIELD && suppress_shield) continue;
         uint16_t db_idx = equipped[slot];
-        if (db_idx >= NUM_ITEMS) continue;
+        if (!osrs_item_has_fixed_row(db_idx)) continue;
         out.hide_body_mask |= item_hide_body_mask(ITEM_DATABASE[db_idx].item_id);
     }
 
@@ -530,7 +530,7 @@ static OsrsPlayerAppearance osrs_resolve_player_appearance(
         int slot = OSRS_VISIBLE_EQUIP_SLOTS[i];
         if (slot == GEAR_SLOT_SHIELD && suppress_shield) continue;
         uint16_t db_idx = equipped[slot];
-        if (db_idx >= NUM_ITEMS) continue;
+        if (!osrs_item_has_fixed_row(db_idx)) continue;
         uint16_t item_id = ITEM_DATABASE[db_idx].item_id;
         uint32_t model_id = item_to_wield_model(item_id);
         out.item_model_ids[slot] = model_id;

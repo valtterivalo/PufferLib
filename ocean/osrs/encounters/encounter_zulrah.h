@@ -1885,7 +1885,7 @@ static void zul_apply_human_player_commands(ZulrahState* s) {
         const HumanCommand* cmd = &s->human_commands[i];
         if (cmd->kind == HUMAN_COMMAND_EQUIP_INVENTORY_ITEM) {
             if (cmd->gear_slot >= 0 && cmd->gear_slot < NUM_GEAR_SLOTS &&
-                cmd->item_db_idx >= 0 && cmd->item_db_idx < NUM_ITEMS) {
+                cmd->item_db_idx >= 0 && osrs_item_has_fixed_row(cmd->item_db_idx)) {
                 int changed = slot_equip_item(&s->player, cmd->gear_slot, (uint8_t)cmd->item_db_idx);
                 if (changed) {
                     did_change_stats = 1;
@@ -3017,7 +3017,7 @@ static void zul_emit_player_projectile_profile(
 ) {
     if (!profile || profile->projectile_model_id <= 0) {
         uint16_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
-        int item_id = weapon < NUM_ITEMS ? ITEM_DATABASE[weapon].item_id : -1;
+        int item_id = osrs_item_has_fixed_row(weapon) ? ITEM_DATABASE[weapon].item_id : -1;
         fprintf(stderr, "zulrah: missing player projectile model for item %d style %d\n",
             item_id, style);
         abort();
@@ -3060,7 +3060,7 @@ static void zul_emit_player_attack_projectiles(ZulrahState* s, EncounterOverlay*
     int style = s->player_attack_style_id;
     if (style == ATTACK_STYLE_MAGIC) {
         const OsrsCombatProjectileProfile* profile = NULL;
-        if (s->player_attack_is_special && weapon < NUM_ITEMS) {
+        if (s->player_attack_is_special && osrs_item_has_fixed_row(weapon)) {
             const OsrsCombatVisualRow* effect =
                 osrs_combat_visual_find_special_projectile_item_id(
                     ITEM_DATABASE[weapon].item_id, ATTACK_STYLE_MAGIC);
@@ -3076,7 +3076,7 @@ static void zul_emit_player_attack_projectiles(ZulrahState* s, EncounterOverlay*
         osrs_combat_visual_ranged_projectile_profile(
             weapon, OSRS_COMBAT_PROJECTILE_NONE);
     const OsrsCombatVisualRow* effect = NULL;
-    if (s->player_attack_is_special && weapon < NUM_ITEMS) {
+    if (s->player_attack_is_special && osrs_item_has_fixed_row(weapon)) {
         effect = osrs_combat_visual_find_special_projectile_item_id(
             ITEM_DATABASE[weapon].item_id, ATTACK_STYLE_RANGED);
     }
@@ -3084,7 +3084,7 @@ static void zul_emit_player_attack_projectiles(ZulrahState* s, EncounterOverlay*
     int part_count = osrs_combat_visual_build_projectile_sequence(
         base_profile, effect, parts, OSRS_COMBAT_PROJECTILE_SEQUENCE_MAX);
     if (part_count <= 0) {
-        int item_id = weapon < NUM_ITEMS ? ITEM_DATABASE[weapon].item_id : -1;
+        int item_id = osrs_item_has_fixed_row(weapon) ? ITEM_DATABASE[weapon].item_id : -1;
         fprintf(stderr, "zulrah: missing ranged projectile sequence for item %d\n",
             item_id);
         abort();

@@ -709,7 +709,7 @@ static inline void riskfight_write_action_mask_keyed(const RiskfightState* s, in
 /** First inventory slot (1-based, 0 when absent) per consumable kind and per item. */
 typedef struct {
     int kind_slot[OSRS_CONSUMABLE_COUNT];
-    uint8_t item_slot[NUM_ITEMS + OSRS_STAT_ITEM_SLOTS + 1]; /* ITEM_NONE at the last index (riskfight_item_slot) */
+    uint8_t item_slot[256]; /* by osrs_item_byte_code */
     uint16_t main_weapon, shield;
     uint16_t weapons[RF_KIT_WEAPONS + 1]; /* every weapon in the bag, in slot order */
     int weapon_count;
@@ -719,17 +719,13 @@ static int riskfight_is_switch_weapon(uint16_t weapon) {
     return weapon == ITEM_VOIDWAKER || weapon == ITEM_DHAROKS_GREATAXE || pvp_is_maul(weapon);
 }
 
-static int riskfight_item_slot(uint16_t item) {
-    return item == ITEM_NONE ? NUM_ITEMS + OSRS_STAT_ITEM_SLOTS : item;
-}
-
 static RiskfightObservedInventory riskfight_observed_inventory(const float* obs) {
     RiskfightObservedInventory inventory = {{0}, {0}, ITEM_NONE, ITEM_NONE, {0}, 0};
     for (int slot = OSRS_INVENTORY_SIZE - 1; slot >= 0; slot--) {
         const OsrsItemContentMetadata* m = osrs_item_content_metadata(
             osrs_inventory_cell_obs_code_decode(obs[RF_INVENTORY_START + slot * RF_INVENTORY_WIDTH]));
         inventory.kind_slot[m->consumable_kind] = slot + 1;
-        inventory.item_slot[riskfight_item_slot(m->item_idx)] = slot + 1;
+        inventory.item_slot[osrs_item_byte_code(m->item_idx)] = slot + 1;
         if (m->gear_slot == GEAR_SLOT_WEAPON && !riskfight_is_switch_weapon(m->item_idx))
             inventory.main_weapon = m->item_idx;
         if (m->gear_slot == GEAR_SLOT_WEAPON && inventory.weapon_count <= RF_KIT_WEAPONS) inventory.weapons[inventory.weapon_count++] = m->item_idx;
@@ -1119,7 +1115,7 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
         riskfight_sample_event(seed, tick, 22, profile->maul_pm));
     int generic_roll = generic_spec != ITEM_NONE && !vw_spec && !maul_spec && obs[6] * 100 >= generic_cost - 0.5f && opponent[0] < 0.65f &&
         riskfight_sample_event(seed, attack_tick, 25, profile->vw_pm);
-    int voidwaker_main = plain_main == ITEM_NONE && inventory.main_weapon == ITEM_NONE && (self.weapon == ITEM_VOIDWAKER || inventory.item_slot[riskfight_item_slot(ITEM_VOIDWAKER)]);
+    int voidwaker_main = plain_main == ITEM_NONE && inventory.main_weapon == ITEM_NONE && (self.weapon == ITEM_VOIDWAKER || inventory.item_slot[osrs_item_byte_code(ITEM_VOIDWAKER)]);
     uint16_t main_weapon = plain_main != ITEM_NONE ? plain_main : !riskfight_is_switch_weapon(self.weapon) ? self.weapon :
         voidwaker_main ? ITEM_VOIDWAKER : inventory.main_weapon != ITEM_NONE ? inventory.main_weapon : self.weapon;
     /* The greataxe swing: one roll per attack (keyed on attack_tick), RF_AXE_SWING_PM by his own hitpoints, his Vengeance up and the other side's bar, its odds
@@ -1151,13 +1147,13 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     actions[RF_PRAYER] = ranged_weapon ? OFFENSIVE_PRAYER_RIGOUR : OFFENSIVE_PRAYER_PIETY;
     actions[RF_OVERHEAD] = ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE;
     actions[RF_STYLE] = ranged_weapon ? FIGHT_STYLE_RAPID : FIGHT_STYLE_AGGRESSIVE;
-    actions[RF_WEAPON] = inventory.item_slot[riskfight_item_slot(weapon)];
+    actions[RF_WEAPON] = inventory.item_slot[osrs_item_byte_code(weapon)];
     if (!item_is_two_handed(weapon) && inventory.shield != ITEM_NONE)
-        actions[RF_SHIELD] = inventory.item_slot[riskfight_item_slot(inventory.shield)];
+        actions[RF_SHIELD] = inventory.item_slot[osrs_item_byte_code(inventory.shield)];
     int orb_pm = profile->dharok_eating ? RF_DHAROK_ORB_PM[self.weapon == ITEM_DHAROKS_GREATAXE][min_int(4, hp / 20)] :
         (weapon == ITEM_DHAROKS_GREATAXE && self.attack_timer == 1 && hp > 20 ? profile->orb_axe_pm : 0);
     actions[RF_ORB] = orb_pm && riskfight_sample_event(seed, profile->dharok_eating ? tick : attack_tick, 24, orb_pm);
-    actions[RF_RING] = inventory.item_slot[riskfight_item_slot(obs[7] > 0.1f ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING)];
+    actions[RF_RING] = inventory.item_slot[osrs_item_byte_code(obs[7] > 0.1f ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING)];
     if (obs[RF_SELF_TELEPORT_LOCK] > 0) return;
     int out_of_heals = !inventory.kind_slot[OSRS_CONSUMABLE_ANGLERFISH] && !inventory.kind_slot[OSRS_CONSUMABLE_KARAMBWAN] &&
         !inventory.kind_slot[OSRS_CONSUMABLE_MARLIN] &&

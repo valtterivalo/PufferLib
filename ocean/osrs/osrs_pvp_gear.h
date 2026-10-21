@@ -187,7 +187,7 @@ static inline int slot_equip_item(Player* p, int gear_slot, uint16_t item_idx) {
     p->equipped[gear_slot] = item_idx;
     p->slot_gear_dirty = 1;
 
-    if (gear_slot == GEAR_SLOT_WEAPON && item_idx < NUM_ITEMS) {
+    if (gear_slot == GEAR_SLOT_WEAPON && osrs_item_has_fixed_row(item_idx)) {
         update_spec_weapons_for_weapon(p, item_idx);
         int style = get_item_attack_style(item_idx);
 
@@ -461,7 +461,7 @@ static inline int add_item_to_inventory(Player* p, int gear_slot, uint16_t item_
     return 0;
 }
 
-static const uint16_t UPGRADE_REPLACES[NUM_ITEMS] = {
+static const uint16_t UPGRADE_REPLACES[NUM_ITEM_ROWS] = {
     [ITEM_HELM_NEITIZNOT]       = ITEM_NONE,
     [ITEM_GOD_CAPE]             = ITEM_NONE,
     [ITEM_GLORY]                = ITEM_NONE,

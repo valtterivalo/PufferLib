@@ -1669,9 +1669,10 @@ static void export_equipment(OsrsCache* cache, const char* out_dir) {
     }
 
     CacheGroup obj_files = cache_read_group(cache, CACHE_INDEX_CONFIGS, CACHE_CONFIG_OBJ);
-    EquipRow* rows = calloc((size_t)NUM_ITEMS, sizeof(EquipRow));
-    for (int i = 0; i < NUM_ITEMS; i++) {
-        uint16_t item_id = ITEM_DATABASE[i].item_id;
+    EquipRow* rows = calloc((size_t)OSRS_ITEM_FIXED_ROW_COUNT, sizeof(EquipRow));
+    for (int i = 0; i < OSRS_ITEM_FIXED_ROW_COUNT; i++) {
+        const Item* db = &ITEM_DATABASE[osrs_item_fixed_row(i)];
+        uint16_t item_id = db->item_id;
         const CacheFile* f = cache_group_file(&obj_files, item_id);
         assert(f);
         ItemDef item = item_decode(f);
@@ -1690,7 +1691,7 @@ static void export_equipment(OsrsCache* cache, const char* out_dir) {
             pack_model(&pack, (int)wield_model, merged, 64, 850, 128, 128);
         }
 
-        int equip_slot = ITEM_DATABASE[i].slot;
+        int equip_slot = db->slot;
         int ready, walk, run;
         stance_override(item_id, &ready, &walk, &run);
         rows[i] = (EquipRow){
@@ -1702,7 +1703,7 @@ static void export_equipment(OsrsCache* cache, const char* out_dir) {
             .wearpos1 = u32_or_missing(item.wearpos1),
             .wearpos2 = u32_or_missing(item.wearpos2),
             .wearpos3 = u32_or_missing(item.wearpos3),
-            .render_flags = equip_render_flags(&item, equip_slot, ITEM_DATABASE[i].two_handed),
+            .render_flags = equip_render_flags(&item, equip_slot, db->two_handed),
             .ready = u32_or_missing(ready),
             .walk = u32_or_missing(walk),
             .run = u32_or_missing(run),
@@ -1718,9 +1719,9 @@ static void export_equipment(OsrsCache* cache, const char* out_dir) {
     write_models(path, &defs, &pack);
     snprintf(path, sizeof(path), "%s/equipment.anims", out_dir);
     write_anims(path, cache, &pack, &(SeqBakeTable){0});
-    write_item_model_header(out_dir, rows, NUM_ITEMS);
+    write_item_model_header(out_dir, rows, OSRS_ITEM_FIXED_ROW_COUNT);
     write_player_model_header(out_dir);
-    printf("equipment: %d body parts, %d items, %d models, %d sequences\n", BODY_PART_COUNT, NUM_ITEMS,
+    printf("equipment: %d body parts, %d items, %d models, %d sequences\n", BODY_PART_COUNT, OSRS_ITEM_FIXED_ROW_COUNT,
         pack.model_count, pack.seq_count);
     free(rows);
 }
