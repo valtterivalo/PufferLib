@@ -6,6 +6,8 @@ out=$(mktemp -d)
 nice -n 19 cc -std=c11 -O2 -Wno-unused-function -I. -o $out/smoke ocean/osrs/tests/test_tfa_smoke.c -lm || exit 1
 nice -n 19 cc -std=c11 -O2 -Wno-unused-function -I. -o $out/dump ocean/osrs/tests/tfa_dump_events.c -lm || exit 1
 nice -n 19 $out/smoke | tail -1 || exit 1
+nice -n 19 cc -std=c11 -O2 -Wno-unused-function -I. -o $out/raid ocean/osrs/tests/test_tfa_raid.c -lm || exit 1
+nice -n 19 $out/raid | tail -1 || exit 1
 nice -n 19 cc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=undefined -Wno-unused-function -I. -o $out/fuzz ocean/osrs/tests/fuzz_tfa.c -lm || exit 1
 nice -n 19 $out/fuzz | tail -1 || exit 1
 nice -n 19 cc -std=c11 -O2 -Wno-unused-function -I. -o $out/replay_guardian ocean/osrs/tests/tfa_replay_guardian.c -lm || exit 1
