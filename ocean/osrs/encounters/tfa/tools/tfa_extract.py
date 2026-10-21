@@ -212,7 +212,10 @@ def load_rule_ids():
 
 
 def recordings():
-    return sorted(p for day in ("20261020", "20261021") for p in REC_DIR.glob(f"session_{day}T*.jsonl.zst"))
+    return sorted(p for p in REC_DIR.glob("session_2*T*.jsonl.zst") if p.name[8:16] >= TFA_RELEASE_DAY)
+
+
+TFA_RELEASE_DAY = "20261020"
 
 
 def cached_rows(src):
