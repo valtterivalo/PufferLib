@@ -40,11 +40,11 @@ nice -n 19 cc -std=c11 -O2 -Wno-unused-function -I. -o $out/byte_codes ocean/osr
 echo "== stat slot one-byte codes"
 nice -n 19 $out/byte_codes | tail -1 || exit 1
 fail=0
-for spec in "guardian_slam 0 1" "guardian 0 2" "guardian 0 3" "xarth 5 3" "bork 1 2" "moia 4 3" "dreadnoth 3 3" "ezekiel 2 3" "ocellus 7 3"; do
+for spec in "guardian_slam 0 1" "guardian 0 2" "guardian 0 3" "xarth 5 3" "bork 1 4 2+" "moia 4 3" "dreadnoth 3 3" "ezekiel 2 3" "ocellus 7 3"; do
     set -- ${=spec}
     nice -n 19 $out/dump $2 $3 60 1 > $out/$1_$3.tsv 2>/dev/null || exit 1
     echo "== $1 team $3"
-    nice -n 19 python3 ocean/osrs/encounters/tfa/tools/tfa_compare.py $1 $out/$1_$3.tsv $3 | tail -1
+    nice -n 19 python3 ocean/osrs/encounters/tfa/tools/tfa_compare.py $1 $out/$1_$3.tsv ${4:-$3} | tail -1
     [ ${pipestatus[1]} -eq 0 ] || fail=1
 done
 rm -rf $out

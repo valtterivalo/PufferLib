@@ -1,34 +1,44 @@
 kind	id	total	per_boss
-GFX	478	376	{'guardian': 139, 'ezekiel': 231, 'ocellus': 6}
-GFX	506	521	{'guardian': 132, 'ezekiel': 362, 'dreadnoth': 4, 'xarth': 5, 'ocellus': 18}
-GFX	1172	98	{'guardian': 15, 'ezekiel': 83}
-GFX	1231	79	{'guardian': 24, 'ezekiel': 54, 'ocellus': 1}
-GFX	1446	60	{'xarth': 60}
-GFX	1447	3	{'bork': 3}
-GFX	1448	3	{'bork': 3}
-GFX	1576	1281	{'dreadnoth': 1281}
-GFX	1891	35	{'ocellus': 35}
-GFX	1892	35	{'ocellus': 35}
-GFX	1893	13	{'ocellus': 13}
-GFX	1894	4	{'ocellus': 4}
+GFX	478	401	{'guardian': 139, 'ezekiel': 231, 'ocellus': 16, 'bork': 15}
+GFX	506	534	{'guardian': 132, 'ezekiel': 362, 'dreadnoth': 4, 'xarth': 5, 'ocellus': 26, 'bork': 5}
+GFX	1172	102	{'guardian': 15, 'ezekiel': 83, 'bork': 2, 'ocellus': 2}
+GFX	1231	89	{'guardian': 24, 'ezekiel': 54, 'ocellus': 2, 'bork': 9}
+GFX	1446	78	{'xarth': 78}
+GFX	1447	12	{'bork': 12}
+GFX	1448	7	{'bork': 7}
+GFX	1576	1425	{'dreadnoth': 1425}
+GFX	1891	43	{'ocellus': 35, 'bork': 8}
+GFX	1892	49	{'ocellus': 44, 'bork': 5}
+GFX	1893	14	{'ocellus': 14}
+GFX	1894	5	{'ocellus': 4, 'bork': 1}
+GFX	1895	35	{'bork': 13, 'ocellus': 22}
+GFX	1896	51	{'bork': 4, 'ocellus': 47}
+GFX	1897	4	{'ocellus': 4}
+GFX	1898	4	{'bork': 3, 'ocellus': 1}
 GFX	2421	9	{'moia': 9}
 GFX	2495	81	{'moia': 81}
-GFX	3310	3656	{'xarth': 3656}
+GFX	3310	4048	{'xarth': 4048}
 PROJ	156	6	{'guardian': 6}
-PROJ	368	879	{'dreadnoth': 443, 'xarth': 436}
-PROJ	1043	9	{'guardian': 9}
-PROJ	1120	3732	{'guardian': 1934, 'bork': 8, 'moia': 16, 'dreadnoth': 810, 'xarth': 358, 'ocellus': 603, 'ezekiel': 3}
-PROJ	1122	2297	{'guardian': 2195, 'dreadnoth': 35, 'xarth': 67}
+PROJ	368	918	{'dreadnoth': 456, 'xarth': 460, 'ocellus': 2}
+PROJ	1043	12	{'guardian': 9, 'bork': 2, 'xarth': 1}
+PROJ	1120	4055	{'guardian': 1934, 'bork': 75, 'moia': 16, 'dreadnoth': 873, 'xarth': 438, 'ocellus': 716, 'ezekiel': 3}
+PROJ	1122	2705	{'guardian': 2195, 'dreadnoth': 78, 'xarth': 186, 'bork': 166, 'ocellus': 80}
+PROJ	1272	10	{'dreadnoth': 10}
+PROJ	1384	302	{'bork': 75, 'dreadnoth': 58, 'xarth': 60, 'ocellus': 109}
 PROJ	1456	24	{'ezekiel': 24}
 PROJ	1462	3	{'ezekiel': 3}
-PROJ	1468	553	{'xarth': 99, 'ocellus': 187, 'guardian': 202, 'dreadnoth': 64, 'ezekiel': 1}
+PROJ	1468	568	{'xarth': 99, 'ocellus': 187, 'guardian': 202, 'dreadnoth': 64, 'ezekiel': 1, 'bork': 15}
 PROJ	1906	162	{'guardian': 94, 'dreadnoth': 68}
-PROJ	1907	941	{'guardian': 567, 'ezekiel': 280, 'dreadnoth': 94}
+PROJ	1907	1306	{'guardian': 567, 'ezekiel': 280, 'dreadnoth': 152, 'bork': 84, 'xarth': 48, 'ocellus': 175}
 PROJ	1934	84	{'dreadnoth': 45, 'xarth': 13, 'ocellus': 26}
-PROJ	1995	27	{'ezekiel': 5, 'dreadnoth': 7, 'xarth': 4, 'ocellus': 7, 'guardian': 4}
-PROJ	2727	59	{'guardian': 11, 'dreadnoth': 13, 'ezekiel': 10, 'xarth': 7, 'ocellus': 18}
-PROJ	2729	1	{'dreadnoth': 1}
-PROJ	2807	130	{'dreadnoth': 113, 'xarth': 17}
+PROJ	1936	163	{'bork': 32, 'xarth': 21, 'ocellus': 110}
+PROJ	1995	31	{'ezekiel': 5, 'dreadnoth': 8, 'xarth': 5, 'ocellus': 8, 'guardian': 4, 'bork': 1}
+PROJ	2007	56	{'dreadnoth': 56}
+PROJ	2291	44	{'dreadnoth': 44}
+PROJ	2599	1	{'xarth': 1}
+PROJ	2727	75	{'guardian': 11, 'dreadnoth': 17, 'ezekiel': 10, 'xarth': 11, 'ocellus': 22, 'bork': 4}
+PROJ	2729	3	{'dreadnoth': 1, 'bork': 2}
+PROJ	2807	141	{'dreadnoth': 121, 'xarth': 18, 'ocellus': 2}
 PROJ	3201	130	{'dreadnoth': 130}
 PROJ	3367	9	{'guardian': 9}
-PROJ	3730	99	{'guardian': 72, 'dreadnoth': 27}
+PROJ	3730	310	{'guardian': 72, 'dreadnoth': 73, 'ocellus': 165}

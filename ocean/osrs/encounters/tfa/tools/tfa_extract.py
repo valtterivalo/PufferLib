@@ -23,6 +23,7 @@ WANTED = {
     "TILE_OBJECT_DESPAWNED_OBSERVED",
     "SCENE_COLLISION_OBSERVED",
     "INTERACTING_OBSERVED",
+    "ACTOR_STATE_OBSERVED",
 }
 NEEDLES = [f'"eventKind":"{k}"'.encode() for k in WANTED]
 
@@ -55,6 +56,12 @@ def reduce_record(rec):
             if is_boss_npc(n["npcId"])
         ]
         return ["T", t, s, pl["cleanName"], pl["worldPoint"]["x"], pl["worldPoint"]["y"], so["baseX"], so["baseY"], so["instance"], pl["prayers"]["active"], pl["combatResources"]["hitpoints"]["boosted"], pl["combatResources"]["prayer"]["boosted"], npcs]
+    if kind == "ACTOR_STATE_OBSERVED":
+        a = p["actor"]
+        if a["kind"] != "PLAYER" or p["observation"] != "GAME_TICK":
+            return None
+        wp = p["state"]["worldPoint"]
+        return ["Q", t, s, a["cleanName"], wp["x"], wp["y"], p["state"]["overheadIcon"]]
     if kind == "ANIMATION_OBSERVED":
         a = p["actor"]
         if a["kind"] != "NPC" or not is_boss_npc(a["npcId"]) or p["animation"] == -1:
@@ -183,6 +190,7 @@ ATTACK_ANIMS = {
     "ocellus": {14806, 14807, 14809, 14810, 14811, 14812, 14813, 14814, 14837, 14842, 14846, 14848, 14851, 14857, 14858, 14861, 14869, 14871, 14878, 14881},
 }
 PROT_NAMES = {"PROTECT_FROM_MELEE": "PROT_MELEE", "PROTECT_FROM_MISSILES": "PROT_RANGE", "PROTECT_FROM_MAGIC": "PROT_MAGIC"}
+OVERHEAD_PROT = {"MELEE": "PROT_MELEE", "RANGED": "PROT_RANGE", "MAGIC": "PROT_MAGIC", "NONE": "-", "RETRIBUTION": "-", "SMITE": "-", "REDEMPTION": "-"}
 EVENT_HEADER = "fight_id\tt\tkind\tactor\tid\tx\ty\ta\tb\tc"
 
 
@@ -359,6 +367,8 @@ def build_fight(rows, local, boss, first, last, first_row, gv, rule_ids):
         elif k == "I":
             note_actor(r[3])
             note_actor(r[4])
+        elif k == "Q" and r[3] != local:
+            player_label(r[3].replace("\xa0", " "))
     f.players = players
     ords = collections.defaultdict(dict)
 
@@ -378,6 +388,7 @@ def build_fight(rows, local, boss, first, last, first_row, gv, rule_ids):
     ev = f.events
     cur_id = {}
     last_pray = None
+    last_mate_pray = {}
     last_hp = None
     last_npc = {}
     f.p0_pos = {}
@@ -431,6 +442,17 @@ def build_fight(rows, local, boss, first, last, first_row, gv, rule_ids):
                 if last_npc.get(idx, (None, None, None))[2] != n[9]:
                     add("NORI", lab, nid, x, y, a=n[9], idx=idx, nid=nid)
                 last_npc[idx] = ((x, y, nid), (hr, hs), n[9])
+        elif k == "Q":
+            if r[3] == local:
+                continue
+            lab = player_label(r[3].replace("\xa0", " "))
+            x, y = rel(r[4], r[5])
+            if 0 <= x < REGION and 0 <= y < REGION:
+                add("POS", lab, 0, x, y)
+            pr = OVERHEAD_PROT[r[6]]
+            if last_mate_pray.get(lab) != pr:
+                add("PRAY", lab, 0, "-", "-", a=pr)
+                last_mate_pray[lab] = pr
         elif k == "A":
             x, y = rel(r[5], r[6])
             add("ANIM", npc_label(r[3], r[4]), r[7], x, y, idx=r[4], nid=r[3])

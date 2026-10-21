@@ -1,3 +1,37 @@
+static int tfa_bork_safe_tile(const TfaState* s, int p, int x, int y) {
+    return tfa_bork_walkable(x, y) && tfa_tile_danger(s, p, x, y) < 0 && !(s->npcs[0].active && tfa_bork_covers(&s->npcs[0], x, y)) &&
+        !(s->npcs[1].active && tfa_bork_covers(&s->npcs[1], x, y));
+}
+
+/* The move (a step or a 2-tile run target) whose tile is nearest (gx, gy) along 8-way steps over safe Bork-arena tiles, 0 when none. */
+static int tfa_bork_step(const TfaState* s, int p, int gx, int gy) {
+    enum { W = 15, H = 17 };
+    int dist[W * H], queue[W * H], head = 0, tail = 0;
+    for (int i = 0; i < W * H; i++) dist[i] = -1;
+    dist[(gy - TFA_BORK.arena_y0) * W + gx - TFA_BORK.arena_x0] = 0;
+    queue[tail++] = (gy - TFA_BORK.arena_y0) * W + gx - TFA_BORK.arena_x0;
+    while (head < tail) {
+        int c = queue[head++], cx = c % W + TFA_BORK.arena_x0, cy = c / W + TFA_BORK.arena_y0;
+        for (int a = 1; a <= 8; a++) {
+            int nx = cx + ENCOUNTER_MOVE_TARGET_DX[a], ny = cy + ENCOUNTER_MOVE_TARGET_DY[a];
+            if (!tfa_bork_in_arena(nx, ny) || !tfa_bork_safe_tile(s, p, nx, ny)) continue;
+            int n = (ny - TFA_BORK.arena_y0) * W + nx - TFA_BORK.arena_x0;
+            if (dist[n] >= 0) continue;
+            dist[n] = dist[c] + 1;
+            queue[tail++] = n;
+        }
+    }
+    const Player* pl = &s->players[p].player;
+    int best = 1 << 30, move = 0;
+    for (int a = 1; a < OSRS_PRIMARY_MOVE_ACTIONS; a++) {
+        int nx = pl->x + ENCOUNTER_MOVE_TARGET_DX[a], ny = pl->y + ENCOUNTER_MOVE_TARGET_DY[a];
+        if (!tfa_bork_in_arena(nx, ny)) continue;
+        int d = dist[(ny - TFA_BORK.arena_y0) * W + nx - TFA_BORK.arena_x0];
+        if (d >= 0 && d < best) { best = d; move = a; }
+    }
+    return move;
+}
+
 /* Scripted raiders: attack the boss, pray by phase, eat and drink when low. */
 static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
     memset(acts, 0, sizeof(int) * TFA_NUM_ACTION_HEADS);
@@ -72,21 +106,63 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
             }
         }
     } else if (s->room == TFA_ROOM_BORK) {
+        /* The recorded two-tank play (bork_02, Talk:Bork): the tank stands next to Bork praying Melee, the rest stack 1 tile beyond the tank on the
+           side of the Smorks and pray against the soonest landing volley. When the bomb flies the tank steps 2 back so Bork walks under it and the
+           stack steps 2 aside; the stun is free damage; everyone hides behind the Smorks for the stomp. */
         const TfaBorkState* bs = &s->boss.bork;
         const TfaNpc* bork = tfa_npc_first(s, TFA_NPC_BORK);
         const TfaNpc* smorks = tfa_npc_first(s, TFA_NPC_SMORKS);
         target = bork ? bork : smorks;
-        want = PRAYER_PROTECT_MELEE;
-        if (smorks && bs->next_smork == s->tick + 1 && bs->next_gong != s->tick + 1) want = PRAYER_PROTECT_RANGED;
-        int best = 1 << 30;
-        int wave_soon = bs->next_gong - s->tick <= 3 || (bs->stomp_tick >= 0 && s->tick <= bs->stomp_tick + 11);
-        if (bork && smorks && wave_soon) {
+        int tank = bork && p == bs->tank;
+        want = tank ? PRAYER_PROTECT_MELEE : PRAYER_PROTECT_RANGED;
+        int soonest = 1 << 30;
+        for (int h = 0; h < tp->incoming.count; h++) {
+            const TfaIncomingHit* hit = &tp->incoming.hits[h];
+            if (hit->ticks_remaining < 2 || hit->ticks_remaining >= soonest) continue;
+            soonest = hit->ticks_remaining;
+            want = hit->attack_style == ATTACK_STYLE_MAGIC ? PRAYER_PROTECT_MAGIC : PRAYER_PROTECT_RANGED;
+        }
+        if (smorks) {
+            int stomp_soon = bork && bs->stomp_tick >= 0 && s->tick >= bs->stomp_tick - 6 && s->tick <= bs->stomp_tick + TFA_BORK.stomp_pulse_first +
+                (TFA_BORK.stomp_pulses - 1) * TFA_BORK.stomp_pulse_gap;
+            int land_x = -1, land_y = -1;
+            for (int i = 0; bork && i < bs->pending_count; i++)
+                if (bs->pending[i].kind == TFA_BORK_PEND_BOMB_LAND && !tfa_bork_covers(bork, bs->pending[i].x, bs->pending[i].y))
+                    land_x = bs->pending[i].x, land_y = bs->pending[i].y;
+            int want_x = tp->player.x, want_y = tp->player.y, cx2 = 0, cy2 = 0;
+            if (bork) {
+                const Player* tk = &s->players[bs->tank].player;
+                cx2 = 2 * bork->x + bork->size, cy2 = 2 * bork->y + bork->size;
+                int tx2 = 2 * tk->x + 1 - cx2, ty2 = 2 * tk->y + 1 - cy2;
+                int ux = abs(tx2) >= abs(ty2) ? (tx2 > 0) - (tx2 < 0) : 0, uy = ux ? 0 : (ty2 > 0) - (ty2 < 0);
+                want_x = tank ? tk->x : tk->x + ux;
+                want_y = tank ? tk->y : tk->y + uy;
+            }
+            if (land_x >= 0) {
+                int lx2 = 2 * land_x + 1 - cx2, ly2 = 2 * land_y + 1 - cy2;
+                int bx = abs(lx2) >= abs(ly2) ? (lx2 > 0) - (lx2 < 0) : 0, by = bx ? 0 : (ly2 > 0) - (ly2 < 0);
+                want_x = tank ? land_x + bx : land_x + 2 * by;
+                want_y = tank ? land_y + by : land_y + 2 * bx;
+            }
+            int best = 1 << 30;
             for (int x = TFA_BORK.arena_x0; x <= TFA_BORK.arena_x1; x++)
                 for (int y = TFA_BORK.arena_y0; y <= TFA_BORK.arena_y1; y++) {
-                    if (tfa_layout_blocked(tfa_room_layout(s->room), x, y) || tfa_tile_danger(s, p, x, y) >= 0 || !tfa_bork_shadowed(bork->x, bork->y, smorks, x, y)) continue;
-                    int d = chebyshev_distance(x, y, tp->player.x, tp->player.y);
-                    if (d < best) { best = d; hide_x = x; hide_y = y; }
+                    if (!tfa_bork_safe_tile(s, p, x, y)) continue;
+                    if (stomp_soon && !tfa_bork_shadowed(bork->x, bork->y, smorks, x, y)) continue;
+                    if (bork && !stomp_soon && !tank && !bs->stunned && encounter_rect_distance(x, y, 1, bork->x, bork->y, bork->size) <= 1) continue;
+                    int landing = 0;
+                    for (int i = 0; i < bs->pending_count && !landing; i++) {
+                        const TfaBorkPending* e = &bs->pending[i];
+                        int napalm = e->kind == TFA_BORK_PEND_NAPALM_LAND;
+                        if (!napalm && e->kind != TFA_BORK_PEND_BOMB_LAND) continue;
+                        landing = x - e->x >= (napalm ? -3 : -1) && x - e->x <= 1 && y - e->y >= (napalm ? -2 : -1) && y - e->y <= (napalm ? 3 : 1);
+                    }
+                    if (landing) continue;
+                    if (!stomp_soon && tank && land_x < 0 && encounter_rect_distance(x, y, 1, bork->x, bork->y, bork->size) != 1) continue;
+                    int d = stomp_soon ? chebyshev_distance(x, y, tp->player.x, tp->player.y) : chebyshev_distance(x, y, want_x, want_y);
+                    if (d < best) { best = d; go_x = x; go_y = y; }
                 }
+            if (bs->stunned && !stomp_soon && go_x == tp->player.x && go_y == tp->player.y) go_x = go_y = -1;
         }
     } else if (s->room == TFA_ROOM_EZEKIEL) {
         const TfaNpc* boss = tfa_npc_first(s, TFA_NPC_EZEKIEL);
@@ -212,7 +288,10 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
             if (d < best) { best = d; acts[OSRS_HEAD_PRIMARY] = a; }
         }
     }
-    if (go_x >= 0 && (tp->player.x != go_x || tp->player.y != go_y)) {
+    if (s->room == TFA_ROOM_BORK && go_x >= 0 && (tp->player.x != go_x || tp->player.y != go_y)) {
+        int move = tfa_bork_step(s, p, go_x, go_y);
+        if (move) acts[OSRS_HEAD_PRIMARY] = move;
+    } else if (go_x >= 0 && (tp->player.x != go_x || tp->player.y != go_y)) {
         int best = 1 << 30;
         for (int a = 1; a < OSRS_PRIMARY_MOVE_ACTIONS; a++) {
             int nx = tp->player.x + ENCOUNTER_MOVE_TARGET_DX[a], ny = tp->player.y + ENCOUNTER_MOVE_TARGET_DY[a];
@@ -240,7 +319,8 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
             for (int dy = -8; dy <= 8; dy++) {
                 int tx = tp->player.x + dx, ty = tp->player.y + dy;
                 if (!tfa_layout_blocked(layout, tx, ty) && tfa_tile_danger(s, p, tx, ty) < 0 &&
-                        !(s->room == TFA_ROOM_GUARDIAN && target->kind == TFA_NPC_GUARDIAN && tfa_guardian_covers(target, tx, ty))) {
+                        !(s->room == TFA_ROOM_GUARDIAN && target->kind == TFA_NPC_GUARDIAN && tfa_guardian_covers(target, tx, ty)) &&
+                        !(s->room == TFA_ROOM_BORK && !tfa_bork_safe_tile(s, p, tx, ty))) {
                     safe[safe_count][0] = tx;
                     safe[safe_count++][1] = ty;
                 }

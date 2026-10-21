@@ -16,6 +16,7 @@ typedef struct {
     int nhits;
     Anim anims[MAX_EVENTS];
     int nanims;
+    int party;
 } Fight;
 
 static Fight FIGHTS[MAX_FIGHTS];
@@ -75,6 +76,8 @@ static void replay(const Fight* f, int* matched, int* total, int off[3][5]) {
     tfa_finalize_context((EncounterState*)s, (EncounterContext*)ctx);
     tfa_reset_typed(s, ctx, 1);
     s->boss.dreadnoth.no_heal = 1;
+    TfaNpc* boss = tfa_npc_first(s, TFA_NPC_DREADNOTH);
+    boss->hp = boss->max_hp = tfa_party_hp(f->party, TFA_DREAD.hp_base, TFA_DREAD.hp_trio);
     int acts[TFA_MAX_PLAYERS * TFA_NUM_ACTION_HEADS] = {0};
     int t0 = f->hits[0].t;
     int last_t = f->anims[f->nanims - 1].t + 2;
@@ -122,6 +125,7 @@ static void replay(const Fight* f, int* matched, int* total, int off[3][5]) {
 int main(int argc, char** argv) {
     assert(argc == 2);
     load_events(argv[1]);
+    for (int i = 0; i < NFIGHTS; i++) FIGHTS[i].party = tfa_fixture_party(argv[1], FIGHTS[i].id);
     int matched[3] = {0}, total[3] = {0}, off[3][5] = {{0}};
     for (int i = 0; i < NFIGHTS; i++)
         if (FIGHTS[i].nhits > 0 && FIGHTS[i].nanims > 0) replay(&FIGHTS[i], matched, total, off);

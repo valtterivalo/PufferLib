@@ -480,7 +480,7 @@ static void oc_p1_next_corner(TfaState* s) {
 static void oc_p1_enter(TfaState* s) {
     TfaOcellusState* os = oc_state(s);
     TfaNpc* n = tfa_npc_spawn(s, TFA_NPC_OCELLUS, MON_TFA_OCELLUS_P1, OC_NPC_P1, 30, 45);
-    n->max_hp = n->hp = tfa_party_hp(s, TFA_OC1.hp_base_p1, TFA_OC1.hp_trio_p1);
+    n->max_hp = n->hp = tfa_party_hp(s->team_size, TFA_OC1.hp_base_p1, TFA_OC1.hp_trio_p1);
     os->phase = TFA_OCELLUS_P1;
     os->corner = tfa_rand(s, 4);
     os->window = TFA_OC1.window_fresh;
@@ -764,7 +764,7 @@ static void oc_p2_enter(TfaState* s, TfaNpc* n) {
     n->monster = MON_TFA_OCELLUS_P2;
     n->attackable = 0;
     n->act = TFA_ACT_IDLE;
-    n->hp = n->max_hp = tfa_party_hp(s, TFA_OC1.hp_base_p3, TFA_OC1.hp_base_p3 * TFA_TRIO_SCALE_PCT / 100);
+    n->hp = n->max_hp = tfa_party_hp(s->team_size, TFA_OC1.hp_base_p3, TFA_OC1.hp_base_p3 * TFA_TRIO_SCALE_PCT / 100);
     n->x = OC_CENTRE_X;
     n->y = OC_CENTRE_Y;
     tfa_npc_anim(s, n, OC_ANIM_P2_TRANSFORM);

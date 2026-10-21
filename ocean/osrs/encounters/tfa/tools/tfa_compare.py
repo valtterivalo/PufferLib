@@ -46,7 +46,7 @@ def next_attack(fights, boss, anim):
     for ev in fights.values():
         anims = [e for e in ev if e["kind"] == "ANIM" and (e["id"] in ATTACKS[boss] or e["id"] == anim)]
         for a, b in zip(anims, anims[1:]):
-            if a["id"] == anim and b["actor"].split("#")[1] == a["actor"].split("#")[1]:
+            if a["id"] == anim and b["actor"] == a["actor"]:
                 out.append(b["t"] - a["t"])
     return hist(out)
 
@@ -464,7 +464,7 @@ def xarth_ground(fights):
             elif e["kind"] == "OBJ-" and e["id"] in ("62711", "62712"):
                 broke = [b["t"] for b in ev if b["kind"] == "ANIM" and b["id"] == "14997" and (b["x"], b["y"]) == (e["x"], e["y"])]
                 out["rubble"][(e["id"], e["x"], e["y"], min((e["t"] - b for b in broke), key=abs, default="no 14997"))] += 1
-        pos = {e["t"]: (e["x"], e["y"]) for e in ev if e["kind"] == "POS"}
+        pos = {e["t"]: (e["x"], e["y"]) for e in ev if e["kind"] == "POS" and e["actor"] == "P0"}
         for t, tiles in fires.items():
             out["fire_under"][pos.get(t) in tiles] += 1
             if t == land:
@@ -539,43 +539,178 @@ def exact(name, real, sim, failures):
     print(f"{'ok ' if ok else 'BAD'} {name:28s} real {fmt(real):42s} sim {fmt(sim)}")
 
 
-def chain_gap(fights, a_id, b_id, actor_id):
-    out = []
-    for ev in fights.values():
-        anims = [e for e in ev if e["kind"] == "ANIM" and base(e["actor"]) == actor_id]
-        for a, b in zip(anims, anims[1:]):
-            if a["id"] == a_id and b["id"] == b_id:
-                out.append(b["t"] - a["t"])
-    return hist(out)
-
-
-def stomp_offsets(fights):
-    out = []
-    for ev in fights.values():
-        bombs = [e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14555"]
-        stomps = [e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14550"]
-        out += [min(t for t in stomps if t > b) - b for b in bombs if any(t > b for t in stomps)]
-    return hist(out)
-
-
 def proj_flights(fights, proj):
     return hist([max(1, int(float(e["b"]))) for ev in fights.values() for e in ev if e["kind"] == "PROJ" and e["id"] == proj])
 
 
-def smork_gaps(fights):
-    out = []
-    for ev in fights.values():
-        ts = [e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] in ("14554", "14555")]
-        out += [b - a for a, b in zip(ts, ts[1:])]
-    return out
+def support(name, real, sim, failures):
+    """Every value the sim produces was recorded (and the sim produces some when the recording has some)."""
+    if not real:
+        return
+    extra = sorted(set(sim) - set(real), key=str)
+    ok = bool(sim) and not extra
+    if not ok:
+        failures.append(name)
+    print(f"{'ok ' if ok else 'BAD'} {name:28s} real {fmt(real):42s} sim {fmt(sim)}" + (f"  unrecorded {extra[:4]}" if extra else ""))
 
 
-def gong_hit_delays(fights):
+def bork_next_anim(fights):
+    """Gong to gong with no other Bork attack anim between: 7, 6 after the speed step."""
     out = []
     for ev in fights.values():
-        hits = [e for e in ev if e["kind"] == "HIT" and e["actor"].startswith("P") and e["a"] in ("16", "17") and int(e["id"]) >= 5]
+        ts = [(e["t"], e["id"]) for e in ev if e["kind"] == "ANIM" and base(e["actor"]) == "16640" and e["id"] in ATTACKS["bork"]]
+        out += [b - a for (a, ia), (b, ib) in zip(ts, ts[1:]) if ia == ib == "14542"]
+    return hist(out)
+
+
+def bork_gong_hit_offsets(fights):
+    """Offsets 0..3 from a gong of the hits (>= 5, no projectile landing, napalm or bomb fire, or scorch under them) on raiders next to Bork at
+    the gong: the wave at +0, the ring at +2."""
+    out = []
+    for ev in fights.values():
+        pos = collections.defaultdict(dict)
+        for e in ev:
+            if e["kind"] == "POS" and e["x"] != "-":
+                pos[e["t"]][e["actor"]] = (int(e["x"]), int(e["y"]))
+        moves = sorted((e["t"], (int(e["x"]), int(e["y"]))) for e in ev if e["kind"] == "NPOS" and base(e["actor"]) == "16640")
+        lands = {(e["t"] + int(float(e["b"])), e["a"]) for e in ev if e["kind"] == "PROJ"}
+        fire = {e["t"] + int(float(e["b"])) for e in ev if e["kind"] == "PROJ" and e["id"] in ("4045", "4440")}
+        scorch, live = {}, set()
+        for e in sorted((e for e in ev if e["kind"] in ("OBJ+", "OBJ-") and e["id"] == "62544"), key=lambda e: e["t"]):
+            (live.add if e["kind"] == "OBJ+" else live.discard)((int(e["x"]), int(e["y"])))
+            scorch[e["t"]] = set(live)
+        def burning(t, x, y):
+            return (x, y) in scorch[max((k for k in scorch if k < t), default=None)] if any(k < t for k in scorch) else False
+        hits = collections.defaultdict(list)
+        for e in ev:
+            if e["kind"] == "HIT" and e["actor"].startswith("P") and e["a"] in ("16", "17") and int(e["id"]) >= 5 and (e["t"], e["actor"]) not in lands \
+                    and e["t"] not in fire and not burning(e["t"], *pos.get(e["t"] - 1, {}).get(e["actor"], (int(e["x"]), int(e["y"])))):
+                hits[e["t"]].append(e["actor"])
         for g in (e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14542"):
-            out += [h["t"] - g for h in hits if g <= h["t"] <= g + 6]
+            b = max((m for m in moves if m[0] < g), default=None)
+            if b is None:
+                continue
+            bx, by = b[1]
+            beside = {p for p, (x, y) in pos.get(g - 1, {}).items() if max(max(bx - x, 0, x - (bx + 3)), max(by - y, 0, y - (by + 3))) == 1}
+            out += [k for k in range(4) for p in hits.get(g + k, []) if p in beside]
+    return hist(out)
+
+
+def bork_death(ev):
+    return min([e["t"] for e in ev if (e["kind"] == "ANIM" and e["id"] == "14541") or (e["kind"] == "NPC-" and base(e["actor"]) == "16640")], default=1 << 30)
+
+
+def smork_moves(ev):
+    """(tick, move) of every Smorks attack: A volley, N napalm, B bomb (the anim, one tick before its projectile)."""
+    moves = {}
+    for e in ev:
+        if e["kind"] == "PROJ" and e["id"] in ("4056", "4057"):
+            moves.setdefault(e["t"], "A")
+        elif e["kind"] == "PROJ" and e["id"] == "4045":
+            moves[e["t"]] = "N"
+        elif e["kind"] == "PROJ" and e["id"] == "4440":
+            moves[e["t"] - 1] = "B"
+    return sorted(moves.items())
+
+
+def bork_chains(fights):
+    """Per bomb: ('stun', 14545 - bomb, 14549 - 14545, 14550 - 14549, 14551 - 14550, gong - 14550) or ('miss', 14550 - bomb, 14551 - 14550, gong - 14550)."""
+    out = []
+    for ev in fights.values():
+        anims = collections.defaultdict(list)
+        for e in ev:
+            if e["kind"] == "ANIM" and base(e["actor"]) == "16640":
+                anims[e["id"]].append(e["t"])
+        def after(anim, t):
+            return min((x for x in anims[anim] if x > t), default=None)
+        for b in (e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14555"):
+            stomp = after("14550", b)
+            if stomp is None or stomp > bork_death(ev):
+                continue
+            stun = after("14545", b)
+            end, gong = after("14551", stomp), after("14542", stomp)
+            if end is None or gong is None:
+                continue
+            if stun is not None and stun < stomp:
+                angry = after("14549", stun)
+                out.append(("stun", stun - b, angry - stun, stomp - angry, end - stomp, gong - stomp))
+            else:
+                out.append(("miss", stomp - b, end - stomp, gong - stomp))
+    return hist(out)
+
+
+def smork_move_gaps(fights):
+    """(move, next move, gap) between consecutive Smorks attacks while Bork lives, the gap after a bomb excluded."""
+    out = []
+    for ev in fights.values():
+        dead = bork_death(ev)
+        ms = [m for m in smork_moves(ev) if m[0] < dead]
+        out += [(a, b, tb - ta) for (ta, a), (tb, b) in zip(ms, ms[1:]) if a != "B"]
+    return hist(out)
+
+
+def smork_after_bomb(fights):
+    """Bomb to the next Smorks attack, by whether Bork was stunned (14545 within 6 of the bomb)."""
+    out = []
+    for ev in fights.values():
+        stuns = [e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14545"]
+        ms = smork_moves(ev)
+        out += [("stun" if any(0 < x - ta <= 6 for x in stuns) else "miss", tb - ta) for (ta, a), (tb, b) in zip(ms, ms[1:]) if a == "B" and tb < bork_death(ev)]
+    return hist(out)
+
+
+def smork_enraged_gaps(fights):
+    out = []
+    for ev in fights.values():
+        dead = bork_death(ev)
+        ms = [m for m in smork_moves(ev) if m[0] > dead]
+        out += [(a, b, tb - ta) for (ta, a), (tb, b) in zip(ms, ms[1:])]
+        if ms:
+            out.append(("death", ms[0][1], ms[0][0] - dead))
+    return hist(out)
+
+
+def smork_flights(fights):
+    """(Bork alive, flight) of every volley projectile."""
+    out = []
+    for ev in fights.values():
+        dead = bork_death(ev)
+        out += [(e["t"] < dead, int(float(e["b"]))) for e in ev if e["kind"] == "PROJ" and e["id"] in ("4056", "4057")]
+    return hist(out)
+
+
+def volley_spares_nearest(fights):
+    """Whether the one raider next to Bork for the 5 ticks before a volley (his tank) is among its targets, while Bork lives and two or more raiders
+    are placed, outside the 20 ticks after a stomp (the tank changes there)."""
+    out = []
+    for ev in fights.values():
+        dead = bork_death(ev)
+        pos = collections.defaultdict(dict)
+        for e in ev:
+            if e["kind"] == "POS" and e["x"] != "-":
+                pos[e["t"]][e["actor"]] = (int(e["x"]), int(e["y"]))
+        bork, cur = {}, None
+        for e in ev:
+            if e["kind"] == "NPOS" and base(e["actor"]) == "16640":
+                cur = (int(e["x"]), int(e["y"]))
+            bork[e["t"]] = cur
+        volleys = collections.defaultdict(set)
+        for e in ev:
+            if e["kind"] == "PROJ" and e["id"] in ("4056", "4057") and e["t"] < dead:
+                volleys[e["t"]].add(e["a"])
+        def beside(t):
+            placed, b = pos.get(t, {}), bork.get(t)
+            if len(placed) < 2 or b is None:
+                return None
+            near = [p for p, (x, y) in placed.items() if max(max(b[0] - x, 0, x - (b[0] + 3)), max(b[1] - y, 0, y - (b[1] + 3))) <= 1]
+            return near[0] if len(near) == 1 else None
+        stomps = [e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14550"]
+        for t, targets in volleys.items():
+            if any(0 <= t - st <= 20 for st in stomps):
+                continue
+            tanks = {beside(t - k) for k in range(1, 6)}
+            if len(tanks) == 1 and None not in tanks:
+                out.append(tanks.pop() in targets)
     return hist(out)
 
 
@@ -617,15 +752,19 @@ def gong_hits_in_shadow(fights):
     inside = total = 0
     for ev in fights.values():
         lands = {e["t"] + int(float(e["b"])) for e in ev if e["kind"] == "PROJ"}
-        bork = {e["t"]: (int(e["x"]), int(e["y"])) for e in ev if e["kind"] == "NPOS" and base(e["actor"]) == "16640"}
-        for g in (e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14542"):
+        moves = sorted((e["t"], (int(e["x"]), int(e["y"]))) for e in ev if e["kind"] == "NPOS" and base(e["actor"]) == "16640")
+        smorks_gone = min((e["t"] for e in ev if e["kind"] == "NPC-" and base(e["actor"]) == "16641"), default=1 << 30)
+        bork = {g: max(m for m in moves if m[0] < g)[1] for g in (e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14542") if g < smorks_gone}
+        before = {(e["t"], e["actor"]): (int(e["x"]), int(e["y"])) for e in ev if e["kind"] == "POS" and e["x"] != "-"}
+        for g in bork:
             for h in ev:
                 if h["kind"] == "HIT" and h["actor"].startswith("P") and h["t"] == g and h["a"] in ("16", "17") and int(h["id"]) >= 10 and g not in lands:
                     total += 1
-                    inside += shadowed(*bork[g], int(h["x"]), int(h["y"]))
+                    inside += shadowed(*bork[g], *before.get((g - 1, h["actor"]), (int(h["x"]), int(h["y"]))))
     return inside, total
 
 
+BORK_FEET = [{(1, 0), (2, 0)}, {(0, 1), (1, 0)}, {(0, 1), (0, 2)}, {(0, 2), (1, 3)}, {(1, 3), (2, 3)}, {(2, 3), (3, 2)}, {(3, 1), (3, 2)}, {(2, 0), (3, 1)}]
 BORK_STOMP_TEMPLATE = set()
 BORK_COUNTS = {"napalm": (7, 10), "bomb": (3, 5)}
 
@@ -673,6 +812,7 @@ def bork_ground(fights, walk):
             out["ring (extra, missing) tiles"][(len(set(got) - ring), len(ring - set(got)))] += 1
             out["ring delay residual"].update(d - (1 + abs(x - ring_pos[0] - 2) + abs(y - ring_pos[1] - 2)) for (x, y), d in got.items())
         for st in stomps:
+            sources = []
             for k in range(4):
                 got = dust[st + 1 + 3 * k]
                 if not got:
@@ -682,7 +822,10 @@ def bork_ground(fights, walk):
                     out["stomp tiles within 3 of the recorded template"][len(set(got) ^ BORK_STOMP_TEMPLATE) <= 3] += 1
                 fits = [(dx, dy) for dx in range(-2, 6) for dy in range(-2, 6)
                         if all(d == 1 + abs(x - b[0] - dx) + abs(y - b[1] - dy) for (x, y), d in got.items())]
-                out["stomp source offset"][fits[0] if fits else None] += 1
+                sources.append(fits[0] if fits else None)
+            if len(sources) == 4:
+                out["stomp feet alternate on a facing pair"][sources[0] == sources[2] and sources[1] == sources[3] and
+                    {sources[0], sources[1]} in BORK_FEET] += 1
         objs = {(e["t"], int(e["x"]), int(e["y"])): int(e["b"]) for e in ev if e["kind"] == "OBJ+" and e["id"] == "62544"}
         scorch_spans = [(e["t"], (int(e["x"]), int(e["y"]))) for e in ev if e["kind"] in ("OBJ+", "OBJ-") and e["id"] == "62544"]
         for t, tiles in splat.items():
@@ -703,8 +846,11 @@ def bork_ground(fights, walk):
                 out["scorch orientation = splat rotation"][objs.get((t + 1, *tile)) == 512 * variant] += 1
                 out["scorch orientation"][512 * variant] += 1
         removed = [e for e in ev if e["kind"] == "OBJ-" and e["id"] == "62544"]
-        for t in sorted({e["t"] for e in removed}):
-            out["scorch removal offset from the last stun"][max((t - st for st in stuns if st <= t), default=None)] += 1
+        cleanup = max((e["t"] for e in removed), default=None)
+        for e in removed:
+            placed = max((o[0] for o in objs if o[1:] == (int(e["x"]), int(e["y"])) and o[0] < e["t"]), default=None)
+            if placed is not None and e["t"] != cleanup:
+                out["scorch lifetime"][e["t"] - placed] += 1
         for e in removed:
             out["scorch removed with its placed orientation"][objs.get(
                 max((o for o in objs if o[1:] == (int(e["x"]), int(e["y"])) and o[0] < e["t"]), default=None)) == int(e["b"])] += 1
@@ -723,14 +869,16 @@ def bork_ground_laws(real, sim, failures):
 
 def bork(real, sim):
     failures = []
-    compare("14542 next attack", next_attack(real, "bork", "14542"), next_attack(sim, "bork", "14542"), failures)
-    exact("14555 -> stomp 14550", stomp_offsets(real), stomp_offsets(sim), failures)
-    exact("14550 -> 14551", chain_gap(real, "14550", "14551", "16640"), chain_gap(sim, "14550", "14551", "16640"), failures)
-    exact("14551 -> gong", chain_gap(real, "14551", "14542", "16640"), chain_gap(sim, "14551", "14542", "16640"), failures)
-    for proj in ("4056", "4057", "4045", "4440"):
+    support("14542 next Bork anim", bork_next_anim(real), bork_next_anim(sim), failures)
+    support("bomb -> stomp -> gong chain", bork_chains(real), bork_chains(sim), failures)
+    for proj in ("4045", "4440"):
         exact(f"{proj} flight", proj_flights(real, proj), proj_flights(sim, proj), failures)
-    median_law("smorks cannon gap", smork_gaps(real), smork_gaps(sim), 2, failures)
-    exact("gong player hit delay", gong_hit_delays(real), gong_hit_delays(sim), failures)
+    support("volley flight (Bork alive)", smork_flights(real), smork_flights(sim), failures)
+    support("smorks move gaps", smork_move_gaps(real), smork_move_gaps(sim), failures)
+    support("bomb -> next smorks attack", smork_after_bomb(real), smork_after_bomb(sim), failures)
+    support("smorks gaps after Bork died", smork_enraged_gaps(real), smork_enraged_gaps(sim), failures)
+    support("volley hits the tank", volley_spares_nearest(real), volley_spares_nearest(sim), failures)
+    support("gong hits beside Bork", bork_gong_hit_offsets(real), bork_gong_hit_offsets(sim), failures)
     exact("scorch after projectile", scorch_delay(real), scorch_delay(sim), failures)
     median_law("scorch tiles per landing", scorch_counts(real), scorch_counts(sim), 2, failures)
     ri, rt = gong_hits_in_shadow(real)
@@ -1433,7 +1581,8 @@ def main():
     real = load(FIXTURES / f"tfa_{boss.split('_')[0]}_events.tsv")
     if party:
         meta = {r["fight_id"]: r for r in csv.DictReader(open(FIXTURES / "tfa_fights.tsv"), delimiter="\t")}
-        real = {k: v for k, v in real.items() if meta[k]["party_size"] == party}
+        keep = (lambda n: int(n) >= int(party[:-1])) if party.endswith("+") else (lambda n: n == party)
+        real = {k: v for k, v in real.items() if keep(meta[k]["party_size"])}
     sim = load(sim_path)
     failures = {"guardian_slam": guardian_slam_laws, "guardian": guardian, "xarth": xarth, "dreadnoth": dreadnoth, "ezekiel": ezekiel, "bork": bork, "moia": moia, "ocellus": ocellus}[boss](real, sim)
     print(f"{len(failures)} laws differ: {failures}" if failures else "all laws agree")

@@ -115,7 +115,7 @@ static void tfa_xarth_loc(TfaState* s, int loc, int x, int y, int size) {
 static void tfa_xarth_enter(TfaState* s) {
     const TfaRoomLayout* l = tfa_room_layout(TFA_ROOM_XARTH);
     TfaNpc* x = tfa_npc_spawn(s, TFA_NPC_XARTH, MON_TFA_XARTH, XARTH_NPC, l->boss_x, l->boss_y);
-    x->hp = x->max_hp = tfa_party_hp(s, MONSTER_DATABASE[MON_TFA_XARTH].hp, TFA_XARTH.hp_trio);
+    x->hp = x->max_hp = tfa_party_hp(s->team_size, MONSTER_DATABASE[MON_TFA_XARTH].hp, TFA_XARTH.hp_trio);
     for (int i = 0; i < 3; i++) {
         tfa_npc_spawn_inert(s, TFA_NPC_XARTH_PILLAR, XARTH_NPC_PILLAR, 2,
             TFA_XARTH_PILLAR_TILES[i][0], TFA_XARTH_PILLAR_TILES[i][1]);

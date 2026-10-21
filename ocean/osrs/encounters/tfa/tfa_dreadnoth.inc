@@ -136,7 +136,7 @@ static TfaNpc* tfa_dread_boss(TfaState* s) {
 static void tfa_dread_enter(TfaState* s) {
     const TfaRoomLayout* l = tfa_room_layout(TFA_ROOM_DREADNOTH);
     TfaNpc* b = tfa_npc_spawn(s, TFA_NPC_DREADNOTH, MON_TFA_DREADNOTH, DREAD_NPC, l->boss_x, l->boss_y);
-    b->hp = b->max_hp = tfa_party_hp(s, TFA_DREAD.hp_base, TFA_DREAD.hp_trio);
+    b->hp = b->max_hp = tfa_party_hp(s->team_size, TFA_DREAD.hp_base, TFA_DREAD.hp_trio);
     s->boss.dreadnoth = (TfaDreadnothState){ .slam_start = -1, .spawn_tick = -1, .next_jump = -1 };
 }
 

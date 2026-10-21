@@ -1,5 +1,6 @@
 fight_id	boss	recording	first_tick	start_tick	start_kind	challenge_tick	end_tick	end_kind	outcome	party_size	p0_deaths	other_deaths	last_boss_tick	notes
 bork_01	bork	session_20261020T113451.691Z	2711	2743	attack_anim	2735	2910	failed_to_survive_chat	wipe	2	1	1	2911	recording_ended_mid_fight
+bork_02	bork	session_20261021T103603.940Z	15091	15185	attack_anim	15177	15583	challenge_complete_chat	kill	5	1	1	15582	recording_joined_mid_fight;Challenge complete: Bork. Duration: 4:04. Total: 7:50 (new personal best);ticks_start_to_complete=406
 dreadnoth_01	dreadnoth	session_20261020T132640.798Z	14252	14342	attack_anim	14338	14493	failed_to_survive_chat	wipe	3	1	2	14495	-
 dreadnoth_02	dreadnoth	session_20261020T135935.318Z	16637	16677	attack_anim	16673	16845	failed_to_survive_chat	wipe	3	1	2	16845	recording_ended_mid_fight
 dreadnoth_03	dreadnoth	session_20261020T144826.321Z	22307	22331	attack_anim	22327	22584	last_boss_tick	unknown	3	1	1	22584	recording_ended_mid_fight
@@ -14,6 +15,7 @@ dreadnoth_11	dreadnoth	session_20261020T182203.561Z	43449	43494	attack_anim	4347
 dreadnoth_12	dreadnoth	session_20261020T190740.535Z	48142	48176	attack_anim	48156	48575	last_boss_tick	unknown	3	0	2	48575	recording_ended_mid_fight
 dreadnoth_13	dreadnoth	session_20261020T192913.215Z	49509	49539	attack_anim	49517	49868	challenge_complete_chat	kill	3	0	0	49867	Challenge complete: Dreadnoth the Jellied. Duration: 3:31. Total: 10:31 (new personal best);ticks_start_to_complete=351
 dreadnoth_14	dreadnoth	session_20261020T192913.215Z	52321	52385	attack_anim	52365	52722	challenge_complete_chat	kill	3	0	0	52721	Challenge complete: Dreadnoth the Jellied. Duration: 3:34. Total: 17:06. Personal best: 3:31;ticks_start_to_complete=357
+dreadnoth_15	dreadnoth	session_20261021T103603.940Z	15622	15729	attack_anim	15723	16026	challenge_complete_chat	kill	5	0	2	16025	Challenge complete: Dreadnoth the Jellied. Duration: 3:02. Total: 12:16 (new personal best);ticks_start_to_complete=303
 ezekiel_01	ezekiel	session_20261020T114520.705Z	3870	3916	attack_anim	3910	4195	failed_to_survive_chat	wipe	2	1	1	4197	-
 ezekiel_02	ezekiel	session_20261020T115858.081Z	5379	5403	attack_anim	5397	5896	failed_to_survive_chat	wipe	2	1	1	5898	-
 ezekiel_03	ezekiel	session_20261020T122517.940Z	7735	7735	first_seen	-	8568	last_boss_tick	no_combat	1	0	0	8568	recording_ended_mid_fight
@@ -65,7 +67,9 @@ ocellus_03	ocellus	session_20261020T192913.215Z	53314	53375	attack_anim	53371	53
 ocellus_04	ocellus	session_20261020T205043.976Z	57655	57734	attack_anim	57730	58275	last_boss_tick	unknown	3	1	1	58275	recording_ended_mid_fight
 ocellus_05	ocellus	session_20261020T222136.789Z	6901	6933	attack_anim	6929	7487	failed_to_survive_chat	wipe	3	1	2	7489	recording_joined_mid_fight
 ocellus_06	ocellus	session_20261020T225649.044Z	10421	10441	attack_anim	-	11238	failed_to_survive_chat	wipe	3	1	2	11240	recording_joined_mid_fight
+ocellus_07	ocellus	session_20261021T103603.940Z	16522	16637	attack_anim	16633	17482	failed_to_survive_chat	wipe	5	1	4	17484	recording_ended_mid_fight
 xarth_01	xarth	session_20261020T164504.009Z	33119	33607	attack_anim	33601	34503	challenge_complete_chat	kill	3	0	0	34502	Challenge complete: Xarth. Duration: 9:01. Total: 32:55 (new personal best);ticks_start_to_complete=902
 xarth_02	xarth	session_20261020T182203.561Z	44210	44485	attack_anim	44479	44913	challenge_complete_chat	kill	3	0	0	44912	Challenge complete: Xarth. Duration: 4:20. Total: 21:35 (new personal best);ticks_start_to_complete=434
 xarth_03	xarth	session_20261020T192913.215Z	50175	50193	attack_anim	50187	50617	failed_to_survive_chat	wipe	3	1	2	50619	-
 xarth_04	xarth	session_20261020T192913.215Z	52876	52916	attack_anim	52910	53238	challenge_complete_chat	kill	3	0	0	53237	Challenge complete: Xarth. Duration: 3:17. Total: 22:16 (new personal best);ticks_start_to_complete=328
+xarth_05	xarth	session_20261021T103603.940Z	16198	16237	attack_anim	16231	16483	challenge_complete_chat	kill	5	0	0	16482	Challenge complete: Xarth. Duration: 2:31. Total: 16:50 (new personal best);ticks_start_to_complete=252

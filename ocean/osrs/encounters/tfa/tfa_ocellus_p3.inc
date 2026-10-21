@@ -150,7 +150,7 @@ static void oc_p3_start(TfaState* s, TfaNpc* n) {
     n->npc_id = OC_NPC_P3;
     n->monster = MON_TFA_OCELLUS_P3;
     n->attackable = 1;
-    n->max_hp = tfa_party_hp(s, TFA_OC1.hp_base_p3, TFA_OC1.hp_base_p3 * TFA_TRIO_SCALE_PCT / 100);
+    n->max_hp = tfa_party_hp(s->team_size, TFA_OC1.hp_base_p3, TFA_OC1.hp_base_p3 * TFA_TRIO_SCALE_PCT / 100);
     if (n->hp > n->max_hp) n->hp = n->max_hp;
     tfa_npc_anim(s, n, OC_ANIM_P3_START);
     oc_want(s, PRAYER_PROTECT_MELEE);

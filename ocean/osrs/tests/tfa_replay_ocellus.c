@@ -1,6 +1,7 @@
 /* Forced-damage replay of recorded Ocellus phase 1 fights: the recorded hits and heals on the boss are applied on their
    recorded ticks (sim tick = recorded tick + the first barrage delay), nobody else deals or takes damage, and the sim's
    middle teleport, expend and transformation ticks are compared with the recording. Divergence is an HP, threshold or timer defect.
+   P1 HP is the recorded party's (tfa_fights.tsv party_size).
    usage: tfa_replay_ocellus fixtures/tfa_ocellus_events.tsv */
 #include "tfa_scripted.h"
 
@@ -17,6 +18,7 @@ typedef struct {
     int nhits;
     Anim anims[MAX_EVENTS];
     int nanims;
+    int party;
 } Fight;
 
 static Fight FIGHTS[MAX_FIGHTS];
@@ -75,6 +77,7 @@ static void replay(const Fight* f, int* matched, int* total, int off[3][5]) {
     tfa_finalize_context((EncounterState*)s, (EncounterContext*)ctx);
     tfa_reset_typed(s, ctx, 1);
     s->boss.ocellus.no_line_heal = 1;
+    s->npcs[0].hp = s->npcs[0].max_hp = tfa_party_hp(f->party, TFA_OC1.hp_base_p1, TFA_OC1.hp_trio_p1);
     int acts[TFA_MAX_PLAYERS * TFA_NUM_ACTION_HEADS] = {0};
     int last_t = f->anims[f->nanims - 1].t + TFA_OC1.first_barrage + 2;
     int sim_t[3][16], nsim[3] = {0};
@@ -124,6 +127,7 @@ static void replay(const Fight* f, int* matched, int* total, int off[3][5]) {
 int main(int argc, char** argv) {
     assert(argc == 2);
     load_events(argv[1]);
+    for (int i = 0; i < NFIGHTS; i++) FIGHTS[i].party = tfa_fixture_party(argv[1], FIGHTS[i].id);
     int matched[3] = {0}, total[3] = {0}, off[3][5] = {{0}};
     for (int i = 0; i < NFIGHTS; i++) {
         const Fight* f = &FIGHTS[i];
