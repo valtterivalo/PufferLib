@@ -142,7 +142,7 @@ typedef struct {
     int eradicate_ticks[6];
     int resume;                  /* 14810 -> 14806 +7 (6/6) */
     int death_out, death_in, death_transform, death_p2, death_centre; /* hit label of hp 0 +3 (so +2 after the tick that applied it), +3, +2, +7 (4/4); a boss already at the centre transforms +1 after (f4, f5) */
-    int hp_base_p1, hp_per_player_p1; /* 3630 at 3 players (4/4 fights: damage 3630 incl. heals), 2500 wiki base */
+    int hp_base_p1, hp_trio_p1;  /* 2500 duo (wiki), 3630 at 3 players (4/4 fights: damage 3630 incl. heals) */
     int hp_base_p3;
 } TfaOcellusP1Tuning;
 
@@ -167,7 +167,7 @@ static const TfaOcellusP1Tuning TFA_OC1 = {
     .eradicate_hits = 6, .eradicate_ticks = { 1, 2, 2, 2, 3, 3 },
     .resume = 7,
     .death_out = 2, .death_in = 3, .death_transform = 2, .death_p2 = 7, .death_centre = 3,
-    .hp_base_p1 = 2500, .hp_per_player_p1 = 565,
+    .hp_base_p1 = 2500, .hp_trio_p1 = 3630,
     .hp_base_p3 = 5250,
 };
 
@@ -223,10 +223,6 @@ static TfaNpc* oc_boss(TfaState* s) {
     TfaNpc* n = &s->npcs[0];
     assert(n->active && n->kind == TFA_NPC_OCELLUS);
     return n;
-}
-
-static int oc_scaled(int base, int per_player, int team) {
-    return base + per_player * (team - 1);
 }
 
 static void oc_at(TfaState* s, int delay, int kind, int arg, int arg2) {
@@ -412,7 +408,7 @@ static void oc_p1_next_corner(TfaState* s) {
 static void oc_p1_enter(TfaState* s) {
     TfaOcellusState* os = oc_state(s);
     TfaNpc* n = tfa_npc_spawn(s, TFA_NPC_OCELLUS, MON_TFA_OCELLUS_P1, OC_NPC_P1, 30, 45);
-    n->max_hp = n->hp = oc_scaled(TFA_OC1.hp_base_p1, TFA_OC1.hp_per_player_p1, s->team_size);
+    n->max_hp = n->hp = tfa_party_hp(s, TFA_OC1.hp_base_p1, TFA_OC1.hp_trio_p1);
     os->phase = TFA_OCELLUS_P1;
     os->corner = tfa_rand(s, 4);
     os->window = TFA_OC1.window_fresh;
@@ -631,7 +627,7 @@ static void oc_p2_enter(TfaState* s, TfaNpc* n) {
     n->monster = MON_TFA_OCELLUS_P2;
     n->attackable = 0;
     n->act = TFA_ACT_IDLE;
-    n->hp = n->max_hp = oc_scaled(TFA_OC1.hp_base_p3, TFA_OC1.hp_base_p3 * TFA_OC1.hp_per_player_p1 / TFA_OC1.hp_base_p1, s->team_size);
+    n->hp = n->max_hp = tfa_party_hp(s, TFA_OC1.hp_base_p3, TFA_OC1.hp_base_p3 * TFA_TRIO_SCALE_PCT / 100);
     n->x = OC_CENTRE_X;
     n->y = OC_CENTRE_Y;
     tfa_npc_anim(s, n, OC_ANIM_P2_TRANSFORM);

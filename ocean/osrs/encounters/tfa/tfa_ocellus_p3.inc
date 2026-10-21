@@ -47,7 +47,6 @@ typedef struct {
     int augmenter_blow;          /* detonates 30 after spawn: 37..39 on everyone */
     int augmenter_min, augmenter_max;
     int tile_lo, tile_hi;        /* add tiles 4..10 from the cross */
-    int hp_per_player_p3;
     int p4_first_hp_pct;         /* provisional: the boss keeps at least a fifth of its pool for phase 4 */
 } TfaOcellusP3Tuning;
 
@@ -84,7 +83,6 @@ static const TfaOcellusP3Tuning TFA_OC3 = {
     .siphon_pulse = 4, .siphon_heal_min = 12, .siphon_heal_max = 14, .siphon_death_heal = 22,
     .augmenter_blow = 30, .augmenter_min = 37, .augmenter_max = 39,
     .tile_lo = 4, .tile_hi = 10,
-    .hp_per_player_p3 = 1186,
     .p4_first_hp_pct = 20,
 };
 
@@ -152,7 +150,7 @@ static void oc_p3_start(TfaState* s, TfaNpc* n) {
     n->npc_id = OC_NPC_P3;
     n->monster = MON_TFA_OCELLUS_P3;
     n->attackable = 1;
-    n->max_hp = oc_scaled(TFA_OC1.hp_base_p3, TFA_OC3.hp_per_player_p3, s->team_size);
+    n->max_hp = tfa_party_hp(s, TFA_OC1.hp_base_p3, TFA_OC1.hp_base_p3 * TFA_TRIO_SCALE_PCT / 100);
     if (n->hp > n->max_hp) n->hp = n->max_hp;
     tfa_npc_anim(s, n, OC_ANIM_P3_START);
     oc_want(s, PRAYER_PROTECT_MELEE);
