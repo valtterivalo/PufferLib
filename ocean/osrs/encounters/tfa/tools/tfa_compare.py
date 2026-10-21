@@ -1708,6 +1708,18 @@ def ocellus_p4_overheads(fights, horizon=56):
     return out
 
 
+def ocellus_quad_tells(fights):
+    """(k, tell) for the k-th quadrant attack 14844 of a fight: the spotanim on Ocellus that tick (4328 melee, 4329 magic, 4330 ranged)."""
+    out = collections.Counter()
+    for ev in fights.values():
+        quads = sorted(e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14844")
+        for k, q in enumerate(quads):
+            tells = [i for e in ev if e["kind"] == "SPOT" and base(e["actor"]) == "16677" and e["t"] == q for i in e["id"].split("+") if i in ("4328", "4329", "4330")]
+            if tells:
+                out[(k, tells[0])] += 1
+    return out
+
+
 def ocellus_void_drops(fights, horizon=40):
     """Void drop gfx 4339 as ticks since the latest rise; ocellus_11's P0 died 40 into the cycle."""
     out = collections.Counter()
@@ -1731,6 +1743,9 @@ def ocellus_p4_laws(real, sim):
     support("phase 4", ocellus_p4(real), ocellus_p4(sim, rises), failures)
     support("P4 overheads", ocellus_p4_overheads(real), ocellus_p4_overheads(sim), failures)
     support("P4 void drops", ocellus_void_drops(real), ocellus_void_drops(sim), failures)
+    rq = ocellus_quad_tells(real)
+    last = max(k for k, _ in rq)
+    support("P4 quadrant tells", rq, collections.Counter({k: v for k, v in ocellus_quad_tells(sim).items() if k[0] <= last}), failures)
     return failures
 
 

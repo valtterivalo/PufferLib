@@ -101,14 +101,15 @@ typedef struct {
     int drop_first, drops, drop_gap; /* void drops gfx 4339 at wind +5 +7 ... +15 (6/6, ocellus_11), each on the tile the raider held the tick before;
                                     still there next tick it hits */
     int quad_hit;                /* quadrant attack hit 5 after the 14844 (6/6 across ocellus_08 and 11) */
-    int quad_protected_pct;      /* 6..8 lands through the right prayer (6/6); unprotected is unrecorded */
+    int quad_protected_pct;      /* one roll for everyone (equal hits on all raiders, 8/8), 6..10 lands through the right prayer; unprotected is unrecorded */
+    int magic_quads;             /* the tell 4329 (magic) on the first 5 attacks, then 4330 (ranged) 2/2 (ocellus_11, 12); 4328 (melee) never seen */
     int orb_a_from, orb_a_until; /* soul fragment 4311 spawns at wind-1, collectable (idle 4310) wind+12..wind+24, heals that raider's wind (+40 for a 40) */
     int orb_b_from, orb_b_until; /* the 6-tick variant 4309 after the second wind: wind+6..wind+18 */
     int split_from, split_ticks; /* soul split overhead (sprite 11) from 1 after each 14844 for 5 ticks, one 50 heal splat in it (ocellus_11, 2/2) */
     int deflect_range_from;      /* Deflect Range (sprite 16) from 7 after the first 14844 (ocellus_11, 1/1) */
     int ring;
     int wind_min, wind_max;      /* void drop damage: 16 (ocellus_11, under Protect from Melee), 15..16 in ocellus_08: unprayable */
-    int quad_min, quad_max;      /* unprotected quadrant attack: provisional */
+    int quad_min, quad_max;      /* unprotected quadrant attack: provisional, 20% of it is the recorded 6..10 */
     int void_min, void_max;
     int rifts_max;               /* 2, 3, 4 over the three recorded cycles; held at 4 after that (unrecorded, provisional) */
     int rift_life, rift_radius, rift_min, rift_max;
@@ -122,12 +123,13 @@ static const TfaOcellusP4Tuning TFA_OC4 = {
     .drop_first = 5, .drops = 6, .drop_gap = 2,
     .quad_hit = 5,
     .quad_protected_pct = 20,
+    .magic_quads = 5,
     .orb_a_from = 12, .orb_a_until = 24, .orb_b_from = 6, .orb_b_until = 18,
     .split_from = 1, .split_ticks = 5,
     .deflect_range_from = 7,
     .ring = 2,
     .wind_min = 15, .wind_max = 16,
-    .quad_min = 25, .quad_max = 40,
+    .quad_min = 30, .quad_max = 50,
     .void_min = 8, .void_max = 12,
     .rifts_max = 4,
     .rift_life = 12, .rift_radius = 3, .rift_min = 40, .rift_max = 48,
@@ -666,12 +668,13 @@ static void oc_p4_quadrant(TfaState* s, TfaNpc* n, int second) {
     oc_at(s, TFA_OC4.split_from + TFA_OC4.split_ticks, OCE_P4_SPLIT, 0, 0);
     oc_at(s, TFA_OC4.split_from, OCE_P4_DEFLECT, ATTACK_STYLE_NONE, 0);
     if (!second) oc_at(s, TFA_OC4.deflect_range_from, OCE_P4_DEFLECT, ATTACK_STYLE_RANGED, 0);
-    AttackStyle style = (AttackStyle)(ATTACK_STYLE_MELEE + tfa_rand(s, 3));
-    n->act = style == ATTACK_STYLE_MELEE ? TFA_ACT_MELEE : style == ATTACK_STYLE_RANGED ? TFA_ACT_RANGED : TFA_ACT_MAGIC;
-    oc_want(s, style == ATTACK_STYLE_MELEE ? PRAYER_PROTECT_MELEE : style == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED : PRAYER_PROTECT_MAGIC);
+    TfaOcellusState* os = oc_state(s);
+    AttackStyle style = os->p4_quads++ < TFA_OC4.magic_quads ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED;
+    n->act = style == ATTACK_STYLE_RANGED ? TFA_ACT_RANGED : TFA_ACT_MAGIC;
+    oc_want(s, style == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED : PRAYER_PROTECT_MAGIC);
+    int dmg = tfa_rand_range(s, TFA_OC4.quad_min, TFA_OC4.quad_max);
     for (int p = 0; p < s->team_size; p++)
-        if (tfa_alive(s, p))
-            tfa_queue_npc_hit_land(s, p, tfa_rand_range(s, TFA_OC4.quad_min, TFA_OC4.quad_max), style, TFA_OC4.quad_hit, TFA_OC4.quad_protected_pct, n);
+        if (tfa_alive(s, p)) tfa_queue_npc_hit_land(s, p, dmg, style, TFA_OC4.quad_hit, TFA_OC4.quad_protected_pct, n);
 }
 
 static void oc_p4_step(TfaState* s, TfaNpc* n, int step) {

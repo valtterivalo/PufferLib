@@ -162,7 +162,7 @@ typedef struct {
     int eradicate_ticks[6];
     int resume;                  /* 14810 -> 14806 +7 (6/6) */
     int death_out, death_in, death_transform, death_p2, death_centre; /* hit label of hp 0 +3 (so +2 after the tick that applied it), +3, +2, +7 (4/4); a boss already at the centre transforms +1 after (f4, f5) */
-    int hp_base_p1, hp_trio_p1;  /* 2500 duo (wiki), 3630 at 3 players (4/4 fights: damage 3630 incl. heals) */
+    int hp_base_p1, hp_trio_p1;  /* 2500 duo (wiki), 3630 at 3 players (4/4 fights: damage 3630 incl. heals); the bar's max is 1% more (3667-3668, floor(100 hp / max)): P1 ends when it floors to 0 */
     int hp_base_p3;
 } TfaOcellusP1Tuning;
 

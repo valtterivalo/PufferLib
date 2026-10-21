@@ -82,6 +82,9 @@ int main(int argc, char** argv) {
                     printf("%s\t%d\tNPOS\t%d#%d\t%d\t%d\t%d\t-\t-\t-\n", fid, t, n->npc_id, i, n->npc_id, n->x, n->y);
                     if (n->anim_tick == s->tick && n->anim_id >= 0 && d->anim_tick != s->tick) {
                         printf("%s\t%d\tANIM\t%d#%d\t%d\t%d\t%d\t-\t-\t-\n", fid, t, n->npc_id, i, n->anim_id, n->x, n->y);
+                        if (s->room == TFA_ROOM_OCELLUS && n->anim_id == OC_ANIM_QUADRANT_ATTACK)
+                            printf("%s\t%d\tSPOT\t%d#%d\t%d\t-\t-\t1\t-\t-\n", fid, t, n->npc_id, i,
+                                n->act == TFA_ACT_MELEE ? 4328 : n->act == TFA_ACT_RANGED ? 4330 : 4329);
                         if (n->act != TFA_ACT_IDLE && n->target >= 0)
                             printf("%s\t%d\tTGT\t%d#%d\t%d\t-\t-\tP%d\t-\t-\n", fid, t, n->npc_id, i, n->anim_id, n->target);
                     }

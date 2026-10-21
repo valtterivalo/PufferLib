@@ -1,7 +1,8 @@
 /* Forced-damage replay of recorded Ocellus phase 1 fights: the recorded hits and heals on the boss are applied on their
    recorded ticks (sim tick = recorded tick + the first barrage delay), nobody else deals or takes damage, and the sim's
    middle teleport, expend and transformation ticks are compared with the recording. Divergence is an HP, threshold or timer defect.
-   P1 HP is the recorded party's (tfa_fights.tsv party_size).
+   P1 HP is the recorded party's (tfa_fights.tsv party_size). Only fights whose recording saw the P1 spawn (NPCID 16673 -> 16674): ocellus_12's
+   joined after it, and its bar shows about 150 damage its hits never recorded.
    usage: tfa_replay_ocellus fixtures/tfa_ocellus_events.tsv */
 #include "tfa_scripted.h"
 
@@ -19,6 +20,7 @@ typedef struct {
     Anim anims[MAX_EVENTS];
     int nanims;
     int party;
+    int spawned;
 } Fight;
 
 static Fight FIGHTS[MAX_FIGHTS];
@@ -46,6 +48,7 @@ static void load_events(const char* path) {
         if (strncmp(col[3], "16674#", 6) != 0) continue;
         Fight* f = fight_for(col[0]);
         int t = atoi(col[1]);
+        if (strcmp(col[2], "NPCID") == 0) f->spawned = 1;
         if (strcmp(col[2], "HIT") == 0) {
             int type = atoi(col[7]), amount = atoi(col[4]);
             if (type == 6) amount = -amount;
@@ -133,7 +136,7 @@ int main(int argc, char** argv) {
         const Fight* f = &FIGHTS[i];
         int net = 0;
         for (int k = 0; k < f->nhits; k++) net += f->hits[k].amount;
-        if (net >= FULL_P1_NET && f->nanims > 0) replay(f, matched, total, off);
+        if (net >= FULL_P1_NET && f->nanims > 0 && f->spawned) replay(f, matched, total, off);
     }
     const char* names[3] = { "teleport 14812", "expend 14810", "transform 14814" };
     int bad = 0;
