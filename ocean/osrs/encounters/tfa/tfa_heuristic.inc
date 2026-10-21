@@ -73,7 +73,7 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
         if (bork && smorks && wave_soon) {
             for (int x = TFA_BORK.arena_x0; x <= TFA_BORK.arena_x1; x++)
                 for (int y = TFA_BORK.arena_y0; y <= TFA_BORK.arena_y1; y++) {
-                    if (tfa_layout_blocked(tfa_room_layout(s->room), x, y) || tfa_tile_danger(s, p, x, y) >= 0 || !tfa_bork_shadowed(bork, smorks, x, y)) continue;
+                    if (tfa_layout_blocked(tfa_room_layout(s->room), x, y) || tfa_tile_danger(s, p, x, y) >= 0 || !tfa_bork_shadowed(bork->x, bork->y, smorks, x, y)) continue;
                     int d = chebyshev_distance(x, y, tp->player.x, tp->player.y);
                     if (d < best) { best = d; hide_x = x; hide_y = y; }
                 }
