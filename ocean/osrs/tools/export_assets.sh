@@ -147,6 +147,6 @@ l textures
 x sprites
 x interfaces
 x fonts
-x projectiles
+l projectiles
 l equipment
 l icons

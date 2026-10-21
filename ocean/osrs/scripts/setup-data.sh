@@ -9,6 +9,7 @@ DOWNLOAD_DIR="${OSRS_ASSET_DOWNLOAD_DIR:-${DATA_DIR}/.download}"
 MANIFEST_TOOL="${OSRS_ROOT}/scripts/osrs_asset_manifest.py"
 ARCHIVE_TSV="${DOWNLOAD_DIR}/archive.tsv"
 MISSING_TSV="${DOWNLOAD_DIR}/missing-required.tsv"
+STAMP="${DATA_DIR}/.asset_version"
 
 need() {
     if ! command -v "$1" >/dev/null 2>&1; then
@@ -47,14 +48,15 @@ mkdir -p "${DOWNLOAD_DIR}" "${DATA_DIR}"
 
 python3 "${MANIFEST_TOOL}" archive-tsv "${MANIFEST}" > "${ARCHIVE_TSV}"
 IFS=$'\t' read -r archive_name archive_url archive_sha strip_components < "${ARCHIVE_TSV}"
+asset_version="${archive_name%.tar.gz}"
 
 if [ "${OSRS_ASSET_SETUP_FORCE:-0}" != "1" ]; then
-    if python3 "${MANIFEST_TOOL}" missing-required "${MANIFEST}" "${DATA_DIR}" > "${MISSING_TSV}"; then
+    if [ "$(cat "${STAMP}" 2>/dev/null)" = "${asset_version}" ] &&
+        python3 "${MANIFEST_TOOL}" missing-required "${MANIFEST}" "${DATA_DIR}" > "${MISSING_TSV}"; then
         echo "setup-osrs-data: loose assets satisfy ${archive_name}"
         exit 0
     fi
-    missing_count=$(grep -c $'\t' "${MISSING_TSV}" || true)
-    echo "setup-osrs-data: missing ${missing_count} required loose assets; installing ${archive_name}"
+    echo "setup-osrs-data: loose assets are not ${asset_version}; installing ${archive_name}"
 fi
 
 archive_path="${DOWNLOAD_DIR}/${archive_name}"
@@ -85,4 +87,5 @@ if ! python3 "${MANIFEST_TOOL}" missing-required "${MANIFEST}" "${DATA_DIR}" > "
     exit 1
 fi
 
+echo "${asset_version}" > "${STAMP}"
 echo "setup-osrs-data: ready"

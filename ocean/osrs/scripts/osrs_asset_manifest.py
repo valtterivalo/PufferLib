@@ -16,7 +16,7 @@ import tarfile
 
 EXPECTED_FORMAT = "puffer-osrs-asset-manifest-v1"
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-IGNORED_ARCHIVE_NAMES = {".DS_Store"}
+IGNORED_ARCHIVE_NAMES = {".DS_Store", ".asset_version"}
 IGNORED_ARCHIVE_PREFIXES = ("._",)
 IGNORED_ARCHIVE_DIRS = {"__MACOSX"}
 
