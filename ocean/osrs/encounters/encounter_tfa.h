@@ -31,6 +31,8 @@
 #include "tfa/tfa_moia.inc"
 #include "tfa/tfa_dreadnoth.inc"
 #include "tfa/tfa_ezekiel.inc"
+#include "tfa/tfa_ocellus.inc"
+#include "tfa/tfa_ocellus_p3.inc"
 #include "tfa/tfa_bosses.inc"
 #include "tfa/tfa_heuristic.inc"
 #include "tfa/tfa_def.inc"

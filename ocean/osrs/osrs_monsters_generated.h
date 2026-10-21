@@ -39,7 +39,10 @@ typedef enum {
     MON_TFA_JELLY = 32,
     MON_TFA_EZEKIEL_SWORD = 33,
     MON_TFA_BINDER = 34,
-    NUM_MONSTERS = 35
+    MON_TFA_OCELLUS_P2 = 35,
+    MON_TFA_OCELLUS_BLADE = 36,
+    MON_TFA_VOID_SIPHON = 37,
+    NUM_MONSTERS = 38
 } MonsterIndex;
 
 typedef struct {
@@ -419,6 +422,39 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .hp = 80, .att_level = 1, .str_level = 1, .def_level = 1,
         .magic_level = 1, .range_level = 1,
         .attack_speed = 0, .size = 3, .max_hit = 0,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
+        .range_att_bonus = 0, .ranged_str_bonus = 0,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0,
+        .magic_def = 0, .ranged_def = 0
+    },
+    /* Wiki infobox Ocellus (Phase 2): levels and defences listed, hp blank (carried from the P3 pool in the sim). */
+    [MON_TFA_OCELLUS_P2] = {
+        .npc_id = 16675, .name = "Ocellus",
+        .hp = 1, .att_level = 1, .str_level = 1, .def_level = 250,
+        .magic_level = 220, .range_level = 1,
+        .attack_speed = 0, .size = 3, .max_hit = 0,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
+        .range_att_bonus = 0, .ranged_str_bonus = 0,
+        .stab_def = 150, .slash_def = 120, .crush_def = 10,
+        .magic_def = 100, .ranged_def = 110
+    },
+    /* The Blade 16676 has no wiki stats: the P2 Ocellus defences stand in; it never loses hp, half its damage transfers to Ocellus. */
+    [MON_TFA_OCELLUS_BLADE] = {
+        .npc_id = 16676, .name = "The Blade",
+        .hp = 1, .att_level = 1, .str_level = 1, .def_level = 250,
+        .magic_level = 220, .range_level = 1,
+        .attack_speed = 0, .size = 2, .max_hit = 0,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
+        .range_att_bonus = 0, .ranged_str_bonus = 0,
+        .stab_def = 150, .slash_def = 120, .crush_def = 10,
+        .magic_def = 100, .ranged_def = 110
+    },
+    /* Void Siphon 16679: no wiki page. Killed by one 44 in recordings (3/3), so the Void Augmenter infobox (hp 44, def 175, mage 300) stands in. */
+    [MON_TFA_VOID_SIPHON] = {
+        .npc_id = 16679, .name = "Void Siphon",
+        .hp = 44, .att_level = 0, .str_level = 0, .def_level = 175,
+        .magic_level = 300, .range_level = 0,
+        .attack_speed = 0, .size = 1, .max_hit = 0,
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,

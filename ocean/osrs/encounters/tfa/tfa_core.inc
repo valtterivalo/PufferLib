@@ -288,8 +288,14 @@ static int tfa_hazard_covers(const TfaHazard* h, int x, int y) {
     return x >= h->x && x < h->x + h->w && y >= h->y && y < h->y + h->h;
 }
 
+static void tfa_ocellus_tendril_hit(TfaState* s, int p);
+
 static void tfa_hazard_hit_player(TfaState* s, const TfaHazard* h, int p) {
     TfaPlayer* tp = &s->players[p];
+    if (h->effect == TFA_EFFECT_TENDRIL) {
+        tfa_ocellus_tendril_hit(s, p);
+        return;
+    }
     int raw = tfa_rand_range(s, h->min_damage, h->max_damage);
     int dmg = tfa_protected_damage(raw, tp->player.prayer, (AttackStyle)h->style, h->protected_pct);
     tfa_damage_player_now(s, p, dmg, (AttackStyle)h->style);

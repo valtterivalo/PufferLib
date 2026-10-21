@@ -19,10 +19,16 @@ nice -n 19 $out/replay_guardian ocean/osrs/encounters/tfa/fixtures/tfa_guardian_
 nice -n 19 cc -std=c11 -O2 -Wno-unused-function -I. -o $out/replay_dreadnoth ocean/osrs/tests/tfa_replay_dreadnoth.c -lm || exit 1
 echo "== dreadnoth forced-damage replay"
 nice -n 19 $out/replay_dreadnoth ocean/osrs/encounters/tfa/fixtures/tfa_dreadnoth_events.tsv | tail -3 || exit 1
+nice -n 19 cc -std=c11 -O2 -Wno-unused-function -I. -o $out/replay_ocellus ocean/osrs/tests/tfa_replay_ocellus.c -lm || exit 1
+echo "== ocellus forced-damage replay"
+nice -n 19 $out/replay_ocellus ocean/osrs/encounters/tfa/fixtures/tfa_ocellus_events.tsv | tail -3 || exit 1
+nice -n 19 cc -std=c11 -O2 -Wno-unused-function -I. -o $out/ocellus_p4 ocean/osrs/tests/test_tfa_ocellus_p4.c -lm || exit 1
+echo "== ocellus phase 4 gate"
+nice -n 19 $out/ocellus_p4 | tail -1 || exit 1
 nice -n 19 cc -std=c11 -O2 -Wno-unused-function -I. -I./raylib-5.5_macos/include -I./src -I./vendor -o $out/wrapper ocean/osrs/tests/test_tfa_wrapper.c -lm || exit 1
 nice -n 19 $out/wrapper || exit 1
 fail=0
-for spec in "guardian 0 2" "guardian 0 3" "xarth 5 3" "bork 1 2" "moia 4 3" "dreadnoth 3 3" "ezekiel 2 3"; do
+for spec in "guardian 0 2" "guardian 0 3" "xarth 5 3" "bork 1 2" "moia 4 3" "dreadnoth 3 3" "ezekiel 2 3" "ocellus 7 3"; do
     set -- ${=spec}
     nice -n 19 $out/dump $2 $3 60 1 > $out/$1_$3.tsv 2>/dev/null || exit 1
     echo "== $1 team $3"

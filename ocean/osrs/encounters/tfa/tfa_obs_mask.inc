@@ -216,7 +216,7 @@ static void tfa_write_mask_for(TfaState* s, TfaContext* ctx, int p, unsigned cha
     for (int k = 0; k < TFA_NUM_TARGET_SLOTS; k++)
         mask[primary + TFA_PRIMARY_ATTACK_BASE + k] = tfa_target_slot_npc(s, k) >= 0;
 
-    int has_prayer = tp->player.current_prayer > 0;
+    int has_prayer = tp->player.current_prayer > 0 && tp->injured_ticks <= 0;
     mask[overhead + ENCOUNTER_OVERHEAD_OFF] = tp->player.prayer != PRAYER_NONE;
     for (int a = ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE; a <= ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC; a++)
         mask[overhead + a] = has_prayer;

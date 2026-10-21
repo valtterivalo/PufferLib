@@ -5,7 +5,7 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
     if (tp->life != TFA_LIFE_ALIVE) return;
     OverheadPrayer want = PRAYER_NONE;
     const TfaNpc* target = NULL;
-    int hide_x = -1, hide_y = -1, flee_x = -1, flee_y = -1;
+    int hide_x = -1, hide_y = -1, flee_x = -1, flee_y = -1, go_x = -1, go_y = -1;
     int flee = 0;
     if (s->room == TFA_ROOM_GUARDIAN) {
         target = tfa_npc_first(s, TFA_NPC_GUARDIAN);
@@ -92,6 +92,36 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
             hide_x = tp->player.x + 3 * ((tp->player.x > boss->x + 1) - (tp->player.x < boss->x + 1));
             hide_y = tp->player.y + 3 * ((tp->player.y > boss->y + 1) - (tp->player.y < boss->y + 1));
         }
+    } else if (s->room == TFA_ROOM_OCELLUS) {
+        const TfaOcellusState* os = &s->boss.ocellus;
+        want = (OverheadPrayer)os->want_prayer;
+        target = s->npcs[0].attackable ? &s->npcs[0] : NULL;
+        for (int i = 1; i < TFA_NUM_TARGET_SLOTS; i++) {
+            const TfaNpc* c = &s->npcs[i];
+            if (!c->active) continue;
+            if (c->kind == TFA_NPC_OCELLUS_PORTAL && oc_quadrant(tp->player.x, tp->player.y) == c->state) go_x = c->x, go_y = c->y;
+            int add = c->kind == TFA_NPC_VOID_SIPHON || c->kind == TFA_NPC_VOID_AUGMENTER || c->kind == TFA_NPC_VOID_RIFT ||
+                (c->kind == TFA_NPC_VOID_VINE && c->target != p);
+            if (c->kind == TFA_NPC_OCELLUS_BLADE || (add && c->attackable)) {
+                if (!target || target->kind == TFA_NPC_OCELLUS || c->kind != TFA_NPC_OCELLUS_BLADE) target = c;
+            }
+        }
+        const TfaNpc* boss = &s->npcs[0];
+        if (p == 0 && os->phase >= TFA_OCELLUS_P3 && boss->attackable && go_x < 0) {
+            go_x = boss->x - 1;
+            go_y = boss->y + 1;
+            if (tfa_layout_blocked(tfa_room_layout(s->room), go_x, go_y) || oc_quadrant(go_x, go_y) != oc_quadrant(boss->x + 1, boss->y + 1)) go_x = boss->x + 3;
+        }
+        if ((os->deflect == ATTACK_STYLE_RANGED || os->soul_split) && target && target->kind == TFA_NPC_OCELLUS) target = NULL;
+        if (!target) {
+            if (tp->player.prayer != want && want == PRAYER_NONE) acts[OSRS_HEAD_OVERHEAD] = ENCOUNTER_OVERHEAD_OFF;
+            if (osrs_interaction_active(&tp->player.interaction)) {
+                for (int a = 1; a < OSRS_PRIMARY_MOVE_ACTIONS && !acts[OSRS_HEAD_PRIMARY]; a++)
+                    if (!tfa_layout_blocked(tfa_room_layout(s->room), tp->player.x + ENCOUNTER_MOVE_TARGET_DX[a], tp->player.y + ENCOUNTER_MOVE_TARGET_DY[a]))
+                        acts[OSRS_HEAD_PRIMARY] = a;
+            }
+            return;
+        }
     } else if (s->room == TFA_ROOM_XARTH) {
         const TfaXarthState* xs = &s->boss.xarth;
         target = tfa_npc_first(s, TFA_NPC_XARTH);
@@ -115,7 +145,7 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
     }
     if (!target) return;
     if (tp->player.prayer != want)
-        acts[OSRS_HEAD_OVERHEAD] = want == PRAYER_PROTECT_MELEE ? ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE
+        acts[OSRS_HEAD_OVERHEAD] = want == PRAYER_NONE ? ENCOUNTER_OVERHEAD_OFF : want == PRAYER_PROTECT_MELEE ? ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE
             : want == PRAYER_PROTECT_MAGIC ? ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC : ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED;
     if (s->room == TFA_ROOM_BORK) {
         if (tp->player.offensive_prayer != OFFENSIVE_PRAYER_PIETY) acts[OSRS_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY;
@@ -135,6 +165,15 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
             if (d < best) { best = d; acts[OSRS_HEAD_PRIMARY] = a; }
         }
     }
+    if (go_x >= 0 && (tp->player.x != go_x || tp->player.y != go_y)) {
+        int best = 1 << 30;
+        for (int a = 1; a < OSRS_PRIMARY_MOVE_ACTIONS; a++) {
+            int nx = tp->player.x + ENCOUNTER_MOVE_TARGET_DX[a], ny = tp->player.y + ENCOUNTER_MOVE_TARGET_DY[a];
+            if (tfa_layout_blocked(tfa_room_layout(s->room), nx, ny)) continue;
+            int d = chebyshev_distance(nx, ny, go_x, go_y);
+            if (d < best) { best = d; acts[OSRS_HEAD_PRIMARY] = a; }
+        }
+    }
     if (flee) acts[OSRS_HEAD_PRIMARY] = flee;
     if (flee_x >= 0) {
         int best = encounter_rect_distance(tp->player.x, tp->player.y, 1, flee_x, flee_y, 5);
@@ -146,7 +185,7 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
         }
     }
     int here = tfa_tile_danger(s, p, tp->player.x, tp->player.y);
-    int react = s->room == TFA_ROOM_EZEKIEL ? 3 : 1;
+    int react = s->room == TFA_ROOM_EZEKIEL ? 3 : s->room == TFA_ROOM_OCELLUS ? 4 : 1;
     if (here >= 0 && here <= react) {
         const TfaRoomLayout* layout = tfa_room_layout(s->room);
         int safe[289][2], safe_count = 0;

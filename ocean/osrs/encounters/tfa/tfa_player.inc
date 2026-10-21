@@ -32,7 +32,7 @@ static int tfa_lookup_attack_target(void* ctx, int target_slot, OsrsAttackTarget
 static void tfa_player_apply_prayers(TfaState* s, int p, const int* acts) {
     TfaPlayer* tp = &s->players[p];
     if (tp->life != TFA_LIFE_ALIVE) return;
-    if (encounter_apply_overhead_action(&tp->player.prayer, acts[OSRS_HEAD_OVERHEAD]))
+    if (tp->injured_ticks <= 0 && encounter_apply_overhead_action(&tp->player.prayer, acts[OSRS_HEAD_OVERHEAD]))
         tp->player.prayer_just_activated = 1;
     OffensivePrayer before = tp->player.offensive_prayer;
     if (encounter_apply_offensive_action(&tp->player.offensive_prayer, acts[OSRS_HEAD_OFFENSIVE]))
@@ -176,7 +176,12 @@ static void tfa_player_turn(TfaState* s, TfaContext* ctx, int p, const int* acts
             .attack_geometry = ENCOUNTER_ROUTE_ATTACK_GEOMETRY_TOPOLOGY,
         },
     };
+    int held_x = tp->player.x, held_y = tp->player.y;
     OsrsPlayerStepResult step = osrs_encounter_player_step(&input);
+    if (tp->rooted_ticks > 0) {
+        tp->player.x = held_x;
+        tp->player.y = held_y;
+    }
 
     if (!step.can_attack || tp->player.attack_timer > 0 || tp->stunned_ticks > 0) return;
     int i = tfa_target_slot_npc(s, step.target_slot);
@@ -194,6 +199,7 @@ static void tfa_player_tick_timers(TfaState* s, int p) {
     if (tp->weary_ticks > 0) tp->weary_ticks--;
     if (tp->rooted_ticks > 0) tp->rooted_ticks--;
     if (tp->stunned_ticks > 0) tp->stunned_ticks--;
+    if (tp->injured_ticks > 0) tp->injured_ticks--;
     osrs_poison_tick_immunity(&tp->poison);
     osrs_player_inventory_tick(pl, &tp->use);
     int poison = osrs_poison_tick(&tp->poison);

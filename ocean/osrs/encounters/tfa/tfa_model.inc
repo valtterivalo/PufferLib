@@ -62,6 +62,8 @@ typedef enum {
     TFA_NPC_VOID_SIPHON,
     TFA_NPC_VOID_AUGMENTER,
     TFA_NPC_VOID_VINE,
+    TFA_NPC_OCELLUS_BLADE,
+    TFA_NPC_OCELLUS_PORTAL,
     TFA_NPC_KIND_COUNT
 } TfaNpcKind;
 
@@ -131,6 +133,7 @@ typedef enum {
     TFA_EFFECT_NONE = 0,
     TFA_EFFECT_POISON = 1,
     TFA_EFFECT_BURN = 2,
+    TFA_EFFECT_TENDRIL = 3,
 } TfaHazardEffect;
 
 /* An NPC hit on its way to a player. Throw-checked hits carry their final damage;
@@ -165,6 +168,7 @@ typedef struct {
     int16_t weary_ticks;
     int16_t rooted_ticks;
     int16_t stunned_ticks;
+    int16_t injured_ticks;
     float reward;
     float damage_dealt_tick;
     float damage_taken_tick;
@@ -242,6 +246,7 @@ typedef struct {
     union {
         TfaGuardianState guardian;
         TfaXarthState xarth;
+        TfaOcellusState ocellus;
         TfaBorkState bork;
         TfaMoiaState moia;
         TfaDreadnothState dreadnoth;
