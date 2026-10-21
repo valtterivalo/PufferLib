@@ -21,6 +21,7 @@ typedef float obs_t;
 #include "osrs_terrain.h"
 #include "osrs_objects.h"
 #include "osrs_gui.h"
+#include "osrs_minimap.h"
 #include "osrs_human_input.h"
 #include "encounters/encounter_colosseum.h"
 #include <ctype.h>
@@ -35,7 +36,6 @@ typedef float obs_t;
 #define RENDER_TILE_SIZE       20
 #define RENDER_WINDOW_W        1240
 #define RENDER_WINDOW_H        840
-#define RENDER_UI_SCALE        1.15f
 #define RENDER_PANEL_WIDTH     GUI_SIDE_MENU_W
 #define RENDER_HEADER_HEIGHT   0
 #define RENDER_SPLATS_PER_PLAYER 4
@@ -43,23 +43,18 @@ typedef float obs_t;
 #define MAX_RENDER_ENTITIES    64
 
 
-#define RENDER_PANEL_SCREEN_W  ((int)(RENDER_PANEL_WIDTH * RENDER_UI_SCALE + 0.5f))
-#define RENDER_GRID_W (RENDER_WINDOW_W - RENDER_PANEL_SCREEN_W)
+#define RENDER_GRID_W (RENDER_WINDOW_W - RENDER_PANEL_WIDTH)
 #define RENDER_GRID_H (RENDER_WINDOW_H - RENDER_HEADER_HEIGHT)
 
-static inline Camera2D render_chrome_camera(float fixed_x, float fixed_y) {
-    return (Camera2D){
-        .offset = (Vector2){ fixed_x, fixed_y },
-        .target = (Vector2){ fixed_x, fixed_y },
-        .rotation = 0.0f,
-        .zoom = RENDER_UI_SCALE,
-    };
-}
-
-#define RENDER_MINIMAP_AREA_H    GUI_MAP_CONTAINER_H
-#define RENDER_MINIMAP_CIRCLE_R  (GUI_MINIMAP_W / 2)
-#define RENDER_MINIMAP_CIRCLE_CY (GUI_MINIMAP_Y + GUI_MINIMAP_H / 2)
-#define RENDER_ORB_R             16
+typedef enum {
+    RENDER_MINIMAP_MASK,
+    RENDER_MINIMAP_COMPASS_MASK,
+    RENDER_MINIMAP_COMPASS,
+    RENDER_MINIMAP_DOT_NPC,
+    RENDER_MINIMAP_DOT_PLAYER,
+    RENDER_MINIMAP_FLAG,
+    RENDER_MINIMAP_SPRITE_COUNT,
+} RenderMinimapSprite;
 
 #define RENDER_TAB_ROW_H        37
 #define RENDER_PANEL_CONTENT_H  GUI_SIDE_CONTENT_H
@@ -486,9 +481,16 @@ typedef struct RenderClient {
     int history_cursor;
 
     GuiState gui;
-    RenderTexture2D minimap_surface;
-    int minimap_surface_w;
-    int minimap_surface_h;
+    Image minimap_sprites[RENDER_MINIMAP_SPRITE_COUNT];
+    OsrsSpriteMask minimap_mask;
+    OsrsSpriteMask compass_mask;
+    Image minimap_scene;
+    int minimap_origin_x, minimap_origin_y;
+    uint32_t minimap_pixels[GUI_MINIMAP_W * GUI_MINIMAP_H];
+    uint32_t compass_pixels[GUI_COMPASS_W * GUI_COMPASS_H];
+    Texture2D minimap_texture;
+    Texture2D compass_texture;
+    RenderTexture2D ui_layer;
 
     HumanInput human_input;
 
@@ -1703,15 +1705,15 @@ static void render_lab_draw_hud(RenderClient* rc) {
 
     DrawRectangle(8, 8, 650, 58, CLITERAL(Color){ 15, 10, 18, 220 });
     DrawRectangleLines(8, 8, 650, 58, CLITERAL(Color){ 190, 80, 255, 255 });
-    DrawText(title, 16, 14, 16, CLITERAL(Color){ 230, 210, 255, 255 });
+    DrawText(title, 16, 14, 20, CLITERAL(Color){ 230, 210, 255, 255 });
     if (is_inferno) {
         DrawText(TextFormat("F8 commit  F6 restore  F7 forecast %s  F9 dump  selected: %s",
             rc->lab_show_forecast ? "on" : "off", selected_text),
-            16, 38, 12, CLITERAL(Color){ 230, 230, 230, 255 });
+            16, 38, 10, CLITERAL(Color){ 230, 230, 230, 255 });
     } else {
         DrawText(TextFormat("F8 commit  F6 restore  F9 dump  selected: %s",
             selected_text),
-            16, 38, 12, CLITERAL(Color){ 230, 230, 230, 255 });
+            16, 38, 10, CLITERAL(Color){ 230, 230, 230, 255 });
     }
 }
 
@@ -1754,7 +1756,7 @@ static void render_draw_colosseum_grapple_banner(RenderClient* rc, OsrsEnv* env)
     }
     if (!text) return;
 
-    int font_size = 24;
+    int font_size = 20;
     int text_w = MeasureText(text, font_size);
     int x = (RENDER_GRID_W - text_w) / 2;
     int y = RENDER_WINDOW_H / 3;
@@ -1766,7 +1768,7 @@ static void render_draw_encounter_status_text(RenderClient* rc) {
     EncounterOverlay* ov = &rc->encounter_overlay;
     if (!ov->status_text_active || ov->status_text[0] == '\0') return;
 
-    int font_size = 22;
+    int font_size = 20;
     int text_w = MeasureText(ov->status_text, font_size);
     int pad_x = 12;
     int pad_y = 6;
@@ -1841,6 +1843,8 @@ static RenderClient* render_make_client(OsrsEnv* env) {
     const char* display_name = def ? def->display_name : "PvP";
     InitWindow(RENDER_WINDOW_W, RENDER_WINDOW_H, TextFormat("OSRS %s", display_name));
     SetTargetFPS(60);
+    rc->ui_layer = LoadRenderTexture(RENDER_WINDOW_W, RENDER_WINDOW_H);
+    SetTextureFilter(rc->ui_layer.texture, TEXTURE_FILTER_POINT);
 
     {
         const char* paths[] = {
@@ -1884,7 +1888,6 @@ static RenderClient* render_make_client(OsrsEnv* env) {
     rc->gui.panel_w = RENDER_PANEL_WIDTH;
     rc->gui.panel_h = RENDER_TAB_ROW_H + RENDER_PANEL_CONTENT_H + RENDER_TAB_ROW_H;
     rc->gui.panel_y = RENDER_WINDOW_H - rc->gui.panel_h;
-    rc->gui.ui_scale = RENDER_UI_SCALE;
     rc->gui.tab_h = RENDER_TAB_ROW_H;
     rc->gui.status_bar_h = 0;
     rc->gui.gui_entity_idx = 0;
@@ -2474,11 +2477,76 @@ static Vector3 flight_get_position(const FlightProjectile* fp, float src_ground,
     return (Vector3){ fp->x + 0.5f, ground + h, -(fp->y + 1.0f) + 0.5f };
 }
 
+static int render_entity_is_visible(const RenderEntity* entity) {
+    return entity->entity_type != ENTITY_NPC || entity->npc_visible;
+}
+
+static OsrsPixels render_image_pixels(Image image) {
+    return (OsrsPixels){image.width, image.height, (const uint32_t*)image.data};
+}
+
+static Image render_require_rgba_image(const char* path) {
+    Image image = osrs_asset_load_image(path);
+    if (!image.data) {
+        fprintf(stderr, "required image %s failed to load\n", path);
+        abort();
+    }
+    ImageFormat(&image, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+    return image;
+}
+
+static Texture2D render_pixel_texture(int w, int h) {
+    Image blank = GenImageColor(w, h, BLANK);
+    Texture2D tex = LoadTextureFromImage(blank);
+    UnloadImage(blank);
+    SetTextureFilter(tex, TEXTURE_FILTER_POINT);
+    return tex;
+}
+
+static void render_load_minimap(RenderClient* rc, const char* scene_minimap_path) {
+    static const char* sprite_names[RENDER_MINIMAP_SPRITE_COUNT] = {
+        [RENDER_MINIMAP_MASK] = "sprites/gui/rm_minimap_alpha_mask.png",
+        [RENDER_MINIMAP_COMPASS_MASK] = "sprites/gui/rm_compass_alpha_mask.png",
+        [RENDER_MINIMAP_COMPASS] = "sprites/gui/compass.png",
+        [RENDER_MINIMAP_DOT_NPC] = "sprites/gui/minimap_dot_npc.png",
+        [RENDER_MINIMAP_DOT_PLAYER] = "sprites/gui/minimap_dot_player.png",
+        [RENDER_MINIMAP_FLAG] = "sprites/gui/minimap_dest_flag_0.png",
+    };
+    for (int i = 0; i < RENDER_MINIMAP_SPRITE_COUNT; i++)
+        rc->minimap_sprites[i] = render_require_rgba_image(OSRS_ASSET(sprite_names[i]));
+    rc->minimap_mask = osrs_sprite_mask(render_image_pixels(rc->minimap_sprites[RENDER_MINIMAP_MASK]));
+    rc->compass_mask = osrs_sprite_mask(render_image_pixels(rc->minimap_sprites[RENDER_MINIMAP_COMPASS_MASK]));
+    assert(rc->minimap_mask.width == GUI_MINIMAP_W && rc->minimap_mask.height == GUI_MINIMAP_H);
+    assert(rc->compass_mask.width == GUI_COMPASS_W && rc->compass_mask.height == GUI_COMPASS_H);
+    rc->minimap_scene = render_require_rgba_image(scene_minimap_path);
+    rc->minimap_origin_x = rc->terrain->min_world_x;
+    rc->minimap_origin_y = rc->terrain->min_world_y;
+    rc->minimap_texture = render_pixel_texture(GUI_MINIMAP_W, GUI_MINIMAP_H);
+    rc->compass_texture = render_pixel_texture(GUI_COMPASS_W, GUI_COMPASS_H);
+}
+
+static OsrsMinimapView render_minimap_view(RenderClient* rc) {
+    int i = rc->gui.gui_entity_idx;
+    return (OsrsMinimapView){rc->sub_x[i], rc->sub_y[i], osrs_camera_angle(rc->cam_yaw)};
+}
+
+static int render_minimap_click(RenderClient* rc, int mx, int my) {
+    int map_x = GetScreenWidth() - GUI_MAP_CONTAINER_W + GUI_MINIMAP_X;
+    int tile_x, tile_y;
+    if (!osrs_minimap_click_tile(&rc->minimap_mask, render_minimap_view(rc),
+            mx - map_x, my - GUI_MINIMAP_Y, &tile_x, &tile_y)) return 0;
+    if (rc->human_input.cursor_mode != CURSOR_NORMAL) human_input_clear_selected_ui_target(&rc->human_input);
+    human_input_queue_walk(&rc->human_input, tile_x, tile_y);
+    return 1;
+}
+
 static void __attribute__((unused)) render_destroy_client(RenderClient* rc) {
     flight_clear_all(rc);
-    if (rc->minimap_surface.id != 0) {
-        UnloadRenderTexture(rc->minimap_surface);
-    }
+    for (int i = 0; i < RENDER_MINIMAP_SPRITE_COUNT; i++) UnloadImage(rc->minimap_sprites[i]);
+    UnloadImage(rc->minimap_scene);
+    UnloadTexture(rc->minimap_texture);
+    UnloadTexture(rc->compass_texture);
+    UnloadRenderTexture(rc->ui_layer);
     gui_unload_sprites(&rc->gui);
     for (int i = 0; i < 6; i++) {
         UnloadTexture(rc->prayer_icons[i]);
@@ -2718,8 +2786,6 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         int mx = GetMouseX();
         int my = GetMouseY();
-        int pmx, pmy;
-        gui_mouse_to_panel_space(&rc->gui, mx, my, &pmx, &pmy);
         int handled = 0;
 
         if (!handled && rc->human_input.enabled) {
@@ -2754,32 +2820,32 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
         }
 
         if (!handled)
-            handled = gui_handle_tab_click(&rc->gui, pmx, pmy);
+            handled = gui_handle_tab_click(&rc->gui, mx, my);
 
         if (!handled && rc->human_input.enabled &&
-            pmx >= rc->gui.panel_x && pmx < rc->gui.panel_x + rc->gui.panel_w &&
-            pmy >= rc->gui.panel_y && pmy < rc->gui.panel_y + rc->gui.panel_h) {
+            mx >= rc->gui.panel_x && mx < rc->gui.panel_x + rc->gui.panel_w &&
+            my >= rc->gui.panel_y && my < rc->gui.panel_y + rc->gui.panel_h) {
             Player* viewed = (rc->entity_count > 0 && rc->gui.gui_entity_idx < rc->entity_count)
                 ? render_get_player_ptr(env, rc->gui.gui_entity_idx) : NULL;
 
             if (viewed) {
                 switch (rc->gui.active_tab) {
                     case GUI_TAB_PRAYER:
-                        human_handle_prayer_click(&rc->human_input, &rc->gui, viewed, pmx, pmy);
+                        human_handle_prayer_click(&rc->human_input, &rc->gui, viewed, mx, my);
                         handled = 1;
                         break;
                     case GUI_TAB_SPELLBOOK:
-                        human_handle_spell_click(&rc->human_input, &rc->gui, viewed, pmx, pmy);
+                        human_handle_spell_click(&rc->human_input, &rc->gui, viewed, mx, my);
                         handled = 1;
                         break;
                     case GUI_TAB_COMBAT:
-                        human_handle_combat_click(&rc->human_input, &rc->gui, viewed, pmx, pmy);
+                        human_handle_combat_click(&rc->human_input, &rc->gui, viewed, mx, my);
                         handled = 1;
                         break;
                     case GUI_TAB_EQUIPMENT: {
                         const EncounterDef* def = (const EncounterDef*)env->encounter_def;
                         if (def && def->human_equipment_mode == HUMAN_EQUIPMENT_UNEQUIP_COMMANDS)
-                            human_handle_equipment_click(&rc->human_input, &rc->gui, viewed, pmx, pmy);
+                            human_handle_equipment_click(&rc->human_input, &rc->gui, viewed, mx, my);
                         handled = 1;
                         break;
                     }
@@ -2789,17 +2855,17 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
             }
         }
 
+        if (!handled && rc->human_input.enabled) handled = render_minimap_click(rc, mx, my);
+
         if (!handled && rc->human_input.enabled) {
-            int mmx, mmy;
-            gui_mouse_to_minimap_space(&rc->gui, mx, my, &mmx, &mmy);
-            if (CheckCollisionPointRec(CLITERAL(Vector2){(float)mmx, (float)mmy},
+            if (CheckCollisionPointRec(CLITERAL(Vector2){(float)mx, (float)my},
                                        render_minimap_spec_orb_rect())) {
                 human_apply_spec_toggle(&rc->human_input);
                 handled = 1;
             }
         }
 
-        if (!handled && rc->human_input.enabled && pmx < rc->gui.panel_x) {
+        if (!handled && rc->human_input.enabled && mx < rc->gui.panel_x) {
             int entity_hit = 0;
             for (int ei = 0; ei < rc->entity_count; ei++) {
                 RenderEntity* ent = &rc->entities[ei];
@@ -2849,20 +2915,18 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
         if (rc->human_input.enabled) {
             int rmx = GetMouseX();
             int rmy = GetMouseY();
-            int prmx, prmy;
-            gui_mouse_to_panel_space(&rc->gui, rmx, rmy, &prmx, &prmy);
-            if (prmx < rc->gui.panel_x) {
+            if (rmx < rc->gui.panel_x) {
                 if (rc->human_input.cursor_mode != CURSOR_NORMAL)
                     human_input_clear_selected_ui_target(&rc->human_input);
                 context_menu_build(rc, env, rmx, rmy);
-            } else if (prmx < rc->gui.panel_x + rc->gui.panel_w &&
-                    prmy >= rc->gui.panel_y &&
-                    prmy < rc->gui.panel_y + rc->gui.panel_h) {
+            } else if (rmx < rc->gui.panel_x + rc->gui.panel_w &&
+                    rmy >= rc->gui.panel_y &&
+                    rmy < rc->gui.panel_y + rc->gui.panel_h) {
                 Player* gui_p = rc->entity_count > 0 && rc->gui.gui_entity_idx < rc->entity_count
                     ? render_get_player_ptr(env, rc->gui.gui_entity_idx)
                     : NULL;
                 if (gui_p)
-                    context_menu_build_gui(rc, gui_p, prmx, prmy, rmx, rmy);
+                    context_menu_build_gui(rc, gui_p, rmx, rmy, rmx, rmy);
                 else
                     context_menu_dismiss(&rc->context_menu);
             } else {
@@ -2877,9 +2941,7 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
     rc->hover_tile_y = -1;
     int hmx = GetMouseX();
     int hmy = GetMouseY();
-    int hpx, hpy;
-    gui_mouse_to_panel_space(&rc->gui, hmx, hmy, &hpx, &hpy);
-    if (hmx >= 0 && hpx < rc->gui.panel_x &&
+    if (hmx >= 0 && hmx < rc->gui.panel_x &&
         hmy >= 0 && hmy < RENDER_WINDOW_H) {
         render_pick_ground_tile(
             rc, hmx, hmy, &rc->hover_tile_x, &rc->hover_tile_y, NULL, NULL);
@@ -2984,10 +3046,6 @@ static int render_default_secondary_for_entity(const RenderEntity* entity) {
 
     const NpcModelMapping* nm = npc_model_lookup((uint16_t)entity->npc_def_id);
     return nm ? (int)nm->idle_anim : -1;
-}
-
-static int render_entity_is_visible(const RenderEntity* entity) {
-    return entity->entity_type != ENTITY_NPC || entity->npc_visible;
 }
 
 static void render_reset_entity_visual_slot(RenderClient* rc, int i) {
@@ -3773,7 +3831,6 @@ static void render_draw_xp_drops(RenderClient* rc) {
     int map_x = GetScreenWidth() - GUI_MAP_CONTAINER_W;
     int origin_x = map_x - 8;
     int origin_y = GUI_MINIMAP_Y + 72;
-    BeginMode2D(render_chrome_camera((float)RENDER_WINDOW_W, 0.0f));
     for (int xi = 0; xi < RENDER_SPLATS_PER_PLAYER; xi++) {
         XpDrop* d = &rc->xp_drops[i][xi];
         if (!d->active) continue;
@@ -3794,7 +3851,6 @@ static void render_draw_xp_drops(RenderClient* rc) {
             (Color){255, 255, 255, a});
         osrs_font_draw(font, txt, text_x, draw_y + 12, (Color){255, 255, 255, a}, OSRS_TEXT_SHADOWED);
     }
-    EndMode2D();
 }
 
 static void render_draw_hitmark(RenderClient* rc, int cx, int cy, int damage, int opacity, int type) {
@@ -3885,7 +3941,7 @@ static void render_draw_panel_npc(int x, int y, RenderEntity* p, OsrsEnv* env) {
 
     if (!npc_name) npc_name = TextFormat("NPC %d", p->npc_def_id);
 
-    DrawText(npc_name, x, y, 14, name_color);
+    DrawText(npc_name, x, y, 20, name_color);
     y += line_h + 4;
 
     DrawText(TextFormat("HP:     %d / %d", p->current_hitpoints, p->base_hitpoints), x, y, 10, COLOR_TEXT);
@@ -5577,7 +5633,7 @@ static void render_draw_minimap_orb(
     Rectangle fill = {rect.x + 27, rect.y + 4, 26, 26};
     gui_draw_named_asset(gs, "orb_filler_0", fill, WHITE);
     gui_draw_named_asset(gs, filler_asset, fill, WHITE);
-    gui_draw_named_asset_centered(gs, icon_asset, fill, 22, 22, WHITE);
+    gui_draw_named_asset(gs, icon_asset, fill, WHITE);
 
     char text[16];
     snprintf(text, sizeof(text), "%d", value);
@@ -5588,231 +5644,50 @@ static void render_draw_minimap_orb(
         text_color, OSRS_TEXT_SHADOWED, OSRS_TEXT_ALIGN_CENTER, OSRS_TEXT_ALIGN_CENTER, 0);
 }
 
-static int render_minimap_inside(int x, int y) {
-    float dx = (float)x - GUI_MINIMAP_MASK_CENTER;
-    float dy = (float)y - GUI_MINIMAP_MASK_CENTER;
-    return dx * dx + dy * dy <= GUI_MINIMAP_MASK_RADIUS * GUI_MINIMAP_MASK_RADIUS;
-}
-
-static void render_minimap_put_pixel(int x, int y, Color c) {
-    if (x < 0 || y < 0 || x >= GUI_MINIMAP_W || y >= GUI_MINIMAP_H) return;
-    if (!render_minimap_inside(x, y)) return;
-    DrawPixel(x, y, c);
-}
-
-static void render_minimap_fill_rect(int x, int y, int w, int h, Color c) {
-    for (int yy = 0; yy < h; yy++) {
-        for (int xx = 0; xx < w; xx++) {
-            render_minimap_put_pixel(x + xx, y + yy, c);
-        }
-    }
-}
-
-static int render_minimap_collision_flags(RenderClient* rc, int wx, int wy) {
-    return collision_get_flags(rc->collision_map, 0,
-        wx + rc->collision_world_offset_x,
-        wy + rc->collision_world_offset_y);
-}
-
-static Color render_minimap_tile_color(RenderClient* rc, int wx, int wy) {
-    if (wx < rc->arena_base_x || wy < rc->arena_base_y ||
-        wx >= rc->arena_base_x + rc->arena_width ||
-        wy >= rc->arena_base_y + rc->arena_height) {
-        return (Color){10, 8, 6, 255};
-    }
-
-    int flags = render_minimap_collision_flags(rc, wx, wy);
-    if (flags & COLLISION_BLOCKED) return (Color){14, 11, 9, 255};
-    if (flags & COLLISION_BRIDGE) return (Color){48, 42, 34, 255};
-    return (Color){58, 35, 29, 255};
-}
-
-static void render_minimap_draw_tile_features(RenderClient* rc, int wx, int wy, int sx, int sy) {
-    int flags = render_minimap_collision_flags(rc, wx, wy);
-    if (flags == COLLISION_NONE) return;
-
-    if (flags & COLLISION_BLOCKED) {
-        render_minimap_fill_rect(sx - 1, sy - 1, 3, 3, (Color){36, 25, 20, 255});
-    }
-
-    Color wall = (Color){224, 221, 198, 255};
-    if (flags & (COLLISION_WALL_NORTH | COLLISION_IMPENETRABLE_WALL_NORTH)) {
-        render_minimap_fill_rect(sx - 2, sy - 2, 5, 1, wall);
-    }
-    if (flags & (COLLISION_WALL_SOUTH | COLLISION_IMPENETRABLE_WALL_SOUTH)) {
-        render_minimap_fill_rect(sx - 2, sy + 2, 5, 1, wall);
-    }
-    if (flags & (COLLISION_WALL_WEST | COLLISION_IMPENETRABLE_WALL_WEST)) {
-        render_minimap_fill_rect(sx - 2, sy - 2, 1, 5, wall);
-    }
-    if (flags & (COLLISION_WALL_EAST | COLLISION_IMPENETRABLE_WALL_EAST)) {
-        render_minimap_fill_rect(sx + 2, sy - 2, 1, 5, wall);
-    }
-}
-
-static float render_minimap_entity_center_x(RenderClient* rc, int entity_idx) {
-    int sub = rc->sub_x[entity_idx];
-    if (sub != 0) return (float)sub / 128.0f;
-    RenderEntity* ent = &rc->entities[entity_idx];
-    int size = ent->npc_size > 1 ? ent->npc_size : 1;
-    return (float)ent->x + (float)size * 0.5f;
-}
-
-static float render_minimap_entity_center_y(RenderClient* rc, int entity_idx) {
-    int sub = rc->sub_y[entity_idx];
-    if (sub != 0) return (float)sub / 128.0f;
-    RenderEntity* ent = &rc->entities[entity_idx];
-    int size = ent->npc_size > 1 ? ent->npc_size : 1;
-    return (float)ent->y + (float)size * 0.5f;
-}
-
-static void render_draw_minimap_entity_dot(
-    int sx, int sy, int sz_px, Texture2D sprite
-) {
-    Rectangle src = {0, 0, (float)sprite.width, (float)sprite.height};
-    Rectangle dst = {
-        (float)(sx + sz_px / 2 - 2),
-        (float)(sy + sz_px / 2 - 2),
-        4.0f,
-        4.0f,
-    };
-    DrawTexturePro(sprite, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
-}
-
-static void render_ensure_minimap_surface(RenderClient* rc, int w, int h) {
-    if (rc->minimap_surface.id != 0 &&
-        rc->minimap_surface_w == w &&
-        rc->minimap_surface_h == h) {
-        return;
-    }
-
-    if (rc->minimap_surface.id != 0) {
-        UnloadRenderTexture(rc->minimap_surface);
-    }
-
-    rc->minimap_surface = LoadRenderTexture(w, h);
-    if (rc->minimap_surface.id == 0 || rc->minimap_surface.texture.id == 0) {
-        fprintf(stderr, "minimap render texture allocation failed\n");
-        abort();
-    }
-    SetTextureFilter(rc->minimap_surface.texture, TEXTURE_FILTER_POINT);
-    rc->minimap_surface_w = w;
-    rc->minimap_surface_h = h;
-}
-
-static void render_draw_minimap_compass(RenderClient* rc, GuiState* gs, Rectangle compass) {
-    Texture2D comp = gs->minimap_compass_masked;
-    Rectangle src = {0, 0, (float)comp.width, (float)comp.height};
-    Rectangle dst = {
-        compass.x + compass.width * 0.5f,
-        compass.y + compass.height * 0.5f,
-        (float)comp.width,
-        (float)comp.height,
-    };
-    Vector2 origin = {(float)comp.width * 0.5f, (float)comp.height * 0.5f};
-    float angle_deg = rc->cam_yaw * (180.0f / 3.14159265f);
-    DrawTexturePro(comp, src, dst, origin, angle_deg, WHITE);
-}
-
 static Rectangle render_minimap_spec_orb_rect(void) {
     int orbs_x = GetScreenWidth() - GUI_MAP_CONTAINER_W + GUI_ORBS_X;
     int orbs_y = GUI_ORBS_Y;
     return (Rectangle){(float)(orbs_x + GUI_SPEC_X), (float)(orbs_y + GUI_SPEC_Y), 57, 34};
 }
 
-static void render_draw_minimap_area(RenderClient* rc, OsrsEnv* env, Player* p) {
+static void render_draw_minimap_area(RenderClient* rc, Player* p) {
     GuiState* gs = &rc->gui;
     int map_x = GetScreenWidth() - GUI_MAP_CONTAINER_W;
     int map_y = 0;
-    int mask_w = GUI_MINIMAP_W;
-    int mask_h = GUI_MINIMAP_H;
-    int mask_x = map_x + GUI_MINIMAP_X;
-    int mask_y = map_y + GUI_MINIMAP_Y;
-    int compass_x = map_x + GUI_COMPASS_X;
-    int compass_y = map_y + GUI_COMPASS_Y;
-
-    render_ensure_minimap_surface(rc, mask_w, mask_h);
-    BeginTextureMode(rc->minimap_surface);
-    ClearBackground(BLANK);
-    int map_cx = mask_w / 2;
-    int map_cy = mask_h / 2;
-
-    int player_idx = -1;
-    for (int e = 0; e < rc->entity_count; e++) {
-        if (rc->entities[e].entity_type == ENTITY_PLAYER) { player_idx = e; break; }
-    }
-
-    float player_x = player_idx >= 0 ? render_minimap_entity_center_x(rc, player_idx) : 0.0f;
-    float player_y = player_idx >= 0 ? render_minimap_entity_center_y(rc, player_idx) : 0.0f;
-    const float scale = 4.0f;
-
-    for (int y = 0; y < GUI_MINIMAP_H; y++) {
-        for (int x = 0; x < GUI_MINIMAP_W; x++) {
-            if (!render_minimap_inside(x, y)) continue;
-            float sx = (float)x - 76.0f;
-            float sy = (float)y - 76.0f;
-            int wx = (int)roundf(player_x + sx / scale);
-            int wy = (int)roundf(player_y - sy / scale);
-            DrawPixel(x, y, render_minimap_tile_color(rc, wx, wy));
-        }
-    }
-
-    for (int dy = -20; dy <= 20; dy++) {
-        for (int dx = -20; dx <= 20; dx++) {
-            int sx = (int)roundf(76.0f + (float)dx * scale);
-            int sy = (int)roundf(76.0f - (float)dy * scale);
-            render_minimap_draw_tile_features(rc,
-                (int)roundf(player_x) + dx,
-                (int)roundf(player_y) + dy,
-                sx, sy);
-        }
-    }
+    int me = rc->gui.gui_entity_idx;
+    OsrsMinimapView view = render_minimap_view(rc);
+    const OsrsSpriteMask* mask = &rc->minimap_mask;
+    uint32_t* px = rc->minimap_pixels;
+    memset(px, 0, sizeof(rc->minimap_pixels));
+    OsrsPixels scene = render_image_pixels(rc->minimap_scene);
+    osrs_draw_rotated_masked(px, mask, scene,
+        view.x / 32 - rc->minimap_origin_x * OSRS_MINIMAP_TILE_PX,
+        scene.height - (view.y / 32 - rc->minimap_origin_y * OSRS_MINIMAP_TILE_PX),
+        view.angle, OSRS_MINIMAP_BLACK);
 
     for (int e = 0; e < rc->entity_count; e++) {
         RenderEntity* ent = &rc->entities[e];
-        if (ent->entity_type == ENTITY_NPC && !ent->npc_visible) continue;
-
-        float dx = render_minimap_entity_center_x(rc, e) - player_x;
-        float dy = render_minimap_entity_center_y(rc, e) - player_y;
-        if (dx < -40.0f || dx > 40.0f || dy < -40.0f || dy > 40.0f) continue;
-
-        int dot_cx = (int)roundf((float)map_cx + dx * scale);
-        int dot_cy = (int)roundf((float)map_cy - dy * scale);
-        int rel_x = dot_cx - map_cx;
-        int rel_y = dot_cy - map_cy;
-        if (rel_x * rel_x + rel_y * rel_y > 68 * 68) continue;
-
-        Texture2D dot_sprite = ent->entity_type == ENTITY_PLAYER
-            ? gs->minimap_dot_player
-            : gs->minimap_dot_npc;
-        int dot_sz = ent->entity_type == ENTITY_PLAYER ? 5 : 4;
-        render_draw_minimap_entity_dot(
-            dot_cx - dot_sz / 2,
-            dot_cy - dot_sz / 2,
-            dot_sz,
-            dot_sprite);
-
-        if (player_idx >= 0 && e != player_idx &&
-            rc->entities[player_idx].attack_target_entity_idx == e) {
-            DrawRectangleLines(dot_cx - 3, dot_cy - 3, 7, 7, YELLOW);
-        }
+        if (e == me || !render_entity_is_visible(ent)) continue;
+        int sprite = ent->entity_type == ENTITY_NPC ? RENDER_MINIMAP_DOT_NPC : RENDER_MINIMAP_DOT_PLAYER;
+        osrs_minimap_draw_sprite_at(px, mask, render_image_pixels(rc->minimap_sprites[sprite]), view,
+            rc->sub_x[e], rc->sub_y[e]);
     }
-    EndTextureMode();
 
-    BeginMode2D(render_chrome_camera((float)RENDER_WINDOW_W, 0.0f));
-    Rectangle surface_src = { 0, 0, (float)mask_w, -(float)mask_h };
-    Rectangle surface_dst = { (float)mask_x, (float)mask_y,
-                              (float)mask_w, (float)mask_h };
-    DrawTexturePro(rc->minimap_surface.texture, surface_src, surface_dst,
-                   (Vector2){0, 0}, 0.0f, WHITE);
+    HumanInput* hi = &rc->human_input;
+    if (hi->enabled && hi->pending_move_x >= 0 &&
+            (rc->entities[me].x != hi->pending_move_x || rc->entities[me].y != hi->pending_move_y)) {
+        osrs_minimap_draw_tile_sprite(px, mask, render_image_pixels(rc->minimap_sprites[RENDER_MINIMAP_FLAG]), view,
+            hi->pending_move_x, hi->pending_move_y);
+    }
+    osrs_minimap_draw_local_player(px, mask, view, rc->sub_x[me], rc->sub_y[me]);
+    UpdateTexture(rc->minimap_texture, px);
 
-    Rectangle compass = {
-        (float)compass_x,
-        (float)compass_y,
-        (float)GUI_COMPASS_W,
-        (float)GUI_COMPASS_H,
-    };
-    render_draw_minimap_compass(rc, gs, compass);
+    memset(rc->compass_pixels, 0, sizeof(rc->compass_pixels));
+    osrs_draw_rotated_masked(rc->compass_pixels, &rc->compass_mask,
+        render_image_pixels(rc->minimap_sprites[RENDER_MINIMAP_COMPASS]), 25, 25, view.angle, 0);
+    UpdateTexture(rc->compass_texture, rc->compass_pixels);
+    DrawTexture(rc->minimap_texture, map_x + GUI_MINIMAP_X, map_y + GUI_MINIMAP_Y, WHITE);
+    DrawTexture(rc->compass_texture, map_x + GUI_COMPASS_X, map_y + GUI_COMPASS_Y, WHITE);
 
     Rectangle cover = {
         (float)(map_x + GUI_MAP_SURROUND_X),
@@ -5832,8 +5707,7 @@ static void render_draw_minimap_area(RenderClient* rc, OsrsEnv* env, Player* p) 
     Rectangle worldmap_button = {(float)(orbs_x + GUI_WORLDMAP_X), (float)(orbs_y + GUI_WORLDMAP_Y), 30, 30};
     Rectangle wiki_button = {(float)(map_x + 166), (float)(map_y + 173), 40, 34};
 
-    gui_draw_named_asset(gs, "tli_button01_orb01_34x34_0", xp_orb, WHITE);
-    gui_draw_named_asset_centered(gs, "orb_xp_0", xp_orb, 24, 24, WHITE);
+    gui_draw_named_asset(gs, "orb_xp_0", xp_orb, WHITE);
 
     if (p) {
         render_draw_minimap_orb(gs, hp_orb, "orb_filler_1", "orb_icon_0",
@@ -5847,10 +5721,8 @@ static void render_draw_minimap_area(RenderClient* rc, OsrsEnv* env, Player* p) 
     }
 
     gui_draw_named_asset(gs, "ring_30", worldmap_button, WHITE);
-    gui_draw_named_asset_centered(gs, "worldmap_icon_0", worldmap_button, 22, 22, WHITE);
-    gui_draw_named_asset(gs, "wiki_icon_0", wiki_button, WHITE);
-    EndMode2D();
-
+    gui_draw_named_asset_centered(gs, "worldmap_icon_0", worldmap_button, WHITE);
+    gui_draw_named_asset_centered(gs, "wiki_icon_0", wiki_button, WHITE);
 }
 
 static int render_target_label_entity_idx(RenderClient* rc) {
@@ -5872,11 +5744,11 @@ static void render_draw_target_label(RenderClient* rc) {
     int target = render_target_label_entity_idx(rc);
     if (target < 0) return;
     const char* label = TextFormat("Target: %s", render_entity_display_name(&rc->entities[target]));
-    int w = MeasureText(label, 16);
+    int w = MeasureText(label, 20);
     int x = (RENDER_GRID_W - w) / 2;
     if (x < 120) x = 120;
-    DrawText(label, x + 1, 13, 16, BLACK);
-    DrawText(label, x, 12, 16, COLOR_TEXT);
+    DrawText(label, x + 1, 13, 20, BLACK);
+    DrawText(label, x, 12, 20, COLOR_TEXT);
 }
 
 static int render_display_tick(OsrsEnv* env) {
@@ -5912,7 +5784,7 @@ static const char* render_control_hint_text(RenderClient* rc, OsrsEnv* env) {
 }
 
 static void render_draw_default_top_hud(RenderClient* rc, int display_tick) {
-    DrawText(TextFormat("Tick: %d", display_tick), 10, 12, 16, COLOR_TEXT);
+    DrawText(TextFormat("Tick: %d", display_tick), 10, 12, 20, COLOR_TEXT);
     render_draw_target_label(rc);
 
     if (rc->entity_count >= 2) {
@@ -5921,19 +5793,19 @@ static void render_draw_default_top_hud(RenderClient* rc, int display_tick) {
         const char* hp_txt = TextFormat("P0: %d/%d   P1: %d/%d",
             p0->current_hitpoints, p0->base_hitpoints,
             p1->current_hitpoints, p1->base_hitpoints);
-        int hp_w = MeasureText(hp_txt, 16);
-        DrawText(hp_txt, RENDER_GRID_W - hp_w - 12, 12, 16, COLOR_TEXT);
+        int hp_w = MeasureText(hp_txt, 20);
+        DrawText(hp_txt, RENDER_GRID_W - hp_w - 12, 12, 20, COLOR_TEXT);
     }
 }
 
 static void render_draw_inferno_top_hud(OsrsEnv* env, int display_tick) {
     InfernoState* s = render_inferno_state_from_env(env);
     if (!s) {
-        DrawText(TextFormat("Tick: %d", display_tick), 10, 12, 16, COLOR_TEXT);
+        DrawText(TextFormat("Tick: %d", display_tick), 10, 12, 20, COLOR_TEXT);
         return;
     }
     DrawText(TextFormat("Tick: %d   Wave: %d / %d",
-        display_tick, s->wave + 1, INF_NUM_WAVES), 10, 12, 16, COLOR_TEXT);
+        display_tick, s->wave + 1, INF_NUM_WAVES), 10, 12, 20, COLOR_TEXT);
 }
 
 static void render_draw_colosseum_top_hud(RenderClient* rc, OsrsEnv* env) {
@@ -5942,8 +5814,8 @@ static void render_draw_colosseum_top_hud(RenderClient* rc, OsrsEnv* env) {
     const char* wave_txt = s->wave == COLO_WAVE_BOSS
         ? TextFormat("Wave: %d / %d  (Sol Heredit)", s->wave + 1, COLO_NUM_WAVES)
         : TextFormat("Wave: %d / %d", s->wave + 1, COLO_NUM_WAVES);
-    int wave_w = MeasureText(wave_txt, 16);
-    DrawText(wave_txt, (RENDER_GRID_W - wave_w) / 2, 32, 16, COLOR_TEXT);
+    int wave_w = MeasureText(wave_txt, 20);
+    DrawText(wave_txt, (RENDER_GRID_W - wave_w) / 2, 32, 20, COLOR_TEXT);
 }
 
 static const int COLOSSEUM_MODIFIER_ICON_SPRITE_IDS[COLO_NUM_REAL_MODIFIERS][3] = {
@@ -6167,11 +6039,7 @@ static void render_follow_pvp_fighter_midpoint(RenderClient* rc, OsrsEnv* env, d
 
 void pvp_render(OsrsEnv* env) {
     RenderClient* rc = (RenderClient*)env->client;
-    if (rc == NULL) {
-        rc = render_make_client(env);
-        rc->collision_map = collision_map_scene(PVP_SCENE);
-        env->client = rc;
-    }
+    assert(rc);
 
     render_populate_entities(rc, env);
     render_ensure_entity_visual_slots(rc);
@@ -6264,6 +6132,11 @@ void pvp_render(OsrsEnv* env) {
 
     render_draw_3d_world(rc, env);
 
+    BeginTextureMode(rc->ui_layer);
+    ClearBackground(BLANK);
+    rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD, RL_FUNC_ADD);
+    BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+
     render_draw_overhead_status(rc, env);
 
     if (rc->show_debug && env->encounter_state && env->encounter_def &&
@@ -6271,7 +6144,7 @@ void pvp_render(OsrsEnv* env) {
             InfernoState* is = (InfernoState*)env->encounter_state;
             int dy = RENDER_WINDOW_H - 160;
             int dx = 10;
-            int fs = 12;
+            int fs = 10;
             Color dc = (Color){220, 220, 220, 255};
 
             int tgt = is->interaction.target_slot;
@@ -6350,11 +6223,11 @@ void pvp_render(OsrsEnv* env) {
                  rc->debug_hit_wy >= 0 ? rc->debug_hit_wy + rc->collision_world_offset_y : -1,
                  rc->debug_plane_wx, rc->debug_plane_wy,
                  rc->debug_ray_hit_x, rc->debug_ray_hit_y, rc->debug_ray_hit_z);
-        DrawText(dbg, 10, 30, 16, MAGENTA);
+        DrawText(dbg, 10, 30, 20, MAGENTA);
         snprintf(dbg, sizeof(dbg), "ray org: (%.1f,%.1f,%.1f) dir: (%.3f,%.3f,%.3f)",
                  rc->debug_ray_origin.x, rc->debug_ray_origin.y, rc->debug_ray_origin.z,
                  rc->debug_ray_dir.x, rc->debug_ray_dir.y, rc->debug_ray_dir.z);
-        DrawText(dbg, 10, 48, 16, MAGENTA);
+        DrawText(dbg, 10, 52, 20, MAGENTA);
         for (int ei = 0; ei < rc->entity_count; ei++) {
             RenderEntity* ent = &rc->entities[ei];
             if (ent->entity_type != ENTITY_PLAYER) continue;
@@ -6362,7 +6235,7 @@ void pvp_render(OsrsEnv* env) {
                      ent->x, ent->y,
                      ent->x + rc->collision_world_offset_x,
                      ent->y + rc->collision_world_offset_y);
-            DrawText(dbg, 10, 66, 16, (Color){ 0, 255, 128, 255 });
+            DrawText(dbg, 10, 74, 20, (Color){ 0, 255, 128, 255 });
             break;
         }
     }
@@ -6409,13 +6282,10 @@ void pvp_render(OsrsEnv* env) {
             }
         }
         if (gui_player) {
-            BeginMode2D(render_chrome_camera(
-                (float)RENDER_WINDOW_W, (float)RENDER_WINDOW_H));
             gui_draw(&rc->gui, gui_player);
-            EndMode2D();
         }
 
-        render_draw_minimap_area(rc, env, gui_player);
+        render_draw_minimap_area(rc, gui_player);
         render_draw_xp_drops(rc);
 
         if (rc->show_debug) {
@@ -6433,6 +6303,14 @@ void pvp_render(OsrsEnv* env) {
     render_draw_colosseum_modifier_draft(rc, env);
 
     context_menu_draw(rc);
+
+    EndBlendMode();
+    EndTextureMode();
+    BeginBlendMode(BLEND_ALPHA_PREMULTIPLY);
+    DrawTexturePro(rc->ui_layer.texture,
+        (Rectangle){0, 0, (float)RENDER_WINDOW_W, -(float)RENDER_WINDOW_H},
+        (Rectangle){0, 0, (float)RENDER_WINDOW_W, (float)RENDER_WINDOW_H}, (Vector2){0, 0}, 0.0f, WHITE);
+    EndBlendMode();
 
     EndDrawing();
     puf_web_vsync();

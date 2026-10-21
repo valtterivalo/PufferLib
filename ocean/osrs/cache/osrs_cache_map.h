@@ -2,6 +2,7 @@
 #define OSRS_CACHE_MAP_H
 
 #include <math.h>
+#include <strings.h>
 
 #include "osrs_cache.h"
 
@@ -224,6 +225,8 @@ typedef struct {
     int animated;
     int transform;
     int clipped;
+    int map_scene;
+    int interactive;
 } LocDef;
 
 static LocDef loc_decode(const CacheFile* file) {
@@ -231,7 +234,9 @@ static LocDef loc_decode(const CacheFile* file) {
         .size_x = 1, .size_y = 1, .interact_type = 2, .blocks_projectile = 1,
         .scale_x = 128, .scale_height = 128, .scale_y = 128,
         .contoured_ground = -1, .decor_offset = 16, .animation_id = -1, .transform = -1, .clipped = 1,
+        .map_scene = -1, .interactive = -1,
     };
+    int has_action = 0;
     CacheBuf b = {file->data, file->data + file->size};
     for (int op = cache_u8(&b); op; op = cache_u8(&b)) {
         if (op == 1 || op == 5 || op == 6 || op == 7) {
@@ -258,7 +263,9 @@ static LocDef loc_decode(const CacheFile* file) {
             d.blocks_projectile = 0;
         } else if (op == 18) {
             d.blocks_projectile = 0;
-        } else if (op == 19 || op == 69 || op == 75) {
+        } else if (op == 19) {
+            d.interactive = cache_u8(&b);
+        } else if (op == 69 || op == 75) {
             cache_u8(&b);
         } else if (op == 21) {
             d.contoured_ground = 0;
@@ -279,7 +286,9 @@ static LocDef loc_decode(const CacheFile* file) {
         } else if (op == 39) {
             d.contrast = cache_i8(&b) * 25;
         } else if (op >= 30 && op < 35) {
+            const uint8_t* action = b.p;
             cache_skip_string(&b);
+            has_action |= strncasecmp((const char*)action, "hidden", 7) != 0;
         } else if (op == 40 || op == 41) {
             int n = cache_u8(&b);
             assert(n <= 32);
@@ -290,8 +299,10 @@ static LocDef loc_decode(const CacheFile* file) {
                 to[i] = cache_u16(&b);
             }
             *(op == 40 ? &d.recolor_count : &d.retexture_count) = n;
-        } else if (op == 60 || op == 61 || op == 68 || op == 82) {
+        } else if (op == 60 || op == 61 || op == 82) {
             cache_u16(&b);
+        } else if (op == 68) {
+            d.map_scene = cache_u16(&b);
         } else if (op == 62) {
             d.mirrored = 1;
         } else if (op == 65) {
@@ -345,6 +356,8 @@ static LocDef loc_decode(const CacheFile* file) {
     }
     assert(b.p == b.end);
     d.animated |= d.animation_id != -1;
+    if (d.interactive == -1)
+        d.interactive = (d.model_count && (d.model_types[0] == -1 || d.model_types[0] == 10)) || has_action;
     return d;
 }
 
@@ -355,6 +368,7 @@ typedef struct {
 typedef struct {
     int rgb, texture, hide_underlay, secondary_rgb;
     int hue, saturation, lightness;
+    int secondary_hue, secondary_saturation, secondary_lightness;
 } Overlay;
 
 typedef struct {
@@ -409,6 +423,12 @@ static Overlay overlay_decode(const CacheFile* file) {
     o.hue = (int)(256.0 * c.h);
     o.saturation = floor_clamp_byte((int)(c.s * 256.0));
     o.lightness = floor_clamp_byte((int)(256.0 * c.l));
+    if (o.secondary_rgb != -1) {
+        Hsl sc = floor_hsl(o.secondary_rgb);
+        o.secondary_hue = (int)(256.0 * sc.h);
+        o.secondary_saturation = floor_clamp_byte((int)(sc.s * 256.0));
+        o.secondary_lightness = floor_clamp_byte((int)(256.0 * sc.l));
+    }
     return o;
 }
 

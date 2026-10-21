@@ -42,8 +42,6 @@
 #define GUI_MINIMAP_Y 8
 #define GUI_MINIMAP_W 152
 #define GUI_MINIMAP_H 152
-#define GUI_MINIMAP_MASK_CENTER 75.5f
-#define GUI_MINIMAP_MASK_RADIUS 76.0f
 #define GUI_MAP_SURROUND_X 29
 #define GUI_MAP_SURROUND_Y 0
 #define GUI_MAP_SURROUND_W 182
@@ -293,8 +291,6 @@ typedef struct {
     int tab_h;
     int status_bar_h;
 
-    float ui_scale;
-
     int gui_entity_idx;
     int gui_entity_count;
 
@@ -320,16 +316,6 @@ typedef struct {
 
     Texture2D slot_tile;
 
-    Texture2D minimap_compass;
-    Texture2D minimap_compass_masked;
-    Texture2D minimap_alpha_mask;
-    Texture2D minimap_frame;
-    Texture2D rm_minimap_alpha_mask;
-    Texture2D rm_minimap_frame;
-    Texture2D rm_compass_alpha_mask;
-    Texture2D rm_tabs_top_row;
-    Texture2D minimap_dot_player;
-    Texture2D minimap_dot_npc;
 
     #define GUI_MAX_ITEM_SPRITES 256
     int item_sprite_ids[GUI_MAX_ITEM_SPRITES];
@@ -372,62 +358,11 @@ typedef struct {
     int autocast_selector_open;
 } GuiState;
 
-static inline void gui_mouse_to_panel_space(
-    const GuiState* gs, int mx, int my, int* out_x, int* out_y
-) {
-    float k = gs->ui_scale > 0.0f ? gs->ui_scale : 1.0f;
-    float fx = (float)(gs->panel_x + gs->panel_w);
-    float fy = (float)(gs->panel_y + gs->panel_h);
-    *out_x = (int)lroundf(fx + ((float)mx - fx) / k);
-    *out_y = (int)lroundf(fy + ((float)my - fy) / k);
-}
-
-static inline void gui_mouse_to_minimap_space(
-    const GuiState* gs, int mx, int my, int* out_x, int* out_y
-) {
-    float k = gs->ui_scale > 0.0f ? gs->ui_scale : 1.0f;
-    float fx = (float)(gs->panel_x + gs->panel_w);
-    *out_x = (int)lroundf(fx + ((float)mx - fx) / k);
-    *out_y = (int)lroundf((float)my / k);
-}
-
 static Texture2D gui_require_texture(const char* path) {
     Texture2D tex = osrs_asset_load_texture(path);
     if (tex.id != 0) return tex;
 
     fprintf(stderr, "GUI: failed to load required texture %s\n", path);
-    abort();
-}
-
-static Texture2D gui_require_masked_compass(const char* path) {
-    Image image = osrs_asset_load_image(path);
-    if (!image.data) {
-        fprintf(stderr, "GUI: failed to load required compass image %s\n", path);
-        abort();
-    }
-
-    ImageFormat(&image, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-    Color* pixels = (Color*)image.data;
-    int min_side = image.width < image.height ? image.width : image.height;
-    float cx = (float)image.width * 0.5f;
-    float cy = (float)image.height * 0.5f;
-    float radius = (float)min_side * (19.0f / 51.0f);
-    float radius_sq = radius * radius;
-    for (int y = 0; y < image.height; y++) {
-        for (int x = 0; x < image.width; x++) {
-            float dx = ((float)x + 0.5f) - cx;
-            float dy = ((float)y + 0.5f) - cy;
-            if (dx * dx + dy * dy > radius_sq) {
-                pixels[x + y * image.width].a = 0;
-            }
-        }
-    }
-
-    Texture2D tex = LoadTextureFromImage(image);
-    UnloadImage(image);
-    if (tex.id != 0) return tex;
-
-    fprintf(stderr, "GUI: failed to create required compass texture from %s\n", path);
     abort();
 }
 
@@ -444,21 +379,11 @@ static Rectangle gui_rect_intersect(Rectangle a, Rectangle b) {
     return (Rectangle){x1, y1, x2 - x1, y2 - y1};
 }
 
-static void gui_apply_scissor(const GuiState* gs, Rectangle rect) {
-    float k = gs->ui_scale > 0.0f ? gs->ui_scale : 1.0f;
-    float fx = (float)(gs->panel_x + gs->panel_w);
-    float fy = (float)(gs->panel_y + gs->panel_h);
-    int x = (int)floorf(fx + (rect.x - fx) * k);
-    int y = (int)floorf(fy + (rect.y - fy) * k);
-    int w = (int)ceilf(rect.width * k);
-    int h = (int)ceilf(rect.height * k);
-    if (w < 0) w = 0;
-    if (h < 0) h = 0;
-    BeginScissorMode(x, y, w, h);
+static void gui_apply_scissor(Rectangle rect) {
+    BeginScissorMode((int)floorf(rect.x), (int)floorf(rect.y), (int)ceilf(rect.width), (int)ceilf(rect.height));
 }
 
 static void gui_push_clip(
-    const GuiState* gs,
     GuiUiClipState* clip,
     Rectangle next,
     Rectangle* prev,
@@ -469,18 +394,16 @@ static void gui_push_clip(
     if (clip->active) next = gui_rect_intersect(next, clip->current);
     if (!gui_rect_has_area(next)) next = (Rectangle){0};
     if (clip->active) EndScissorMode();
-    gui_apply_scissor(gs, next);
+    gui_apply_scissor(next);
     clip->current = next;
     clip->active = 1;
 }
 
-static void gui_pop_clip(
-    const GuiState* gs, GuiUiClipState* clip, Rectangle prev, int prev_active
-) {
+static void gui_pop_clip(GuiUiClipState* clip, Rectangle prev, int prev_active) {
     if (clip->active) EndScissorMode();
     clip->current = prev;
     clip->active = prev_active;
-    if (clip->active) gui_apply_scissor(gs, clip->current);
+    if (clip->active) gui_apply_scissor(clip->current);
 }
 
 static int gui_text_width(const GuiState* gs, OsrsFontId font, const char* text) {
@@ -745,26 +668,6 @@ static void gui_load_sprites(GuiState* gs) {
 
     gs->slot_tile = gui_require_texture(OSRS_ASSET("sprites/gui/slot_tile.png"));
 
-    gs->minimap_compass =
-        gui_require_texture(OSRS_ASSET("sprites/gui/compass.png"));
-    gs->minimap_compass_masked =
-        gui_require_masked_compass(OSRS_ASSET("sprites/gui/compass.png"));
-    gs->minimap_alpha_mask =
-        gui_require_texture(OSRS_ASSET("sprites/gui/minimap_alpha_mask.png"));
-    gs->minimap_frame =
-        gui_require_texture(OSRS_ASSET("sprites/gui/minimap_and_compass_frame.png"));
-    gs->rm_minimap_alpha_mask =
-        gui_require_texture(OSRS_ASSET("sprites/gui/rm_minimap_alpha_mask.png"));
-    gs->rm_minimap_frame =
-        gui_require_texture(OSRS_ASSET("sprites/gui/rm_minimap_and_compass_frame.png"));
-    gs->rm_compass_alpha_mask =
-        gui_require_texture(OSRS_ASSET("sprites/gui/rm_compass_alpha_mask.png"));
-    gs->rm_tabs_top_row =
-        gui_require_texture(OSRS_ASSET("sprites/gui/rm_tabs_top_row.png"));
-    gs->minimap_dot_player =
-        gui_require_texture(OSRS_ASSET("sprites/gui/minimap_dot_player.png"));
-    gs->minimap_dot_npc =
-        gui_require_texture(OSRS_ASSET("sprites/gui/minimap_dot_npc.png"));
 
     static const char* ui_asset_names[] = {
         "tradebacking_dark",
@@ -773,9 +676,6 @@ static void gui_load_sprites(GuiState* gs) {
         "osrs_stretch_side_columns_0",
         "osrs_stretch_side_columns_1",
         "osrs_stretch_mapsurround",
-        "compass_outline",
-        "resize_map_mask",
-        "tli_button01_orb01_34x34_0",
         "orb_xp_0",
         "ring_30",
         "worldmap_icon_0",
@@ -932,16 +832,6 @@ static void gui_unload_sprites(GuiState* gs) {
     }
     UnloadTexture(gs->veng_spell);
     UnloadTexture(gs->slot_tile);
-    UnloadTexture(gs->minimap_compass);
-    UnloadTexture(gs->minimap_compass_masked);
-    UnloadTexture(gs->minimap_alpha_mask);
-    UnloadTexture(gs->minimap_frame);
-    UnloadTexture(gs->rm_minimap_alpha_mask);
-    UnloadTexture(gs->rm_minimap_frame);
-    UnloadTexture(gs->rm_compass_alpha_mask);
-    UnloadTexture(gs->rm_tabs_top_row);
-    UnloadTexture(gs->minimap_dot_player);
-    UnloadTexture(gs->minimap_dot_npc);
     for (int i = 0; i < gs->item_sprite_count; i++) UnloadTexture(gs->item_sprite_tex[i]);
     for (int i = 0; i < OSRS_FONT_COUNT; i++) UnloadTexture(gs->fonts[i].atlas);
     gs->item_sprite_count = 0;
@@ -1064,15 +954,8 @@ static void gui_text(const GuiState* gs, OsrsFontId font, const char* text, int 
 }
 
 
-static void gui_draw_tex_centered(Texture2D tex, int bx, int by, int bw, int bh) {
-    float sx = (float)(bw - 4) / (float)tex.width;
-    float sy = (float)(bh - 4) / (float)tex.height;
-    float s = (sx < sy) ? sx : sy;
-    int dw = (int)(tex.width * s);
-    int dh = (int)(tex.height * s);
-    int dx = bx + (bw - dw) / 2;
-    int dy = by + (bh - dh) / 2;
-    DrawTextureEx(tex, (Vector2){ (float)dx, (float)dy }, 0.0f, s, WHITE);
+static void gui_draw_texture_centered(Texture2D tex, Rectangle rect, Color tint) {
+    DrawTexture(tex, (int)rect.x + ((int)rect.width - tex.width) / 2, (int)rect.y + ((int)rect.height - tex.height) / 2, tint);
 }
 
 static void gui_draw_equip_slot(GuiState* gs, int x, int y, int w, int h,
@@ -1082,12 +965,12 @@ static void gui_draw_equip_slot(GuiState* gs, int x, int y, int w, int h,
     DrawTexturePro(gs->slot_tile, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
 
     if (item_idx != ITEM_NONE && item_idx < NUM_ITEMS) {
-        gui_draw_tex_centered(gui_get_item_sprite(gs, item_idx), x, y, w, h);
+        gui_draw_texture_centered(gui_get_item_sprite(gs, item_idx), dst, WHITE);
         return;
     }
 
     assert(gear_slot >= 0 && gear_slot < GUI_NUM_SLOT_SPRITES);
-    gui_draw_tex_centered(gs->slot_sprites[gear_slot], x, y, w, h);
+    gui_draw_texture_centered(gs->slot_sprites[gear_slot], dst, WHITE);
 }
 
 typedef struct {
@@ -1152,53 +1035,12 @@ static void gui_draw_texture(Texture2D tex, Rectangle dst, Color tint) {
     DrawTexturePro(tex, src, dst, (Vector2){0, 0}, 0.0f, tint);
 }
 
-static Rectangle gui_texture_fit_rect(
-    int texture_w,
-    int texture_h,
-    Rectangle rect,
-    float max_w,
-    float max_h
-) {
-    assert(texture_w > 0);
-    assert(texture_h > 0);
-    float scale_x = max_w / (float)texture_w;
-    float scale_y = max_h / (float)texture_h;
-    float scale = scale_x < scale_y ? scale_x : scale_y;
-    if (scale > 1.0f) scale = 1.0f;
-    float width = (float)texture_w * scale;
-    float height = (float)texture_h * scale;
-    return (Rectangle){
-        rect.x + (rect.width - width) * 0.5f,
-        rect.y + (rect.height - height) * 0.5f,
-        width,
-        height,
-    };
-}
-
-static void gui_draw_texture_centered(
-    Texture2D tex,
-    Rectangle rect,
-    float max_w,
-    float max_h,
-    Color tint
-) {
-    gui_draw_texture(tex, gui_texture_fit_rect(tex.width, tex.height, rect, max_w, max_h), tint);
-}
-
 static void gui_draw_named_asset(GuiState* gs, const char* name, Rectangle dst, Color tint) {
     gui_draw_texture(gui_asset(gs, name), dst, tint);
 }
 
-static void gui_draw_named_asset_centered(
-    GuiState* gs,
-    const char* name,
-    Rectangle rect,
-    float max_w,
-    float max_h,
-    Color tint
-) {
-    Texture2D tex = gui_asset(gs, name);
-    gui_draw_texture_centered(tex, rect, max_w, max_h, tint);
+static void gui_draw_named_asset_centered(GuiState* gs, const char* name, Rectangle rect, Color tint) {
+    gui_draw_texture_centered(gui_asset(gs, name), rect, tint);
 }
 
 static void gui_draw_named_asset_tiled(GuiState* gs, const char* name, Rectangle dst, Color tint) {
@@ -1273,7 +1115,7 @@ static void gui_draw_ui_item_slot(GuiState* gs, const GuiUiItemSlot* slot, Recta
             slot->gear_slot,
             item_idx);
         if (!slot->enabled && slot->empty_asset) {
-            gui_draw_named_asset_centered(gs, slot->empty_asset, rect, rect.width, rect.height, WHITE);
+            gui_draw_named_asset_centered(gs, slot->empty_asset, rect, WHITE);
         }
     } else {
         if (!slot->enabled) return;
@@ -1476,9 +1318,9 @@ static void gui_draw_ui_component(
         if (component->type == 0 && gui_rect_has_area(rect)) {
             Rectangle prev = {0};
             int prev_active = 0;
-            gui_push_clip(gs, clip, rect, &prev, &prev_active);
+            gui_push_clip(clip, rect, &prev, &prev_active);
             gui_draw_ui_component(gs, group, child, child_rect, clip, overrides);
-            gui_pop_clip(gs, clip, prev, prev_active);
+            gui_pop_clip(clip, prev, prev_active);
         } else {
             gui_draw_ui_component(gs, group, child, child_rect, clip, overrides);
         }
@@ -1503,7 +1345,7 @@ static void gui_draw_ui_group(
     GuiUiClipState clip = {0};
     Rectangle prev = {0};
     int prev_active = 0;
-    gui_push_clip(gs, &clip, mount, &prev, &prev_active);
+    gui_push_clip(&clip, mount, &prev, &prev_active);
     for (int i = 0; i < group->component_count; i++) {
         const OsrsUiComponent* component = &group->components[i];
         if (component->parent_id != -1) continue;
@@ -1511,7 +1353,7 @@ static void gui_draw_ui_group(
             component, mount, osrs_ui_component_uses_mount_rect(component));
         gui_draw_ui_component(gs, group, component, rect, &clip, overrides);
     }
-    gui_pop_clip(gs, &clip, prev, prev_active);
+    gui_pop_clip(&clip, prev, prev_active);
 }
 
 static void gui_draw_side_chrome(GuiState* gs) {
@@ -2253,8 +2095,7 @@ static InvAction gui_inv_click(GuiState* gs, Player* p, int slot,
 static void gui_inv_handle_mouse(GuiState* gs, Player* p, HumanInput* hi) {
     if (gs->active_tab != GUI_TAB_INVENTORY) return;
 
-    int mx, my;
-    gui_mouse_to_panel_space(gs, GetMouseX(), GetMouseY(), &mx, &my);
+    int mx = GetMouseX(), my = GetMouseY();
 
     if (gs->inv_drag_active) {
         gs->inv_drag_mouse_x = mx;
@@ -2505,7 +2346,6 @@ static void gui_draw_equipment(GuiState* gs, Player* p) {
 
 #define GUI_PRAYER_GRID_COLS 5
 #define GUI_PRAYER_CELL_PX 34
-#define GUI_PRAYER_ICON_PX 30
 #define GUI_PRAYER_GRID_X0 4
 #define GUI_PRAYER_GRID_Y0 9
 #define GUI_PRAYER_PITCH 37
@@ -2797,8 +2637,7 @@ static void gui_draw_prayer(GuiState* gs, Player* p) {
             gui_draw_named_asset(gs, "prayerglow_0", cell_rect, WHITE);
         }
 
-        gui_draw_texture_centered(gs->prayer_on[pidx], cell_rect,
-            GUI_PRAYER_ICON_PX, GUI_PRAYER_ICON_PX, WHITE);
+        gui_draw_texture_centered(gs->prayer_on[pidx], cell_rect, WHITE);
     }
 }
 
@@ -2817,8 +2656,7 @@ static void gui_draw_combat(GuiState* gs, Player* p) {
         int spell = gui_autocast_spell(p);
         const char* spell_name = gui_autocast_spell_name(spell);
         gui_draw_named_asset(gs, "combatboxes_1", ac, WHITE);
-        DrawRectangleLines((int)ac.x, (int)ac.y, (int)ac.width, (int)ac.height,
-            p->autocast_enabled ? GUI_TEXT_YELLOW : GUI_BORDER);
+        DrawRectangleLinesEx(ac, 1, p->autocast_enabled ? GUI_TEXT_YELLOW : GUI_BORDER);
         gui_text(
             gs,
             OSRS_FONT_P11,
@@ -2834,8 +2672,7 @@ static void gui_draw_combat(GuiState* gs, Player* p) {
                 Rectangle rect = gui_side_ref_rect(gs, gui_combat_autocast_spell_rect(i));
                 Color c = spells[i] == spell ? GUI_TEXT_YELLOW : GUI_TEXT_WHITE;
                 gui_draw_named_asset(gs, "combatboxes_1", rect, WHITE);
-                DrawRectangleLines((int)rect.x, (int)rect.y, (int)rect.width, (int)rect.height,
-                    spells[i] == spell ? GUI_TEXT_YELLOW : GUI_BORDER);
+                DrawRectangleLinesEx(rect, 1, spells[i] == spell ? GUI_TEXT_YELLOW : GUI_BORDER);
                 int tw = gui_text_width(gs, OSRS_FONT_P11, names[i]);
                 gui_text(
                     gs,
@@ -3048,19 +2885,13 @@ static void gui_draw_skill_panel_slot(
     int base
 ) {
     DrawRectangleRec(rect, (Color){72, 70, 60, 232});
-    DrawLineEx((Vector2){rect.x, rect.y}, (Vector2){rect.x + rect.width - 1, rect.y},
-        1, (Color){139, 130, 104, 255});
-    DrawLineEx((Vector2){rect.x, rect.y}, (Vector2){rect.x, rect.y + rect.height - 1},
-        1, (Color){139, 130, 104, 255});
-    DrawLineEx((Vector2){rect.x, rect.y + rect.height - 1},
-        (Vector2){rect.x + rect.width - 1, rect.y + rect.height - 1},
-        1, (Color){28, 25, 21, 255});
-    DrawLineEx((Vector2){rect.x + rect.width - 1, rect.y},
-        (Vector2){rect.x + rect.width - 1, rect.y + rect.height - 1},
-        1, (Color){28, 25, 21, 255});
+    DrawRectangleRec((Rectangle){rect.x, rect.y, rect.width, 1}, (Color){139, 130, 104, 255});
+    DrawRectangleRec((Rectangle){rect.x, rect.y, 1, rect.height}, (Color){139, 130, 104, 255});
+    DrawRectangleRec((Rectangle){rect.x, rect.y + rect.height - 1, rect.width, 1}, (Color){28, 25, 21, 255});
+    DrawRectangleRec((Rectangle){rect.x + rect.width - 1, rect.y, 1, rect.height}, (Color){28, 25, 21, 255});
 
     Rectangle icon_rect = {rect.x + 3, rect.y + 3, 24, 24};
-    gui_draw_named_asset_centered(gs, slot->icon_asset, icon_rect, 24, 24, WHITE);
+    gui_draw_named_asset_centered(gs, slot->icon_asset, icon_rect, WHITE);
 
     char current_text[8];
     char base_text[8];
