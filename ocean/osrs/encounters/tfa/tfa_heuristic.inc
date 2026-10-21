@@ -126,11 +126,13 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
         const TfaXarthState* xs = &s->boss.xarth;
         target = tfa_npc_first(s, TFA_NPC_XARTH);
         want = xs->p2_started ? PRAYER_PROTECT_RANGED : PRAYER_PROTECT_MAGIC;
-        int best = 1 << 30;
-        for (int i = 0; i < TFA_MAX_NPCS; i++) {
+        /* A twisted bow barely scratches a magic-level-1 corpse, so the bow stays on Xarth until a corpse is about to reach him. */
+        const TfaNpc* boss = target;
+        int best = 5;
+        for (int i = 0; i < TFA_MAX_NPCS && boss; i++) {
             const TfaNpc* c = &s->npcs[i];
             if (!c->active || c->kind != TFA_NPC_XARTH_CORPSE) continue;
-            int d = chebyshev_distance(c->x, c->y, tp->player.x, tp->player.y);
+            int d = encounter_rect_distance(c->x, c->y, 1, boss->x, boss->y, boss->size);
             if (d < best) { best = d; target = c; }
         }
         if (!xs->p2_started && target && target->kind == TFA_NPC_XARTH) {

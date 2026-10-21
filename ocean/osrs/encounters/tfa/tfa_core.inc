@@ -280,7 +280,9 @@ static void tfa_hazard_add(TfaState* s, TfaHazard h) {
         d->min_damage = h.min_damage; d->max_damage = h.max_damage; d->protected_pct = h.protected_pct; d->gfx_id = h.gfx_id; d->loc_id = h.loc_id; d->orientation = h.orientation;
         return;
     }
-    fprintf(stderr, "tfa hazard capacity %d exceeded\n", TFA_MAX_HAZARDS);
+    int loc = s->hazards[0].loc_id, same = 0;
+    for (int i = 0; i < TFA_MAX_HAZARDS; i++) same += s->hazards[i].loc_id == loc;
+    fprintf(stderr, "tfa hazard capacity %d exceeded room %d tick %d (%d of loc %d)\n", TFA_MAX_HAZARDS, s->room, s->tick, same, loc);
     abort();
 }
 

@@ -29,7 +29,7 @@ static int tfa_tile_danger(const TfaState* s, int p, int x, int y) {
     int best = -1;
     for (int i = 0; i < TFA_MAX_HAZARDS; i++) {
         const TfaHazard* h = &s->hazards[i];
-        if (h->kind == TFA_HAZ_NONE || (h->owner >= 0 && h->owner != p)) continue;
+        if (h->kind == TFA_HAZ_NONE || h->kind == TFA_HAZ_LOC || (h->owner >= 0 && h->owner != p)) continue;
         int t;
         if (h->kind == TFA_HAZ_MUSHROOM) {
             if (chebyshev_distance(h->x, h->y, x, y) > 1) continue;
@@ -133,7 +133,7 @@ static void tfa_write_obs_for(TfaState* s, TfaContext* ctx, int p, float* obs) {
     int wx = tp->player.x - TFA_DANGER_RADIUS, wy = tp->player.y - TFA_DANGER_RADIUS;
     for (int h = 0; h < TFA_MAX_HAZARDS; h++) {
         const TfaHazard* hz = &s->hazards[h];
-        if (hz->kind == TFA_HAZ_NONE || (hz->owner >= 0 && hz->owner != p)) continue;
+        if (hz->kind == TFA_HAZ_NONE || hz->kind == TFA_HAZ_LOC || (hz->owner >= 0 && hz->owner != p)) continue;
         int t, x0 = hz->x, y0 = hz->y, x1 = hz->x + hz->w, y1 = hz->y + hz->h;
         if (hz->kind == TFA_HAZ_MUSHROOM) {
             t = hz->arm_ticks > 0 ? hz->arm_ticks : 1;

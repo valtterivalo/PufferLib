@@ -208,19 +208,25 @@ static void tfa_xarth_aoe(TfaState* s, TfaNpc* x) {
     }
 }
 
-/* Arena fire on a random arena tile off the boss and every living player (0/248 under P0). It burns nothing: no recorded burn hit stands on a fire tile (2 of 7 fire ticks, burn hits come every 4 ticks from the AOE). */
+/* Arena fire on a random arena tile off the boss, every living player (0/248 under P0) and every burning tile (0 repeats in 276), so it
+   stops once the arena is alight. It burns nothing: no recorded burn hit stands on a fire tile (2 of 7 fire ticks, burn hits come every 4
+   ticks from the AOE). */
 static void tfa_xarth_fire(TfaState* s, const TfaNpc* x, int tiles) {
     const TfaRoomLayout* l = tfa_room_layout(TFA_ROOM_XARTH);
-    for (int k = 0; k < tiles; k++) {
-        int fx, fy, bad;
-        do {
-            fx = XARTH_RING_LO + tfa_rand(s, XARTH_RING_HI - XARTH_RING_LO + 1);
-            fy = XARTH_RING_LO + tfa_rand(s, XARTH_RING_HI - XARTH_RING_LO + 1);
-            bad = tfa_layout_blocked(l, fx, fy) || (fx >= x->x && fx < x->x + x->size && fy >= x->y && fy < x->y + x->size);
+    int free_x[(XARTH_RING_HI - XARTH_RING_LO + 1) * (XARTH_RING_HI - XARTH_RING_LO + 1)], free_y[sizeof(free_x) / sizeof(*free_x)], n = 0;
+    for (int fx = XARTH_RING_LO; fx <= XARTH_RING_HI; fx++)
+        for (int fy = XARTH_RING_LO; fy <= XARTH_RING_HI; fy++) {
+            int bad = tfa_layout_blocked(l, fx, fy) || (fx >= x->x && fx < x->x + x->size && fy >= x->y && fy < x->y + x->size);
             for (int p = 0; p < s->team_size; p++)
                 bad |= tfa_alive(s, p) && s->players[p].player.x == fx && s->players[p].player.y == fy;
-        } while (bad);
-        tfa_xarth_loc(s, XARTH_LOC_ARENA_FIRE, fx, fy, 1);
+            for (int i = 0; i < TFA_MAX_HAZARDS && !bad; i++)
+                bad = s->hazards[i].kind == TFA_HAZ_LOC && s->hazards[i].loc_id == XARTH_LOC_ARENA_FIRE && s->hazards[i].x == fx && s->hazards[i].y == fy;
+            if (!bad) free_x[n] = fx, free_y[n++] = fy;
+        }
+    for (int k = 0; k < tiles && n > 0; k++) {
+        int pick = tfa_rand(s, n);
+        tfa_xarth_loc(s, XARTH_LOC_ARENA_FIRE, free_x[pick], free_y[pick], 1);
+        free_x[pick] = free_x[--n], free_y[pick] = free_y[n];
     }
 }
 

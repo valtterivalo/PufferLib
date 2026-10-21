@@ -285,7 +285,7 @@ static void tfa_dread_jelly_act(TfaState* s, TfaNpc* j) {
 
 /* One round of spawn markers (GFX 4210, 39 of 39 emergences equal the marker set at the last tick before). Round r runs mark_seed_tick + r
    ticks after the slam and takes picks tiles, one per living player in turn: the player's own tile when unmarked (157 starts with
-   delay 1, 127 of them at +4), else a tile within 2 of the player's (265 starts with delay 31). The tile first shows next tick. */
+   delay 1, 127 of them at +4), else a tile within 2 of the player's (265 starts with delay 31), reaching further only when those are taken (never recorded, provisional). The tile first shows next tick. */
 static void tfa_dread_mark_round(TfaState* s, int picks) {
     TfaDreadnothState* d = &s->boss.dreadnoth;
     int alive[TFA_MAX_PLAYERS], n_alive = 0;
@@ -296,22 +296,26 @@ static void tfa_dread_mark_round(TfaState* s, int picks) {
         int x = pl->x, y = pl->y, seed = 1;
         for (int i = 0; i < d->spawn_n && seed; i++) seed = d->spawn_x[i] != x || d->spawn_y[i] != y;
         if (!seed) {
-            int cx[225], cy[225], cw[225], total = 0, n = 0;
-            for (int reach = 2; n == 0; reach++) {
-                for (int dx = -reach; dx <= reach; dx++) {
-                    for (int dy = -reach; dy <= reach; dy++) {
-                        int tx = pl->x + dx, ty = pl->y + dy, dup = !tfa_dread_tile_free(s, tx, ty);
-                        for (int i = 0; i < d->spawn_n && !dup; i++) dup = d->spawn_x[i] == tx && d->spawn_y[i] == ty;
-                        if (dup) continue;
-                        cx[n] = tx; cy[n] = ty;
-                        cw[n] = abs(dx) <= 1 && abs(dy) <= 1 ? TFA_DREAD.mark_ring1_weight : 1;
-                        total += cw[n++];
+            int total = 0, reach = 1;
+            while (!total) {
+                reach++;
+                assert(reach < TFA_ROOM_SIZE);
+                for (int pass = 0, pick = -1; pass < 2; pass++) {
+                    if (pass) pick = tfa_rand(s, total);
+                    for (int dx = -reach; dx <= reach; dx++) {
+                        for (int dy = -reach; dy <= reach; dy++) {
+                            int tx = pl->x + dx, ty = pl->y + dy, dup = !tfa_dread_tile_free(s, tx, ty);
+                            for (int i = 0; i < d->spawn_n && !dup; i++) dup = d->spawn_x[i] == tx && d->spawn_y[i] == ty;
+                            if (dup) continue;
+                            int w = abs(dx) <= 1 && abs(dy) <= 1 ? TFA_DREAD.mark_ring1_weight : 1;
+                            if (!pass) { total += w; continue; }
+                            if (pick >= 0 && pick < w) { x = tx; y = ty; }
+                            pick -= w;
+                        }
                     }
+                    if (!total) break;
                 }
             }
-            int pick = tfa_rand(s, total), i = 0;
-            while (pick >= cw[i]) pick -= cw[i++];
-            x = cx[i]; y = cy[i];
         }
         assert(d->spawn_n < TFA_DREAD_MAX_SPAWN);
         d->spawn_x[d->spawn_n] = (int8_t)x;
