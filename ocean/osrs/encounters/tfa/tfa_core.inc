@@ -203,6 +203,8 @@ static int tfa_npc_roll(TfaState* s, const TfaNpc* n, int p, AttackStyle style, 
     return encounter_npc_roll_attack(att_roll, def_roll, max_hit, &s->rng_state);
 }
 
+static void tfa_boss_npc_hit_player(TfaState* s, TfaNpc* src, int raw, int dealt);
+
 static void tfa_resolve_player_hits(TfaState* s, int p) {
     TfaPlayer* tp = &s->players[p];
     TfaIncomingQueue* q = &tp->incoming;
@@ -217,6 +219,7 @@ static void tfa_resolve_player_hits(TfaState* s, int p) {
             ? tfa_protected_damage(h.damage, tp->player.prayer, (AttackStyle)h.attack_style, h.protected_pct)
             : h.damage;
         tfa_damage_player_now(s, p, dmg, (AttackStyle)h.attack_style);
+        if (h.check_at_land && h.source_slot >= 0) tfa_boss_npc_hit_player(s, &s->npcs[h.source_slot], h.damage, dmg);
     }
     q->count = kept;
 }

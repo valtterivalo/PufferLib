@@ -37,7 +37,7 @@ int main(void) {
         int rooms[TFA_RAID_LENGTH], seen = 0, last = -1;
         while (!s->episode_over) {
             if (s->room != last) { rooms[seen++] = s->room; last = s->room; }
-            for (int p = 0; p < s->team_size; p++) s->players[p].player.current_hitpoints = 10000;
+            for (int p = 0; p < s->team_size; p++) s->players[p].player.current_hitpoints = 10000, s->players[p].player.current_prayer = s->players[p].player.base_prayer;
             for (int p = 0; p < TFA_MAX_PLAYERS; p++) tfa_heuristic_actions(s, p, acts + p * TFA_NUM_ACTION_HEADS);
             tfa_step_team(s, ctx, acts);
         }

@@ -48,6 +48,11 @@ static int tfa_boss_npc_damage(TfaState* s, TfaNpc* n, int damage, int attacker,
     abort();
 }
 
+/* A land-checked NPC hit of raw damage reached a player as dealt. */
+static void tfa_boss_npc_hit_player(TfaState* s, TfaNpc* src, int raw, int dealt) {
+    if (s->room == TFA_ROOM_OCELLUS) tfa_ocellus_npc_hit_player(s, src, raw, dealt);
+}
+
 static void tfa_boss_npc_died(TfaState* s, TfaNpc* n, int attacker) {
     switch ((TfaRoom)s->room) {
         case TFA_ROOM_GUARDIAN: tfa_guardian_npc_died(s, n, attacker); return;

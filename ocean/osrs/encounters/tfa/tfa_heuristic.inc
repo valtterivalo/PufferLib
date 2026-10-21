@@ -40,7 +40,7 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
     OverheadPrayer want = PRAYER_NONE;
     const TfaNpc* target = NULL;
     int hide_x = -1, hide_y = -1, flee_x = -1, flee_y = -1, go_x = -1, go_y = -1;
-    int flee = 0, hold = 0;
+    int flee = 0;
     if (s->room == TFA_ROOM_GUARDIAN) {
         const TfaGuardianState* gs = &s->boss.guardian;
         target = tfa_npc_first(s, TFA_NPC_GUARDIAN);
@@ -205,9 +205,6 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
                     if (d < best) { best = d; go_x = x; go_y = y; }
                 }
         }
-        /* No hits that would land into his soul split: hold for the 4 ticks before it as well. */
-        int split_soon = os->phase == TFA_OCELLUS_P4 && (os->p4_step == OC4_QUAD_A || os->p4_step == OC4_QUAD_B) && os->next_attack_tick - s->tick <= 4;
-        hold = (os->soul_split || split_soon) && target && target->kind == TFA_NPC_OCELLUS;
         /* Take your soul fragment while it is up: it heals the wind back (Elbflorenz +40 in run 11). */
         if (os->phase == TFA_OCELLUS_P4 && os->orb_heal[p] > 0 && s->tick >= os->orb_from[p] - 2) go_x = os->orb_x[p], go_y = os->orb_y[p];
         if (!target) {
@@ -334,11 +331,8 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
         acts[OSRS_HEAD_SPECIAL] = 1;
     if (barrage) acts[OSRS_HEAD_SPELL] = OSRS_SPELL_ICE_BARRAGE;
     /* A special opens the fight: no attack until the special weapon is worn (equipping disarms the bar). */
-    if (!hold && (spec_weapon == ITEM_NONE || tp->player.equipped[GEAR_SLOT_WEAPON] == spec_weapon))
+    if (spec_weapon == ITEM_NONE || tp->player.equipped[GEAR_SLOT_WEAPON] == spec_weapon)
         acts[OSRS_HEAD_PRIMARY] = TFA_PRIMARY_ATTACK_BASE + tfa_npc_slot(s, target);
-    for (int a = 1; hold && osrs_interaction_active(&tp->player.interaction) && a < OSRS_PRIMARY_MOVE_ACTIONS && !acts[OSRS_HEAD_PRIMARY]; a++)
-        if (!tfa_layout_blocked(tfa_room_layout(s->room), tp->player.x + ENCOUNTER_MOVE_TARGET_DX[a], tp->player.y + ENCOUNTER_MOVE_TARGET_DY[a]))
-            acts[OSRS_HEAD_PRIMARY] = a;
     if (hide_x >= 0 && (tp->player.x != hide_x || tp->player.y != hide_y) && tp->player.attack_timer > 0) {
         int best = 1 << 30;
         for (int a = 1; a < OSRS_PRIMARY_MOVE_ACTIONS; a++) {

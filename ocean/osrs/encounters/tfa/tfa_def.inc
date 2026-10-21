@@ -20,6 +20,24 @@ static const struct { int16_t melee, ranged; } TFA_ROOM_BOOSTS[TFA_ROOM_COUNT] =
     [TFA_ROOM_OCELLUS] = { 99, 110 },     /* 7 */
 };
 
+/* Supplies fill the inventory from cell `from` on: the raid start, and the Quartermaster's restock in the atrium after the third boss
+   (wiki Strategies rev 15377725). */
+static void tfa_fill_supplies(Player* pl, int from) {
+    int cell = from;
+    for (size_t k = 0; k < sizeof(TFA_SUPPLIES) / sizeof(*TFA_SUPPLIES); k++) {
+        for (int n = 0; n < TFA_SUPPLIES[k].count; n++) {
+            assert(cell < OSRS_INVENTORY_SIZE);
+            pl->inventory_cells[cell++] = osrs_inventory_cell_from_raw_osrs_id(TFA_SUPPLIES[k].raw_osrs_id);
+        }
+    }
+}
+
+static int tfa_kit_cells(int kit) {
+    int n = (int)(sizeof(TFA_KIT_MELEE) / sizeof(*TFA_KIT_MELEE) + sizeof(TFA_KIT_MAGIC) / sizeof(*TFA_KIT_MAGIC));
+    for (int k = 0; k < 6 && TFA_KIT_SWITCHES[kit][k] != ITEM_NONE; k++) n++;
+    return n;
+}
+
 static void tfa_player_reset(TfaState* s, int p) {
     TfaPlayer* tp = &s->players[p];
     memset(tp, 0, sizeof(*tp));
@@ -37,12 +55,7 @@ static void tfa_player_reset(TfaState* s, int p) {
     for (size_t k = 0; k < sizeof(TFA_KIT_MAGIC) / sizeof(*TFA_KIT_MAGIC); k++) pl->inventory_cells[cell++] = osrs_inventory_cell_from_item(TFA_KIT_MAGIC[k]);
     for (int k = 0; k < 6 && TFA_KIT_SWITCHES[tp->kit][k] != ITEM_NONE; k++)
         pl->inventory_cells[cell++] = osrs_inventory_cell_from_item(TFA_KIT_SWITCHES[tp->kit][k]);
-    for (size_t k = 0; k < sizeof(TFA_SUPPLIES) / sizeof(*TFA_SUPPLIES); k++) {
-        for (int n = 0; n < TFA_SUPPLIES[k].count; n++) {
-            assert(cell < OSRS_INVENTORY_SIZE);
-            pl->inventory_cells[cell++] = osrs_inventory_cell_from_raw_osrs_id(TFA_SUPPLIES[k].raw_osrs_id);
-        }
-    }
+    tfa_fill_supplies(pl, cell);
     pl->offensive_prayer = OFFENSIVE_PRAYER_RIGOUR;
     tp->life = p < s->team_size ? TFA_LIFE_ALIVE : TFA_LIFE_ABSENT;
     tp->dest_x = -1;
@@ -75,6 +88,7 @@ static void tfa_room_enter(TfaState* s, int room) {
         tp->player.current_defence = TFA_BOOSTED_DEFENCE;
         tp->stat_clock = 0;
         tfa_mark_stats_dirty(tp);
+        if (s->episode_mode == TFA_EPISODE_RAID && s->raid_index == 3) tfa_fill_supplies(&tp->player, tfa_kit_cells(tp->kit));
     }
     tfa_boss_enter(s);
 }

@@ -834,10 +834,6 @@ static int tfa_ocellus_npc_damage(TfaState* s, TfaNpc* n, int damage, int attack
             if (attacker >= 0) tfa_damage_player_now(s, attacker, damage, ATTACK_STYLE_NONE);
             return 0;
         }
-        if (os->soul_split) {
-            oc_boss_heal(n, damage);
-            return 0;
-        }
         if (n->overhead != PRAYER_NONE && encounter_prayer_correct_for_style(n->overhead, style)) return 0;
         int floor_hp = os->phase == TFA_OCELLUS_P3 ? 1 : 0;
         int applied = damage < n->hp - floor_hp ? damage : n->hp - floor_hp;
@@ -847,6 +843,12 @@ static int tfa_ocellus_npc_damage(TfaState* s, TfaNpc* n, int damage, int attack
     int applied = damage < n->hp ? damage : n->hp;
     n->hp -= applied;
     return applied;
+}
+
+/* Soul Split heals Ocellus by the damage of his own hits that land on an unprotected raider while it is up: his P4 heals in run 13 were 44
+   and 44 against one unprayed 44, none when every raider prayed (5 attacks), and raiders' hits on him in the window land as usual (10 of 23). */
+static void tfa_ocellus_npc_hit_player(TfaState* s, TfaNpc* src, int raw, int dealt) {
+    if (s->boss.ocellus.soul_split && src->kind == TFA_NPC_OCELLUS && dealt == raw && dealt > 0) oc_boss_heal(src, dealt);
 }
 
 static void tfa_ocellus_npc_died(TfaState* s, TfaNpc* n, int attacker) {
