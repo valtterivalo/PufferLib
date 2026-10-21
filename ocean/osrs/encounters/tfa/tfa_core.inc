@@ -77,14 +77,6 @@ static int tfa_player_npc_distance(const TfaPlayer* tp, const TfaNpc* n) {
     return encounter_rect_distance(tp->player.x, tp->player.y, 1, n->x, n->y, n->size);
 }
 
-static int tfa_player_in_rect(const TfaPlayer* tp, int x, int y, int w, int h) {
-    return tp->player.x >= x && tp->player.x < x + w && tp->player.y >= y && tp->player.y < y + h;
-}
-
-static int tfa_player_under_npc(const TfaPlayer* tp, const TfaNpc* n) {
-    return tfa_player_in_rect(tp, n->x, n->y, n->size, n->size);
-}
-
 static void tfa_mark_stats_dirty(TfaPlayer* tp) {
     tp->stats_dirty = 1;
 }

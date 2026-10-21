@@ -33,6 +33,7 @@ typedef struct {
     int ranged_max_hit;           /* unprotected hits 20, 33, 14 (n=3): max observed 33 */
     int ranged_protected_pct;     /* protected hits uniform 0..10 (n=380), 33 * 30% rounds up to 10 */
     int ranged_cone_degrees;      /* secondary targets mostly within ~60 degrees of the primary; provisional */
+    int ranged_keep_target_of_170;
     int special_intervals[2];     /* flying-phase special gaps 25 (38) or 30 (21) */
     int first_special;            /* first special of a flying phase, from fight start or rise */
     int land_delay;               /* shield 0 -> 14747 three ticks later, 24/24 */
@@ -64,6 +65,7 @@ static const TfaGuardianTuning TFA_GUARDIAN = {
     .ranged_max_hit = 33,
     .ranged_protected_pct = 30,
     .ranged_cone_degrees = 60,
+    .ranged_keep_target_of_170 = 127,
     .special_intervals = { 25, 30 },
     .first_special = 20,
     .land_delay = 3,
@@ -141,15 +143,14 @@ static int tfa_guardian_center2(const TfaNpc* g, int axis) {
     return 2 * (axis == 0 ? g->x : g->y) + g->size - 1;
 }
 
-/* Nearest living player to the boss footprint; ties go to the lower index. */
-static int tfa_guardian_pick_target(TfaState* s, const TfaNpc* g) {
-    int best = -1, best_d = 1 << 30;
-    for (int p = 0; p < s->team_size; p++) {
-        if (!tfa_alive(s, p)) continue;
-        int d = tfa_player_npc_distance(&s->players[p], g);
-        if (d < best_d) { best = p; best_d = d; }
-    }
-    return best;
+/* Single-projectile ranged attacks keep the previous target 127 of 170 times; the nearest player
+   is the target only 82 of 170 times. Keep with that rate, else switch to another living player. */
+static int tfa_guardian_pick_target(TfaState* s, int current) {
+    if (tfa_alive(s, current) && (tfa_alive_count(s) == 1 || tfa_rand(s, 170) < TFA_GUARDIAN.ranged_keep_target_of_170))
+        return current;
+    int c[TFA_MAX_PLAYERS], n = 0;
+    for (int p = 0; p < s->team_size; p++) if (tfa_alive(s, p) && p != current) c[n++] = p;
+    return n ? c[tfa_rand(s, n)] : -1;
 }
 
 static double tfa_guardian_bearing(const TfaNpc* g, int x, int y) {
@@ -159,7 +160,7 @@ static double tfa_guardian_bearing(const TfaNpc* g, int x, int y) {
 
 static void tfa_guardian_ranged(TfaState* s, TfaNpc* g) {
     TfaGuardianState* gs = &s->boss.guardian;
-    int primary = tfa_guardian_pick_target(s, g);
+    int primary = tfa_guardian_pick_target(s, gs->target);
     if (primary < 0) return;
     gs->target = primary;
     g->target = (int8_t)primary;
@@ -451,8 +452,6 @@ static void tfa_guardian_tick(TfaState* s, TfaContext* ctx) {
             }
             break;
         }
-        case TFA_GUARDIAN_LANDING:
-        case TFA_GUARDIAN_RISING:
         case TFA_GUARDIAN_DYING:
             break;
     }
