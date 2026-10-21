@@ -128,12 +128,35 @@ static void tfa_write_obs_for(TfaState* s, TfaContext* ctx, int p, float* obs) {
         obs[i++] = osrs_interaction_active(&tp->player.interaction) && tp->player.interaction.target_slot == k ? 1.0f : 0.0f;
     }
 
+    int8_t danger[TFA_DANGER_SIDE * TFA_DANGER_SIDE];
+    memset(danger, -1, sizeof(danger));
+    int wx = tp->player.x - TFA_DANGER_RADIUS, wy = tp->player.y - TFA_DANGER_RADIUS;
+    for (int h = 0; h < TFA_MAX_HAZARDS; h++) {
+        const TfaHazard* hz = &s->hazards[h];
+        if (hz->kind == TFA_HAZ_NONE || (hz->owner >= 0 && hz->owner != p)) continue;
+        int t, x0 = hz->x, y0 = hz->y, x1 = hz->x + hz->w, y1 = hz->y + hz->h;
+        if (hz->kind == TFA_HAZ_MUSHROOM) {
+            t = hz->arm_ticks > 0 ? hz->arm_ticks : 1;
+            x0--; y0--; x1++; y1++;
+        } else {
+            t = hz->start_tick > s->tick ? hz->start_tick - s->tick : 0;
+        }
+        if (t > TFA_DANGER_HORIZON) continue;
+        if (x0 < wx) x0 = wx;
+        if (y0 < wy) y0 = wy;
+        if (x1 > wx + TFA_DANGER_SIDE) x1 = wx + TFA_DANGER_SIDE;
+        if (y1 > wy + TFA_DANGER_SIDE) y1 = wy + TFA_DANGER_SIDE;
+        for (int y = y0; y < y1; y++)
+            for (int x = x0; x < x1; x++) {
+                int8_t* d = &danger[(y - wy) * TFA_DANGER_SIDE + (x - wx)];
+                if (*d < 0 || t < *d) *d = (int8_t)t;
+            }
+    }
     for (int dy = TFA_DANGER_RADIUS; dy >= -TFA_DANGER_RADIUS; dy--) {
         for (int dx = -TFA_DANGER_RADIUS; dx <= TFA_DANGER_RADIUS; dx++) {
-            int x = tp->player.x + dx, y = tp->player.y + dy;
-            int t = tfa_tile_danger(s, p, x, y);
+            int t = danger[(dy + TFA_DANGER_RADIUS) * TFA_DANGER_SIDE + (dx + TFA_DANGER_RADIUS)];
             obs[i++] = t < 0 ? 0.0f : 1.0f - (float)t / (float)(TFA_DANGER_HORIZON + 1);
-            obs[i++] = tfa_layout_blocked(layout, x, y) ? 1.0f : 0.0f;
+            obs[i++] = tfa_layout_blocked(layout, tp->player.x + dx, tp->player.y + dy) ? 1.0f : 0.0f;
         }
     }
 
