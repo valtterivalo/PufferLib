@@ -24,25 +24,6 @@ typedef enum {
     PVP_ATTACK_BLOOD,
 } PvpAttackIntent;
 
-static void human_pvp_translate_inventory_cell(
-    int* actions,
-    const Player* player,
-    int cell
-) {
-    if (cell < 0 || cell >= OSRS_INVENTORY_SIZE) return;
-    const OsrsItemContentMetadata* metadata =
-        osrs_inventory_cell_metadata(&player->inventory_cells[cell]);
-    int click_action = cell + 1;
-    if (metadata->click_action == OSRS_CLICK_EQUIP) {
-        if (metadata->gear_slot >= 0 && metadata->gear_slot < NUM_GEAR_SLOTS)
-            actions[OSRS_HEAD_EQUIP_SLOT(metadata->gear_slot)] = click_action;
-    } else if (metadata->click_action == OSRS_CLICK_EAT) {
-        actions[OSRS_HEAD_EAT] = click_action;
-    } else if (metadata->click_action == OSRS_CLICK_DRINK) {
-        actions[OSRS_HEAD_DRINK] = click_action;
-    }
-}
-
 static int human_pvp_find_consumable_cell(
     const Player* player,
     OsrsConsumableKind kind
@@ -115,8 +96,7 @@ static void human_to_pvp_actions(
                 command->kind == HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK ||
                 command->kind == HUMAN_COMMAND_EAT ||
                 command->kind == HUMAN_COMMAND_DRINK) {
-            human_pvp_translate_inventory_cell(
-                actions, agent, command->inventory_slot);
+            osrs_base_action_inventory_click(actions, agent, command->inventory_slot);
         }
     }
     if (hi->pending_veng)

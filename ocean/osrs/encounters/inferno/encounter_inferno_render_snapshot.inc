@@ -990,7 +990,6 @@ static const EncounterDef ENCOUNTER_INFERNO = {
     .scene_origin_x = INF_SCENE_ORIGIN_X,
     .scene_origin_y = INF_SCENE_ORIGIN_Y,
 
-    .translate_human_input = inf_translate_human_input_ctx,
     .is_human_targetable_npc_slot = inf_is_human_targetable_npc_slot_ctx,
     .apply_lab_command = inf_apply_lab_command_ctx,
     .head_move = INF_HEAD_PRIMARY,

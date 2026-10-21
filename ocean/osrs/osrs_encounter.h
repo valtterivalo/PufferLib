@@ -1991,8 +1991,6 @@ typedef struct {
     const char* npc_pack;
     int scene_origin_x, scene_origin_y;
 
-    void (*translate_human_input)(
-        struct HumanInput* hi, int* actions, EncounterState* state, EncounterContext* context);
     int (*is_human_targetable_npc_slot)(
         EncounterState* state, EncounterContext* context, int npc_slot);
 

@@ -1660,7 +1660,7 @@ static void visual_frame(void* arg) {
         int enc_actions[64] = {0};
         int used_human_step = 0;
 
-        if (rc->human_input.enabled && edef->step_human_commands) {
+        if (rc->human_input.enabled) {
             if (strcmp(edef->name, "riskfight") == 0)
                 edef->put_int(env->encounter_state, env->encounter_context,
                     "human_player", rc->gui.gui_entity_idx);
@@ -1669,33 +1669,6 @@ static void visual_frame(void* arg) {
                 (EncounterContext*)env->encounter_context,
                 &rc->human_input);
             used_human_step = 1;
-        } else if (rc->human_input.enabled) {
-            if (edef->translate_human_input)
-                edef->translate_human_input(&rc->human_input, enc_actions,
-                                            env->encounter_state,
-                                            (EncounterContext*)env->encounter_context);
-            if (rc->human_input.pending_move_x >= 0 && edef->put_int) {
-                edef->put_int(env->encounter_state,
-                              (EncounterContext*)env->encounter_context,
-                              "player_dest_x",
-                              rc->human_input.pending_move_x);
-                edef->put_int(env->encounter_state,
-                              (EncounterContext*)env->encounter_context,
-                              "player_dest_y",
-                              rc->human_input.pending_move_y);
-            } else if (rc->human_input.pending_attack && edef->put_int) {
-                edef->put_int(
-                    env->encounter_state,
-                    (EncounterContext*)env->encounter_context,
-                    "player_dest_x",
-                    -1);
-                edef->put_int(
-                    env->encounter_state,
-                    (EncounterContext*)env->encounter_context,
-                    "player_dest_y",
-                    -1);
-            }
-            human_input_clear_pending(&rc->human_input);
         } else if (vs->replay && replay_get_actions(vs->replay, enc_actions)) {
         } else if (vs->policy.enabled) {
             if (vs->async_policy.has_actions) {

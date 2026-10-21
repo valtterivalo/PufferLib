@@ -164,6 +164,44 @@ static void tfa_step(EncounterState* state, EncounterContext* context, const int
     if (s->episode_over) tfa_log_episode(s, ctx);
 }
 
+/* Raider 0 follows the viewer's clicks: a walk heads for the shared route's next run step to the clicked tile. */
+static void tfa_step_human_commands(EncounterState* state, EncounterContext* context, HumanInput* hi) {
+    TfaState* s = (TfaState*)state;
+    TfaPlayer* tp = &s->players[0];
+    int acts[TFA_NUM_ACTION_HEADS] = {0};
+    if (hi->pending_move_x >= 0) {
+        EncounterRouteInput walk = {
+            .topology = ((TfaContext*)context)->topology[s->room],
+            .source_x = tp->player.x, .source_y = tp->player.y, .actor_size = 1,
+            .target_x = hi->pending_move_x, .target_y = hi->pending_move_y, .target_size = 1,
+            .target_kind = ENCOUNTER_ROUTE_TARGET_TILE,
+            .movement_mode = tp->weary_ticks > 0 ? ENCOUNTER_ROUTE_MOVEMENT_WALK : ENCOUNTER_ROUTE_MOVEMENT_RUN,
+            .cost_policy = ENCOUNTER_ROUTE_COST_SOUTH_FIRST_BFS,
+        };
+        EncounterRouteResult route = encounter_route_solve(&walk);
+        int dx = route.first_dx + route.run_dx, dy = route.first_dy + route.run_dy;
+        for (int a = 1; a < OSRS_PRIMARY_MOVE_ACTIONS; a++)
+            if (ENCOUNTER_MOVE_TARGET_DX[a] == dx && ENCOUNTER_MOVE_TARGET_DY[a] == dy) acts[OSRS_HEAD_PRIMARY] = a;
+        if (route.outcome == ROUTE_UNREACHABLE || !acts[OSRS_HEAD_PRIMARY]) human_input_clear_move(hi);
+    }
+    for (int i = 0; i < hi->commands.count; i++) {
+        const HumanCommand* c = &hi->commands.items[i];
+        if (c->kind == HUMAN_COMMAND_ATTACK_NPC || c->kind == HUMAN_COMMAND_SPELL_TARGET) {
+            acts[OSRS_HEAD_PRIMARY] = TFA_PRIMARY_ATTACK_BASE + c->npc_slot;
+            if (c->kind == HUMAN_COMMAND_SPELL_TARGET && c->spell == OSRS_SPELL_ICE_BARRAGE) acts[OSRS_HEAD_SPELL] = OSRS_SPELL_ICE_BARRAGE;
+        } else if (c->kind == HUMAN_COMMAND_EQUIP_INVENTORY_ITEM || c->kind == HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK ||
+                c->kind == HUMAN_COMMAND_EAT || c->kind == HUMAN_COMMAND_DRINK) {
+            osrs_base_action_inventory_click(acts, &tp->player, c->inventory_slot);
+        }
+    }
+    encounter_translate_prayer(hi, acts, OSRS_HEAD_OVERHEAD);
+    encounter_translate_offensive_prayer(hi, acts, OSRS_HEAD_OFFENSIVE);
+    if (hi->pending_spec) acts[OSRS_HEAD_SPECIAL] = tp->player.spec_armed ? 2 : 1;
+    tfa_step(state, context, acts);
+    if (tp->player.x == hi->pending_move_x && tp->player.y == hi->pending_move_y) human_input_clear_move(hi);
+    human_input_clear_pending(hi);
+}
+
 static void tfa_write_obs(EncounterState* state, EncounterContext* context, float* obs) {
     tfa_write_obs_for((TfaState*)state, (TfaContext*)context, 0, obs);
 }
@@ -396,6 +434,7 @@ static void tfa_render_post_tick(EncounterState* state, EncounterContext* contex
     .destroy = tfa_destroy, \
     .reset = tfa_reset, \
     .step = tfa_step, \
+    .step_human_commands = tfa_step_human_commands, \
     .write_obs = tfa_write_obs, \
     .write_mask = tfa_write_mask, \
     .get_reward = tfa_get_reward, \

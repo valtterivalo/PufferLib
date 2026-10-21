@@ -117,6 +117,20 @@ static inline int osrs_base_action_head_mask_offset(int target_slots, int head) 
     return offset;
 }
 
+/* An inventory click as the base action head that performs it: equip, eat or drink cell + 1. */
+static inline void osrs_base_action_inventory_click(int* actions, const Player* player, int cell) {
+    if (cell < 0 || cell >= OSRS_INVENTORY_SIZE) return;
+    const OsrsItemContentMetadata* metadata = osrs_inventory_cell_metadata(&player->inventory_cells[cell]);
+    if (metadata->click_action == OSRS_CLICK_EQUIP) {
+        if (metadata->gear_slot >= 0 && metadata->gear_slot < NUM_GEAR_SLOTS)
+            actions[OSRS_HEAD_EQUIP_SLOT(metadata->gear_slot)] = cell + 1;
+    } else if (metadata->click_action == OSRS_CLICK_EAT) {
+        actions[OSRS_HEAD_EAT] = cell + 1;
+    } else if (metadata->click_action == OSRS_CLICK_DRINK) {
+        actions[OSRS_HEAD_DRINK] = cell + 1;
+    }
+}
+
 static inline int osrs_write_shared_observations(
     float* obs,
     const OsrsSharedObservationInput* input

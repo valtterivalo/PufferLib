@@ -278,7 +278,6 @@ static const EncounterDef ENCOUNTER_NH_PVP = {
 
     .scene = PVP_SCENE,
 
-    .translate_human_input = NULL,
     .head_move = OSRS_HEAD_PRIMARY,
     .head_prayer = OSRS_HEAD_OVERHEAD,
     .head_target = OSRS_HEAD_PRIMARY,

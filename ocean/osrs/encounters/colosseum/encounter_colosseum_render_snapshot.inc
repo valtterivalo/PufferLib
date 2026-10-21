@@ -901,11 +901,6 @@ static void col_render_post_tick_ctx(
         col_emit_thrall_projectile(s, ctx, ov);
 }
 
-static void* col_get_player_for_input(void* state, int idx) {
-    ColosseumState* s = (ColosseumState*)state;
-    return (idx == 0) ? (void*)&s->player : NULL;
-}
-
 static int col_find_target_obs_slot(const ColosseumState* s, int npc_slot) {
     return encounter_find_observed_target_slot(
         s->current_obs_slots, COLO_OBS_NPCS, npc_slot);
@@ -956,36 +951,6 @@ static void col_apply_pending_draft_grapple_heads(HumanInput* hi, int* actions) 
         actions[COLO_HEAD_MODIFIER_SELECT] = hi->pending_modifier_select;
     if (hi->pending_grapple_slot > 0 && hi->pending_grapple_slot <= COLO_NUM_GRAPPLE_SLOTS)
         actions[COLO_HEAD_GRAPPLE_PARRY] = hi->pending_grapple_slot;
-}
-
-static void col_translate_human_input_ctx(
-    HumanInput* hi,
-    int* actions,
-    EncounterState* state,
-    EncounterContext* context
-) {
-    for (int h = 0; h < COLO_NUM_ACTION_HEADS; h++) actions[h] = 0;
-
-    encounter_translate_movement(hi, actions, COLO_HEAD_PRIMARY, col_get_player_for_input, state);
-    encounter_translate_prayer(hi, actions, COLO_HEAD_PRAYER);
-
-    ColosseumState* s = (ColosseumState*)state;
-    col_require_context(context);
-    col_refresh_current_obs_slots(s);
-
-    if (hi->pending_target_idx >= 0) {
-        int found_slot = col_find_target_obs_slot(s, hi->pending_target_idx);
-        actions[COLO_HEAD_PRIMARY] =
-            (found_slot >= 0 && col_obs_slot_is_targetable(s, found_slot))
-                ? col_primary_attack_action_for_obs_slot(found_slot) : 0;
-    } else {
-        actions[COLO_HEAD_PRIMARY] = 0;
-    }
-
-    if (hi->pending_spec) actions[COLO_HEAD_SPEC] = 1;
-    encounter_translate_offensive_prayer(hi, actions, COLO_HEAD_OFFENSIVE);
-
-    col_apply_pending_draft_grapple_heads(hi, actions);
 }
 
 static void col_translate_human_commands(
@@ -1203,7 +1168,6 @@ static const EncounterDef ENCOUNTER_COLOSSEUM = {
     .scene_origin_x = COLO_SCENE_ORIGIN_X,
     .scene_origin_y = COLO_SCENE_ORIGIN_Y,
 
-    .translate_human_input = col_translate_human_input_ctx,
     .is_human_targetable_npc_slot = col_is_human_targetable_npc_slot_ctx,
     .apply_lab_command = col_apply_lab_command_ctx,
     .head_move = COLO_HEAD_PRIMARY,
