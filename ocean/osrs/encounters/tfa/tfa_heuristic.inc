@@ -21,7 +21,7 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
             want = hit->attack_style == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED : PRAYER_PROTECT_MELEE;
         }
         int best = target && target->attackable ? 4 : 1 << 30;
-        for (int i = 1; i < TFA_NUM_TARGET_SLOTS; i++) {
+        for (int i = 0; i < TFA_NUM_TARGET_SLOTS; i++) {
             const TfaNpc* j = &s->npcs[i];
             if (!j->active || j->kind != TFA_NPC_JELLY || !j->attackable) continue;
             int d = chebyshev_distance(j->x, j->y, tp->player.x, tp->player.y);
@@ -96,7 +96,7 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
         const TfaOcellusState* os = &s->boss.ocellus;
         want = (OverheadPrayer)os->want_prayer;
         target = s->npcs[0].attackable ? &s->npcs[0] : NULL;
-        for (int i = 1; i < TFA_NUM_TARGET_SLOTS; i++) {
+        for (int i = 0; i < TFA_NUM_TARGET_SLOTS; i++) {
             const TfaNpc* c = &s->npcs[i];
             if (!c->active) continue;
             if (c->kind == TFA_NPC_OCELLUS_PORTAL && oc_quadrant(tp->player.x, tp->player.y) == c->state) go_x = c->x, go_y = c->y;
@@ -147,13 +147,18 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
     if (tp->player.prayer != want)
         acts[OSRS_HEAD_OVERHEAD] = want == PRAYER_NONE ? ENCOUNTER_OVERHEAD_OFF : want == PRAYER_PROTECT_MELEE ? ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE
             : want == PRAYER_PROTECT_MAGIC ? ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC : ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED;
-    if (s->room == TFA_ROOM_BORK) {
-        if (tp->player.offensive_prayer != OFFENSIVE_PRAYER_PIETY) acts[OSRS_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY;
-        for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++) {
-            const OsrsItemContentMetadata* md = osrs_inventory_cell_metadata(&tp->player.inventory_cells[cell]);
-            if ((md->item_idx == ITEM_INQUISITORS_MACE || md->item_idx == ITEM_AVERNIC_DEFENDER) && tp->player.equipped[md->gear_slot] != md->item_idx)
-                acts[OSRS_HEAD_EQUIP_SLOT(md->gear_slot)] = cell + 1;
-        }
+    int melee = s->room == TFA_ROOM_BORK;
+    OffensivePrayer offensive = melee ? OFFENSIVE_PRAYER_PIETY : OFFENSIVE_PRAYER_RIGOUR;
+    if (tp->player.offensive_prayer != offensive)
+        acts[OSRS_HEAD_OFFENSIVE] = melee ? ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY : ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR;
+    for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++) {
+        const OsrsItemContentMetadata* md = osrs_inventory_cell_metadata(&tp->player.inventory_cells[cell]);
+        int wanted = melee
+            ? md->item_idx == ITEM_INQUISITORS_MACE || md->item_idx == ITEM_AVERNIC_DEFENDER
+            : md->item_idx == ITEM_TWISTED_BOW || md->item_idx == ITEM_DIZANAS_QUIVER || md->item_idx == ITEM_NECKLACE_OF_ANGUISH
+                || md->item_idx == ITEM_MASORI_BODY_F || md->item_idx == ITEM_MASORI_CHAPS_F;
+        if (wanted && md->gear_slot >= 0 && tp->player.equipped[md->gear_slot] != md->item_idx)
+            acts[OSRS_HEAD_EQUIP_SLOT(md->gear_slot)] = cell + 1;
     }
     acts[OSRS_HEAD_PRIMARY] = TFA_PRIMARY_ATTACK_BASE + tfa_npc_slot(s, target);
     if (hide_x >= 0 && (tp->player.x != hide_x || tp->player.y != hide_y) && tp->player.attack_timer > 0) {

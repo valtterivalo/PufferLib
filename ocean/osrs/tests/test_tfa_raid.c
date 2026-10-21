@@ -29,6 +29,24 @@ int main(void) {
     ASSERT_INT_EQ("the last room is Ocellus", tfa_raid_room(4, 1), TFA_ROOM_OCELLUS);
     ASSERT_INT_EQ("path 2 picks Moia", tfa_raid_room(2, 2), TFA_ROOM_MOIA);
     ASSERT_INT_EQ("path 4 picks the Dagon'hai", tfa_raid_room(3, 4), TFA_ROOM_DAGONHAI);
+    for (int path = 0; path < 4; path++) {
+        ctx->config.path = path;
+        ctx->config.room_max_ticks = 6000;
+        tfa_reset_typed(s, ctx, 11u + (uint32_t)path);
+        int acts[TFA_MAX_PLAYERS * TFA_NUM_ACTION_HEADS];
+        int rooms[TFA_RAID_LENGTH], seen = 0, last = -1;
+        while (!s->episode_over) {
+            if (s->room != last) { rooms[seen++] = s->room; last = s->room; }
+            for (int p = 0; p < s->team_size; p++) s->players[p].player.current_hitpoints = 10000;
+            for (int p = 0; p < TFA_MAX_PLAYERS; p++) tfa_heuristic_actions(s, p, acts + p * TFA_NUM_ACTION_HEADS);
+            tfa_step_team(s, ctx, acts);
+        }
+        printf("path %d: outcome %d after %d ticks, rooms", path, s->outcome, s->tick);
+        for (int r = 0; r < seen; r++) printf(" %d", rooms[r]);
+        printf("\n");
+        ASSERT_INT_EQ("an invulnerable team clears the whole raid", s->outcome, TFA_OUTCOME_CLEARED);
+        ASSERT_INT_EQ("the raid visits five rooms", seen, TFA_RAID_LENGTH);
+    }
     free(s);
     free(ctx);
     return osrs_test_summary();
