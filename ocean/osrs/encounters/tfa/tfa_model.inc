@@ -245,6 +245,7 @@ typedef struct {
         TfaBorkState bork;
         TfaMoiaState moia;
         TfaDreadnothState dreadnoth;
+        TfaEzekielState ezekiel;
     } boss;
 } TfaState;
 

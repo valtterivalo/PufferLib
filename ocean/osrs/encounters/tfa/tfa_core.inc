@@ -251,7 +251,9 @@ static void tfa_credit_damage(TfaState* s, int attacker, int applied) {
     s->team_damage_dealt_tick += (float)applied;
 }
 
+/* A stunned NPC has no defence: the zero-hit fraction fell from 23% to 3% of player hits during Ezekiel's weakened window. */
 static int tfa_npc_def_roll(const TfaNpc* n, AttackStyle style, int melee_style) {
+    if (n->act == TFA_ACT_STUNNED) return 0;
     const MonsterStats* m = &MONSTER_DATABASE[n->monster];
     return encounter_npc_target_def_roll(
         m->def_level, m->magic_level, m->stab_def, m->slash_def, m->crush_def,
