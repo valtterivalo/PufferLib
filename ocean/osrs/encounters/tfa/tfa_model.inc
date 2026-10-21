@@ -241,6 +241,7 @@ typedef struct {
         TfaGuardianState guardian;
         TfaXarthState xarth;
         TfaDreadnothState dreadnoth;
+        TfaEzekielState ezekiel;
     } boss;
 } TfaState;
 
