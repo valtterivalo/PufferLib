@@ -110,8 +110,7 @@ typedef struct {
     int shot_gap;                /* then every 5 (4-6) */
     int window_fresh;            /* 14806 -> 14809 after the start or a middle: 11 in 9/9 */
     int window_corner;           /* 14806 -> 14809 corner to corner: 16 in 22/22 */
-    int drop_last_pct;           /* last shot missing: 4 of 11 (W16) and 4 of 13 (W11) barrages, rounded */
-    int shot_to_end;             /* 14807 comes 4 after the last shot */
+    int shot_to_end;             /* a middle check runs 4 after every shot slot (cuts at B+5 f4, B+10 f3); 14807 plays at B+5 (9 of 12) or +10 when the charge follows at +11, +10 or +15 when it follows at +16 (11 and 11); 2 and 3 shots in 55/55 barrages */
     int flight_near, flight_far; /* projectile flight 2 up to 4 tiles, 3 from 5 (n=270) */
     int flight_split;
     int magic_pct;               /* 4229 in 135 of 235 shots */
@@ -131,8 +130,7 @@ typedef struct {
     int tendril_boss_heal;       /* boss heals 2 per damaged player on a pulse (hitsplat type 6 on the boss, 2/4/6) */
     int tendril_heal_window;     /* the player heals what lines took in the last 6 ticks (13 = 5+4+4) */
     int meter_threshold;         /* provisional: lead note says 22 unblocked heals before Eradicate */
-    int middle_pct[2];           /* middle sequences at hp <= 66 and <= 25 percent (6 fights, 11 sequences) */
-    int middle_cut;              /* barrage cut at crossing +2 (f3, f4) */
+    int middle_pct[2];           /* middle sequences at hp <= 67 and <= 26 percent: triggered at 66.9, 66.9, 25.4, 24.4, 62.6 (B+5), not at 67.3, 68.1, 68.4, 26.5 (checked at 14811 +3 and every 5 ticks of a barrage) */
     int tp_in;                   /* 14812 -> 14813 +4 (11/14) */
     int mid_charges;             /* 4 charges at the centre */
     int mid_gap;                 /* explode -> next charge +2 */
@@ -143,7 +141,7 @@ typedef struct {
     int eradicate_hits;          /* 6 hits per player after a full meter (fights 1, 2) */
     int eradicate_ticks[6];
     int resume;                  /* 14810 -> 14806 +7 (6/6) */
-    int death_out, death_in, death_transform, death_p2; /* hp 0 +3, +3, +2, +7 (4/4 exact) */
+    int death_out, death_in, death_transform, death_p2, death_centre; /* hit label of hp 0 +3 (so +2 after the tick that applied it), +3, +2, +7 (4/4); a boss already at the centre transforms +1 after (f4, f5) */
     int hp_base_p1, hp_per_player_p1; /* 3630 at 3 players (4/4 fights: damage 3630 incl. heals), 2500 wiki base */
     int hp_base_p3;
 } TfaOcellusP1Tuning;
@@ -151,7 +149,7 @@ typedef struct {
 static const TfaOcellusP1Tuning TFA_OC1 = {
     .first_barrage = 4, .shot_first = 1, .shot_gap = 5,
     .window_fresh = 11, .window_corner = 16,
-    .drop_last_pct = 35, .shot_to_end = 4,
+    .shot_to_end = 4,
     .flight_near = 2, .flight_far = 3, .flight_split = 4,
     .magic_pct = 57,
     .shot_min = 12, .shot_max = 19,
@@ -162,13 +160,13 @@ static const TfaOcellusP1Tuning TFA_OC1 = {
     .pulse_first = 5, .pulse_repeat = 6,
     .tendril_min = 3, .tendril_max = 5, .tendril_boss_heal = 2, .tendril_heal_window = 6,
     .meter_threshold = 22,
-    .middle_pct = { 66, 25 }, .middle_cut = 2,
+    .middle_pct = { 67, 26 },
     .tp_in = 4, .mid_charges = 4, .mid_gap = 2, .mid_first_charge = 4,
     .expend_text = 2, .expend_after = 2,
     .expend_hit_min = 17, .expend_hit_max = 19,
     .eradicate_hits = 6, .eradicate_ticks = { 1, 2, 2, 2, 3, 3 },
     .resume = 7,
-    .death_out = 3, .death_in = 3, .death_transform = 2, .death_p2 = 7,
+    .death_out = 2, .death_in = 3, .death_transform = 2, .death_p2 = 7, .death_centre = 3,
     .hp_base_p1 = 2500, .hp_per_player_p1 = 565,
     .hp_base_p3 = 5250,
 };
@@ -324,7 +322,7 @@ static void tfa_ocellus_tendril_hit(TfaState* s, int p) {
     int dmg = tfa_rand_range(s, TFA_OC1.tendril_min, TFA_OC1.tendril_max);
     tfa_damage_player_now(s, p, dmg, ATTACK_STYLE_NONE);
     os->line_acc[p] += dmg;
-    oc_boss_heal(oc_boss(s), TFA_OC1.tendril_boss_heal);
+    if (!os->no_line_heal) oc_boss_heal(oc_boss(s), TFA_OC1.tendril_boss_heal);
 }
 
 static void oc_line_hazards(TfaState* s, const TfaOcLine* l, int start) {
@@ -426,11 +424,15 @@ static void oc_p1_enter(TfaState* s) {
 static void oc_p1_barrage(TfaState* s, TfaNpc* n) {
     TfaOcellusState* os = oc_state(s);
     n->act = TFA_ACT_RANGED;
+    os->centre = 0;
     tfa_npc_anim(s, n, OC_ANIM_BARRAGE);
-    int shots = os->window == TFA_OC1.window_fresh ? 2 : 3;
-    if (tfa_rand(s, 100) < TFA_OC1.drop_last_pct && shots > 1) shots--;
-    for (int k = 0; k < shots; k++) oc_at(s, TFA_OC1.shot_first + TFA_OC1.shot_gap * k, OCE_P1_SHOT, 0, 0);
-    oc_at(s, TFA_OC1.shot_first + TFA_OC1.shot_gap * (shots - 1) + TFA_OC1.shot_to_end, OCE_P1_BARRAGE_END, 0, 0);
+    int shots = os->window / TFA_OC1.shot_gap;
+    int b_at = os->window == TFA_OC1.window_fresh ? (tfa_rand(s, 4) == 0 ? 10 : 5) : (tfa_rand(s, 2) ? 10 : 15);
+    for (int k = 0; k < shots; k++) {
+        int at = TFA_OC1.shot_first + TFA_OC1.shot_gap * k;
+        oc_at(s, at, OCE_P1_SHOT, 0, 0);
+        oc_at(s, at + TFA_OC1.shot_to_end, OCE_P1_BARRAGE_END, at + TFA_OC1.shot_to_end == b_at, 0);
+    }
     oc_at(s, os->window, OCE_P1_CHARGE, 0, 0);
     os->next_attack_tick = s->tick + TFA_OC1.shot_first;
 }
@@ -469,18 +471,12 @@ static void oc_p1_charge(TfaState* s, TfaNpc* n) {
     os->next_attack_tick = explode;
 }
 
-static void oc_p1_cut_to_middle(TfaState* s, int delay) {
-    TfaOcellusState* os = oc_state(s);
-    oc_cancel(s, OCE_P1_SHOT, OCE_P1_CHARGE);
-    oc_at(s, delay, OCE_P1_TP_OUT, 0, 0);
-    os->next_attack_tick = s->tick + delay;
-}
-
 static void oc_p1_zero_cut(TfaState* s) {
     oc_cancel(s, OCE_P1_BARRAGE, OCE_P1_EXPEND);
     oc_clear_hazards(s);
     memset(oc_state(s)->lines, 0, sizeof(oc_state(s)->lines));
-    oc_at(s, TFA_OC1.death_out, OCE_P1_TP_OUT, 1, 0);
+    if (oc_state(s)->centre) oc_at(s, TFA_OC1.death_centre, OCE_P1_DYING_IN, 0, 0);
+    else oc_at(s, TFA_OC1.death_out, OCE_P1_TP_OUT, 1, 0);
 }
 
 static void oc_p1_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
@@ -488,7 +484,16 @@ static void oc_p1_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
     switch (e->kind) {
         case OCE_P1_BARRAGE: oc_p1_barrage(s, n); break;
         case OCE_P1_SHOT: oc_p1_shot(s, n); break;
-        case OCE_P1_BARRAGE_END: tfa_npc_anim(s, n, OC_ANIM_BARRAGE_END); break;
+        case OCE_P1_BARRAGE_END:
+            if (oc_middle_due(s)) {
+                os->middles++;
+                os->barrage = 0;
+                oc_cancel(s, OCE_P1_SHOT, OCE_P1_CHARGE);
+                oc_p1_event(s, n, &(TfaOcEvent){ .kind = OCE_P1_TP_OUT });
+            } else if (e->arg) {
+                tfa_npc_anim(s, n, OC_ANIM_BARRAGE_END);
+            }
+            break;
         case OCE_P1_CHARGE: oc_p1_charge(s, n); break;
         case OCE_P1_LINE: oc_spawn_line(s, e->arg2); break;
         case OCE_P1_EXPLODE_TELL: oc_zone(s, n, 99, 99, s->tick + TFA_OC1.explode_tell + 1); break;
@@ -516,6 +521,7 @@ static void oc_p1_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
         case OCE_P1_TP_IN:
             n->x = OC_CENTRE_X;
             n->y = OC_CENTRE_Y;
+            os->centre = 1;
             tfa_npc_anim(s, n, OC_ANIM_TP_IN);
             if (e->arg) {
                 oc_at(s, TFA_OC1.death_transform, OCE_P1_DYING_IN, 0, 0);

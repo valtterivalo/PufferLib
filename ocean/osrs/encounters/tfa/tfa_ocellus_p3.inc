@@ -703,10 +703,6 @@ static void tfa_ocellus_tick(TfaState* s, TfaContext* ctx) {
             os->zero_tick = -3;
             os->barrage = 0;
             oc_p1_zero_cut(s);
-        } else if (os->barrage && oc_middle_due(s)) {
-            os->middles++;
-            os->barrage = 0;
-            oc_p1_cut_to_middle(s, TFA_OC1.middle_cut);
         }
         oc_lines_tick(s);
     }
