@@ -590,9 +590,37 @@ def explode_next(fights):
     return hist(out)
 
 
+def barrage_shapes(fights):
+    """(14809 offset, 14807 offset) after each 14806: the charge follows at 11 or 16, the end anim plays at 5, 10 or 15."""
+    out = []
+    for ev in fights.values():
+        anims = [e for e in ev if e["kind"] == "ANIM" and e["id"] in ATTACKS["ocellus"] and e["actor"].split("#")[0] == "16674"]
+        for i, a in enumerate(anims):
+            if a["id"] != "14806":
+                continue
+            nxt = anims[i + 1:i + 4]
+            charge = next((e["t"] - a["t"] for e in nxt if e["id"] == "14809"), None)
+            end = next((e["t"] - a["t"] for e in nxt if e["id"] == "14807"), None)
+            if charge in (11, 16):
+                out.append((charge, end))
+    return hist(out)
+
+
 def ocellus(real, sim):
     failures = []
-    for anim in ("14806", "14809", "14810", "14842", "14846", "14851", "14857", "14869", "14871", "14837"):
+    rs, ss = barrage_shapes(real), barrage_shapes(sim)
+    for key in sorted(rs, key=str):
+        if rs[key] < 3:
+            continue
+        ok = ss[key] > 0
+        if not ok:
+            failures.append(f"barrage {key}")
+        print(f"{'ok ' if ok else 'BAD'} barrage (charge, end) {key!s:12s} real {rs[key]} sim {ss[key]}")
+    extra = [k for k in ss if ss[k] * 20 >= sum(ss.values()) and k not in rs]
+    if extra:
+        failures.append(f"barrage shapes only in sim {extra}")
+        print(f"BAD barrage shapes only in sim {extra}")
+    for anim in ("14809", "14810", "14842", "14846", "14851", "14857", "14869", "14871", "14837"):
         compare(f"{anim} next attack", next_attack(real, "ocellus", anim), next_attack(sim, "ocellus", anim), failures)
     rx, sx = explode_next(real), explode_next(sim)
     for key in sorted({k for k in rx if rx[k] >= 3}):

@@ -127,7 +127,7 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
         }
     }
     int here = tfa_tile_danger(s, p, tp->player.x, tp->player.y);
-    int react = s->room == TFA_ROOM_EZEKIEL ? 3 : 1;
+    int react = s->room == TFA_ROOM_EZEKIEL ? 3 : s->room == TFA_ROOM_OCELLUS ? 4 : 1;
     if (here >= 0 && here <= react) {
         const TfaRoomLayout* layout = tfa_room_layout(s->room);
         int safe[289][2], safe_count = 0;
