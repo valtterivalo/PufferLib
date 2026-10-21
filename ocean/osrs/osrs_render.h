@@ -3416,6 +3416,17 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
                 &rc->encounter_overlay);
 
             EncounterOverlay* ov = &rc->encounter_overlay;
+            for (int i = 0; i < ov->ground_spotanim_count; i++) {
+                const EncounterGroundSpotanim* g = &ov->ground_spotanims[i];
+                int slot = effect_spawn_spotanim_subtile(rc->effects, g->gfx_id,
+                    g->x * 128.0f + 64.0f, g->y * 128.0f + 64.0f,
+                    rc->effect_client_tick_counter + g->delay, rc->spotanims, rc->anim_cache,
+                    rc->model_cache, rc->npc_model_cache, rc->projectile_model_cache);
+                if (slot < 0) {
+                    fprintf(stderr, "render: ground spotanim %d has no definition\n", g->gfx_id);
+                    abort();
+                }
+            }
             for (int i = 0; i < ov->projectile_count; i++) {
                 if (!ov->projectiles[i].active) continue;
                 int src_sz = ov->projectiles[i].src_size > 0 ? ov->projectiles[i].src_size : ov->boss_size;
@@ -5284,7 +5295,9 @@ static void render_draw_3d_world(RenderClient* rc, OsrsEnv* env) {
                     MatrixTranslate(ex, ey, ez));
             } else {
                 t = MatrixMultiply(
-                    MatrixScale(-scale_xy, scale_y, scale_xy),
+                    MatrixMultiply(
+                        MatrixScale(-scale_xy, scale_y, scale_xy),
+                        MatrixRotateY((float)e->meta->rotation * DEG2RAD)),
                     MatrixTranslate(ex, ey, ez));
             }
             om->model.transform = t;

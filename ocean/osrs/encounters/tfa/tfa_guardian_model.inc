@@ -128,7 +128,7 @@ typedef enum {
 } TfaOcellusPhase;
 
 #define TFA_OC_MAX_EVENTS 64
-#define TFA_OC_MAX_LINES 10
+#define TFA_OC_MAX_LINES 16
 
 typedef struct {
     int32_t tick;
@@ -139,10 +139,10 @@ typedef struct {
 
 typedef struct {
     uint8_t live;
-    int8_t dx, dy;
-    int16_t ox, oy;
-    int32_t next_pulse;
-    int32_t end;
+    int8_t len;
+    int8_t x[8], y[8];
+    int16_t end_gfx;
+    int32_t end_tick;
 } TfaOcLine;
 
 typedef struct {
@@ -186,5 +186,8 @@ typedef struct {
     int no_line_heal;
     int centre;
     int centre_gone, centre_back;
+    int facing;
+    int line_turn;
+    int explode_gfx_tick;
     int blade_tick;
 } TfaOcellusState;

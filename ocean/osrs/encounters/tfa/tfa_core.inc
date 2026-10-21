@@ -305,6 +305,15 @@ static void tfa_hazard_hit_player(TfaState* s, const TfaHazard* h, int p) {
         tp->burn_ticks = 10;
 }
 
+/* A one-shot spotanim gfx_id on tile (x, y), starting delay client cycles after this tick. */
+static void tfa_fx_ground(TfaState* s, int x, int y, int gfx_id, int delay) {
+    if (s->fx_count >= TFA_MAX_FX) {
+        fprintf(stderr, "tfa fx capacity %d exceeded tick=%d\n", TFA_MAX_FX, s->tick);
+        abort();
+    }
+    s->fx[s->fx_count++] = (TfaFx){ .kind = TFA_FX_GROUND, .x = (int16_t)x, .y = (int16_t)y, .gfx_id = gfx_id, .delay = (int16_t)delay };
+}
+
 /* A projectile from NPC src to player p, launched delay ticks from now and flying duration ticks. */
 static void tfa_fx_projectile(TfaState* s, const TfaNpc* src, int p, int gfx_id, uint32_t model, int anim, int delay, int duration) {
     if (s->fx_count >= TFA_MAX_FX) {

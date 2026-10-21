@@ -108,6 +108,10 @@ int main(int argc, char** argv) {
             }
             for (int i = 0; i < s->fx_count; i++) {
                 const TfaFx* fx = &s->fx[i];
+                if (fx->kind == TFA_FX_GROUND) {
+                    printf("%s\t%d\tGFX\t-\t%d\t%d\t%d\t%d\t64,64\t-\n", fid, t, fx->gfx_id, fx->x, fx->y, fx->delay);
+                    continue;
+                }
                 const TfaNpc* src = &s->npcs[fx->src_slot];
                 pending[npending++] = (DumpProj){ t + fx->delay, fx->gfx_id, src->npc_id, fx->src_slot, src->x, src->y, fx->dst_player, fx->duration };
             }

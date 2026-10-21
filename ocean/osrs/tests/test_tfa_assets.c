@@ -8,6 +8,7 @@
 #include "../osrs_anim.h"
 #include "../osrs_collision.h"
 #include "../osrs_npc_models.h"
+#include "../osrs_spotanims.h"
 #include "osrs_test_check.h"
 
 #define TFA_ASSET_NO_ANIM 65535
@@ -140,7 +141,9 @@ static void check_room(const EncounterDef* def, int room) {
                 queue[tail++] = ny * TFA_ROOM_SIZE + nx;
             }
     }
-    long floating = 0, projectiles = 0, ticks = 0;
+    long floating = 0, projectiles = 0, ground = 0, ticks = 0;
+    static OsrsSpotAnimSet* spotanims;
+    if (!spotanims) spotanims = osrs_spotanims_load(OSRS_ASSET("spotanims.bin"));
     for (int e = 0; e < 20; e++) {
         ctx->config.team_size = 1 + e % TFA_MAX_PLAYERS;
         tfa_reset_typed(s, ctx, 500 + e);
@@ -184,6 +187,14 @@ static void check_room(const EncounterDef* def, int room) {
                 if (ov->floating_models[i].anim_id >= 0)
                     require(anim_present(anims, ov->floating_models[i].anim_id), "floating anim", (uint32_t)ov->floating_models[i].anim_id, room);
             }
+            for (int i = 0; i < ov->ground_spotanim_count; i++) {
+                int gfx = ov->ground_spotanims[i].gfx_id;
+                const OsrsSpotAnimDef* def_gfx = osrs_spotanim_find(spotanims, gfx);
+                require(def_gfx != NULL, "ground spotanim definition", (uint32_t)gfx, room);
+                require(model_present(&models, OSRS_SPOTANIM_MODEL_BASE | (uint32_t)gfx), "ground spotanim model", OSRS_SPOTANIM_MODEL_BASE | (uint32_t)gfx, room);
+                if (def_gfx && def_gfx->animation_id >= 0) require(anim_present(anims, def_gfx->animation_id), "ground spotanim anim", (uint32_t)def_gfx->animation_id, room);
+            }
+            ground += ov->ground_spotanim_count;
             for (int i = 0; i < ov->projectile_count; i++) {
                 require(model_present(&models, ov->projectiles[i].model_id), "projectile model", ov->projectiles[i].model_id, room);
                 if (ov->projectiles[i].anim_id >= 0)
@@ -201,8 +212,8 @@ static void check_room(const EncounterDef* def, int room) {
             aligned += scene_walkable(scene, def, x, y);
             require_floor(scene_walkable(scene, def, x, y), "sim floor not walkable in the scene", x, y, -1, room);
         }
-    printf("%-14s ticks %ld floating %ld projectiles %ld floor %d/%d aligned with the scene\n", def->name, ticks, floating, projectiles, aligned, floor_tiles);
-    CHECK("room drew hazards or projectiles", floating + projectiles > 0);
+    printf("%-14s ticks %ld floating %ld projectiles %ld ground %ld floor %d/%d aligned with the scene\n", def->name, ticks, floating, projectiles, ground, aligned, floor_tiles);
+    CHECK("room drew hazards or projectiles", floating + projectiles + ground > 0);
     free(ov);
     free(s);
     free(ctx);

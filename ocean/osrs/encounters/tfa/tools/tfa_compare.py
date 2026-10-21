@@ -818,6 +818,62 @@ def shapes_law(name, real, sim, failures):
     print(f"{'BAD' if missing or extra else 'ok '} {name:28s} real {fmt(real):42s} sim {fmt(sim)}")
 
 
+OC_CRACK_IDS = range(4236, 4260)
+OC_EXPLODE_IDS = range(4262, 4266)
+
+
+def oc_crack_kind(gfx):
+    k = (gfx - 4236) % 12
+    return "S" if k < 4 else ("E" if (k - 4) % 2 else "B")
+
+
+def ocellus_ground(fights):
+    """Phase 1 ground gfx per tick against Ocellus's footprint: crack line starts (boss tile, id, delay, far tile relative to the
+    boss), start offsets from the 14809 charge, END offset from the line's start, and the explosion floor per ring."""
+    starts, offsets, ends, pairs, rings, sizes = hist([]), hist([]), hist([]), hist([]), hist([]), hist([])
+    for ev in fights.values():
+        boss, charge, born, blast = None, None, {}, collections.defaultdict(list)
+        for e in sorted(ev, key=lambda e: e["t"]):
+            if e["kind"] == "NPOS" and base(e["actor"]) == "16674":
+                boss = (int(e["x"]), int(e["y"]))
+            elif e["kind"] == "ANIM" and base(e["actor"]) == "16674" and e["id"] == "14809":
+                charge = e["t"]
+            elif e["kind"] == "GFX" and boss is not None and charge is not None and (int(e["id"]) in OC_CRACK_IDS or int(e["id"]) in OC_EXPLODE_IDS):
+                gfx, x, y, delay = int(e["id"]), int(e["x"]), int(e["y"]), int(e["a"])
+                where = "middle" if boss == (30, 48) else "corner"
+                if gfx in OC_EXPLODE_IDS:
+                    cheb = max(max(boss[0] - x, x - boss[0] - 2, 0), max(boss[1] - y, y - boss[1] - 2, 0))
+                    rings[(cheb, delay)] += 1
+                    blast[(e["t"], where)].append(1)
+                if gfx not in OC_CRACK_IDS:
+                    continue
+                kind = oc_crack_kind(gfx)
+                pairs[(kind, delay)] += 1
+                if kind == "S":
+                    starts[(where, boss, gfx, delay, x - boss[0], y - boss[1])] += 1
+                    offsets[(where, e["t"] - charge)] += 1
+                    born.setdefault((x, y), []).append((e["t"], delay))
+                elif kind == "E" and born.get((x, y)) and delay == 1:
+                    t0, d0 = born[(x, y)].pop(0)
+                    ends[(where, d0, e["t"] - t0)] += 1
+        for (t, where), tiles in blast.items():
+            sizes[(where, len(tiles))] += 1
+    return starts, offsets, ends, pairs, rings, sizes
+
+
+def ocellus_ground_laws(real, sim, failures):
+    """Crack line choice follows the raiders, so the sim's lines must each be a recorded line; timing, delays and the
+    explosion floor must match in both directions."""
+    real_g, sim_g = ocellus_ground(real), ocellus_ground(sim)
+    unseen = sorted(k for k in sim_g[0] if not real_g[0][k])
+    if unseen:
+        failures.append("crack lines not in the recordings")
+    print(f"{'BAD' if unseen else 'ok '} {'crack lines all recorded':28s} sim {len(sim_g[0])} distinct, {sum(sim_g[0].values())} lines, unseen {unseen[:4]}")
+    labels = ("crack start offset from 14809", "crack END after start", "crack (piece, delay)", "explosion floor (ring, delay)", "explosion floor tiles")
+    for label, r, s in zip(labels, real_g[1:], sim_g[1:]):
+        shapes_law(label, r, s, failures)
+
+
 def ocellus(real, sim):
     failures = []
     rs, ss = barrage_shapes(real), barrage_shapes(sim)
@@ -850,6 +906,7 @@ def ocellus(real, sim):
     compare("14842 P0 hit delay", anim_to_p0_hit(real, "14842", 1), anim_to_p0_hit(sim, "14842", 1), failures)
     compare("14861 -> siphon spawn", first_offsets(real, "14861", "NPC+", "16679", 10), first_offsets(sim, "14861", "NPC+", "16679", 10), failures)
     compare("14881 -> first 14842", anim_offsets(real, "14881", "14842", 20), anim_offsets(sim, "14881", "14842", 20), failures)
+    ocellus_ground_laws(real, sim, failures)
     return failures
 
 

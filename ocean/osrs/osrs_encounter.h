@@ -189,6 +189,7 @@ static inline int encounter_pending_hit_queue_damage_sum(
 #define ENCOUNTER_OVERLAY_STATUS_TEXT_LEN 64
 
 #define ENCOUNTER_MAX_OVERLAY_PROJECTILES 96
+#define ENCOUNTER_MAX_OVERLAY_GROUND_SPOTANIMS 256
 
 typedef enum {
     ENCOUNTER_PROJECTILE_MOTION_OSRS_FLIGHT = 0,
@@ -227,6 +228,13 @@ typedef struct {
     int tier;
 } EncounterActiveModifier;
 
+/* A one-shot spotanim on a tile, created this tick and played delay client cycles from now for its seq's length. */
+typedef struct {
+    int x, y;
+    int gfx_id;
+    int delay;
+} EncounterGroundSpotanim;
+
 typedef struct {
     struct { int x, y, active; } hazards[ENCOUNTER_MAX_OVERLAY_TILES];
     int hazard_count;
@@ -246,6 +254,9 @@ typedef struct {
 
     EncounterActiveModifier active_modifiers[ENCOUNTER_MAX_ACTIVE_MODIFIERS];
     int active_modifier_count;
+
+    EncounterGroundSpotanim ground_spotanims[ENCOUNTER_MAX_OVERLAY_GROUND_SPOTANIMS];
+    int ground_spotanim_count;
 
     struct {
         int active;
@@ -413,6 +424,14 @@ static inline void encounter_emit_tile_shadow(
         .y = y,
         .scale = scale,
     };
+}
+
+static inline void encounter_emit_ground_spotanim(EncounterOverlay* ov, int x, int y, int gfx_id, int delay) {
+    if (ov->ground_spotanim_count >= ENCOUNTER_MAX_OVERLAY_GROUND_SPOTANIMS) {
+        fprintf(stderr, "encounter ground spotanim capacity exceeded: %d\n", ENCOUNTER_MAX_OVERLAY_GROUND_SPOTANIMS);
+        abort();
+    }
+    ov->ground_spotanims[ov->ground_spotanim_count++] = (EncounterGroundSpotanim){ x, y, gfx_id, delay };
 }
 
 static inline void encounter_emit_floating_model(

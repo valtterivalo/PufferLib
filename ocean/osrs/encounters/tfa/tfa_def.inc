@@ -299,8 +299,6 @@ static const struct { int gfx; int anim; } TFA_HAZARD_SPOTANIMS[] = {
     { EZEKIEL_GFX_STAR, SPOTANIM_TFA_EZEKIEL_VFX_EZEKIEL_STAR_EXPLOSION01_ANIM },
     { EZEKIEL_GFX_SWORD_LINE, SPOTANIM_TFA_EZEKIEL_VFX_EZEKIEL_SWORD_IDLE01_ANIM },
     { EZEKIEL_GFX_FINALE_IMPACT, SPOTANIM_TFA_EZEKIEL_VFX_EZEKIEL_FINALE_IMPACT_MEDIUM01_ANIM },
-    { OC_GFX_TENDRIL, SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_P1_FLOOR_CRACK_01_ANIM },
-    { OC_GFX_EXPLODE, SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_P1_EXPLODE_FLOOR_ANIM },
     { OC_GFX_DOT, SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_P2_AOE_DODGE_ANIM },
     { OC_GFX_BOMB, SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_QUADRANT_BOMB_IDLE_01_ANIM },
     { OC_GFX_SLASH, SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_P3_SHADOW_SLASH_SPOTANIM01_ANIM },
@@ -331,6 +329,7 @@ static void tfa_render_post_tick(EncounterState* state, EncounterContext* contex
     TfaState* s = (TfaState*)state;
     ov->floating_model_count = 0;
     ov->projectile_count = 0;
+    ov->ground_spotanim_count = 0;
     if (s->room == TFA_ROOM_OCELLUS) oc_scenery(s, ov);
     for (int i = 0; i < TFA_MAX_NPCS; i++) {
         if (!s->npcs[i].active || s->npcs[i].kind != TFA_NPC_OCELLUS_PORTAL) continue;
@@ -362,6 +361,10 @@ static void tfa_render_post_tick(EncounterState* state, EncounterContext* contex
     }
     for (int i = 0; i < s->fx_count; i++) {
         const TfaFx* fx = &s->fx[i];
+        if (fx->kind == TFA_FX_GROUND) {
+            encounter_emit_ground_spotanim(ov, fx->x, fx->y, fx->gfx_id, fx->delay);
+            continue;
+        }
         const TfaNpc* src = &s->npcs[fx->src_slot];
         const Player* dst = &s->players[fx->dst_player].player;
         OsrsProjectileEventSpec spec = {

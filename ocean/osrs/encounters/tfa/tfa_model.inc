@@ -182,9 +182,11 @@ typedef struct {
     EncounterProjectileTiming attack_timing;
 } TfaPlayer;
 
-/* Render-only effects of this tick: projectiles from an NPC to a player, models on tiles. */
+/* Render-only effects of this tick: projectiles from an NPC to a player (delay and duration in ticks),
+   one-shot spotanims on a tile (delay in client cycles, the recorder's startCycle minus the creation cycle). */
 typedef enum {
     TFA_FX_PROJECTILE = 1,
+    TFA_FX_GROUND,
 } TfaFxKind;
 
 typedef struct {
@@ -193,12 +195,13 @@ typedef struct {
     int8_t dst_player;
     int16_t delay;
     int16_t duration;
+    int16_t x, y;
     int32_t gfx_id;
     uint32_t model;
     int32_t anim;
 } TfaFx;
 
-#define TFA_MAX_FX 32
+#define TFA_MAX_FX 160
 
 typedef struct {
     float room_clear;

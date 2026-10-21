@@ -42,7 +42,6 @@
 #define OC_ANIM_AUGMENTER_DEATH 14905
 #define OC_ANIM_AUGMENTER_BLOW 14906
 
-#define OC_GFX_TENDRIL 4240
 #define OC_GFX_EXPLODE 4262
 #define OC_LOC_LANE_PORTAL 62685
 #define OC_GFX_DOT 4270
@@ -129,11 +128,14 @@ typedef struct {
     int explode_tell;            /* overhead line 3 before the explode */
     int explode_radius;          /* hits at Chebyshev 2..3 from his centre, safe from 4 (33 hits, 28 safe samples) */
     int explode_min, explode_max;/* 25..35 (n=33) */
-    int lines_corner;            /* 7 lines at 2 tick spacing per corner charge (fights 3,5,6) */
+    int lines_corner;            /* 7 lines at +0 +2 .. +12 after the corner 14809 (35 corners, 245 lines) */
     int line_gap;
-    int lines_middle;            /* 2 lines at each middle charge */
-    int pulse_first;             /* a line pulses 5 after its crack start, then every 6 */
-    int pulse_repeat;
+    int corner_line_len;         /* 8 tiles out from the footprint edge (245/245) */
+    int corner_line_hit;         /* END gfx and the chip 5 after the crack (245/245 lines, one pulse each) */
+    int corner_line_delay;       /* START gfx delay 61 cycles at the far end, bodies +1 per tile toward him (245/245) */
+    int mid_line_len;            /* 6 tiles per V line (88/88) */
+    int mid_hit[2];              /* line A ENDs 4 after the charge, line B 6 after (44/44 each) */
+    int mid_delay[2];            /* START delay 1 cycle (A) and 61 (B), bodies +1 per tile (44/44 each) */
     int tendril_min, tendril_max;/* chip 3..5 */
     int tendril_boss_heal;       /* boss heals 2 per damaged player on a pulse (hitsplat type 6 on the boss, 2/4/6) */
     int tendril_heal_window;     /* the player heals what lines took in the last 6 ticks (13 = 5+4+4) */
@@ -164,8 +166,9 @@ static const TfaOcellusP1Tuning TFA_OC1 = {
     .corner_charge_to_explode = 18, .middle_charge_to_explode = 6,
     .explode_to_next = 3, .explode_tell = 3, .explode_radius = 3,
     .explode_min = 25, .explode_max = 35,
-    .lines_corner = 7, .line_gap = 2, .lines_middle = 2,
-    .pulse_first = 5, .pulse_repeat = 6,
+    .lines_corner = 7, .line_gap = 2,
+    .corner_line_len = 8, .corner_line_hit = 5, .corner_line_delay = 61,
+    .mid_line_len = 6, .mid_hit = { 4, 6 }, .mid_delay = { 1, 61 },
     .tendril_min = 3, .tendril_max = 5, .tendril_boss_heal = 2, .tendril_heal_window = 6,
     .meter_threshold = 22,
     .middle_pct = { 67, 26 },
@@ -220,7 +223,6 @@ static const int8_t OC_CORNERS[4][2] = { {24, 54}, {24, 42}, {36, 42}, {36, 54} 
 #define OC_CENTRE_Y 48
 /* Safe tile of middle explosion k, relative to his centre: 24 of 28 samples on these tiles unhurt, hit on the other three. */
 static const int8_t OC_PINWHEEL[4][2] = { {-2, 1}, {1, 2}, {2, -1}, {-1, -2} };
-static const int8_t OC_DIRS[8][2] = { {0, 1}, {1, 0}, {0, -1}, {-1, 0}, {1, 1}, {1, -1}, {-1, -1}, {-1, 1} };
 
 /* The safe portal carries a player clockwise: (-,+) to (+,+) to (+,-) to (-,-). */
 static const int8_t OC_NEXT_QUAD[4] = { 2, 0, 3, 1 };
@@ -329,48 +331,109 @@ static void tfa_ocellus_tendril_hit(TfaState* s, int p) {
     if (!os->no_line_heal) oc_boss_heal(oc_boss(s), TFA_OC1.tendril_boss_heal);
 }
 
-static void oc_line_hazards(TfaState* s, const TfaOcLine* l, int start) {
-    for (int t = 0; t < 8; t++) {
-        int x = l->ox + l->dx * t, y = l->oy + l->dy * t;
-        if (x < 0 || y < 0 || x >= TFA_ROOM_SIZE || y >= TFA_ROOM_SIZE) continue;
-        if (tfa_layout_blocked(tfa_room_layout(s->room), x, y)) continue;
-        tfa_hazard_add(s, (TfaHazard){
-            .kind = TFA_HAZ_STRIKE, .style = ATTACK_STYLE_NONE, .w = 1, .h = 1, .owner = -1,
-            .effect = TFA_EFFECT_TENDRIL, .x = (int16_t)x, .y = (int16_t)y,
-            .start_tick = start, .end_tick = start, .protected_pct = 100, .gfx_id = OC_GFX_TENDRIL,
-        });
-    }
+/* Crack gfx ids: family 01 (4236 START, 4240 body, 4241 END) runs straight, family 02 (4248, 4252, 4253) diagonal; the
+   variant +1 (START) or +2 (body, END) per 90 degrees turns the model with the line, clockwise from south (cache spotanim rotation). */
+static int oc_crack_rot(int dx, int dy) {
+    if (dy < 0 && dx <= 0) return 0;
+    if (dx < 0) return 1;
+    if (dy > 0) return 2;
+    return 3;
 }
 
-/* A crack line of 8 tiles through (or beside) a random player: 66 percent of P0 samples stood within 2 tiles of a line. */
-static void oc_spawn_line(TfaState* s, int end_tick) {
+/* A crack line from its tile next to him outward: START on the far tile, bodies toward him with the delay rising 1 cycle per
+   tile, END on every tile hit_in ticks later, when it chips anyone standing on it. */
+static void oc_crack_line(TfaState* s, const int* xs, const int* ys, int len, int start_delay, int hit_in) {
     TfaOcellusState* os = oc_state(s);
     TfaOcLine* l = NULL;
     for (int i = 0; i < TFA_OC_MAX_LINES && !l; i++) if (!os->lines[i].live) l = &os->lines[i];
     assert(l);
-    const Player* pl = &s->players[oc_random_alive(s)].player;
-    int d = tfa_rand(s, 8), j = tfa_rand(s, 8), r = tfa_rand(s, 5) - 2;
-    int dx = OC_DIRS[d][0], dy = OC_DIRS[d][1];
-    *l = (TfaOcLine){
-        .live = 1, .dx = (int8_t)dx, .dy = (int8_t)dy,
-        .ox = (int16_t)(pl->x - dx * j - dy * r), .oy = (int16_t)(pl->y - dy * j + dx * r),
-        .next_pulse = s->tick + TFA_OC1.pulse_first, .end = end_tick,
-    };
-    oc_line_hazards(s, l, l->next_pulse);
+    int dx = xs[1] - xs[0], dy = ys[1] - ys[0], rot = oc_crack_rot(dx, dy), diagonal = dx && dy;
+    int start_gfx = (diagonal ? 4248 : 4236) + rot, body_gfx = (diagonal ? 4252 : 4240) + 2 * rot;
+    *l = (TfaOcLine){ .live = 1, .len = (int8_t)len, .end_gfx = (int16_t)(body_gfx + 1), .end_tick = s->tick + hit_in };
+    for (int k = 0; k < len; k++) {
+        l->x[k] = (int8_t)xs[k], l->y[k] = (int8_t)ys[k];
+        tfa_fx_ground(s, xs[k], ys[k], k == len - 1 ? start_gfx : body_gfx, start_delay + len - 1 - k);
+        if (tfa_layout_blocked(tfa_room_layout(s->room), xs[k], ys[k])) continue;
+        tfa_hazard_add(s, (TfaHazard){
+            .kind = TFA_HAZ_STRIKE, .style = ATTACK_STYLE_NONE, .w = 1, .h = 1, .owner = -1,
+            .effect = TFA_EFFECT_TENDRIL, .x = (int16_t)xs[k], .y = (int16_t)ys[k],
+            .start_tick = l->end_tick, .end_tick = l->end_tick, .protected_pct = 100,
+        });
+    }
+}
+
+/* Corner line k: one of 7 candidates out of the footprint toward the arena (along x or y at the two offsets off the wall side, or
+   the three diagonals through and beside the corner tile; 245/245 recorded lines are among them and the wall-side x and y lines
+   never occur in any corner), the one nearest the raider whose turn it is. Turns go
+   round the living raiders from a random one: recorded line k repeats line k + 3 in most 3-raider corners, and the centre offsets
+   (x1 45, y1 54 of 245) beat the edge ones (8-12). */
+static void oc_corner_line(TfaState* s, const TfaNpc* n, int k) {
+    int len = TFA_OC1.corner_line_len;
+    int sx = n->x + 1 < OC_CROSS_X ? 1 : -1, sy = n->y + 1 < OC_CROSS_Y ? 1 : -1;
+    int xs[9][8], ys[9][8];
+    for (int c = 0; c < 9; c++)
+        for (int i = 0; i < len; i++) {
+            int off = c % 3;
+            if (c < 3) xs[c][i] = (sx > 0 ? n->x + 3 : n->x - 1) + sx * i, ys[c][i] = n->y + off;
+            else if (c < 6) xs[c][i] = n->x + off, ys[c][i] = (sy > 0 ? n->y + 3 : n->y - 1) + sy * i;
+            else {
+                int ox = off == 1 ? -sx : 0, oy = off == 2 ? -sy : 0;
+                xs[c][i] = (sx > 0 ? n->x + 2 : n->x) + sx * (i + 1) + ox, ys[c][i] = (sy > 0 ? n->y + 2 : n->y) + sy * (i + 1) + oy;
+            }
+        }
+    int alive[TFA_MAX_PLAYERS], nalive = 0;
+    for (int p = 0; p < s->team_size; p++) if (tfa_alive(s, p)) alive[nalive++] = p;
+    assert(nalive > 0);
+    const Player* pl = &s->players[alive[(oc_state(s)->line_turn + k) % nalive]].player;
+    int best[9], nbest = 0, best_d = 1 << 30;
+    for (int c = 0; c < 9; c++) {
+        if ((c < 3 && c % 3 == (sy > 0 ? 0 : 2)) || (c >= 3 && c < 6 && c % 3 == (sx > 0 ? 0 : 2))) continue;
+        int d = 1 << 30;
+        for (int i = 0; i < len; i++) {
+            int e = chebyshev_distance(xs[c][i], ys[c][i], pl->x, pl->y);
+            if (e < d) d = e;
+        }
+        if (d < best_d) best_d = d, nbest = 0;
+        if (d == best_d) best[nbest++] = c;
+    }
+    int c = best[tfa_rand(s, nbest)];
+    oc_crack_line(s, xs[c], ys[c], len, TFA_OC1.corner_line_delay, TFA_OC1.corner_line_hit);
+}
+
+/* The middle V: facing f and its left L, line A from centre + 2f + L along f + L, line B from centre + 2f - L along f - L
+   (24/24 recorded V lines, tile table in notes/ocellus-cracks.md). */
+static void oc_middle_lines(TfaState* s, const TfaNpc* n, int facing) {
+    static const int8_t FACE[4][2] = { {0, -1}, {-1, 0}, {0, 1}, {1, 0} };
+    int fx = FACE[facing][0], fy = FACE[facing][1], lx = -fy, ly = fx, len = TFA_OC1.mid_line_len;
+    for (int side = 0; side < 2; side++) {
+        int px = side ? -lx : lx, py = side ? -ly : ly, xs[8], ys[8];
+        for (int k = 0; k < len; k++) xs[k] = n->x + 1 + 2 * fx + px + k * (fx + px), ys[k] = n->y + 1 + 2 * fy + py + k * (fy + py);
+        oc_crack_line(s, xs, ys, len, TFA_OC1.mid_delay[side], TFA_OC1.mid_hit[side]);
+    }
+}
+
+/* Explosion floor 4262-4265 on every arena tile at Chebyshev 1-2 from his footprint: all 40 in the middle, 37 in a corner where
+   the arena octagon |dx| + |dy| <= 16 around the cross cuts the outer corner (44 and 34 events). Variant uniform per tile (40/40 tiles
+   saw all four), delay 1 cycle on the inner ring and 3 on the outer (40/40). */
+static void oc_explosion_floor(TfaState* s, const TfaNpc* n) {
+    for (int dx = -2; dx <= 4; dx++)
+        for (int dy = -2; dy <= 4; dy++) {
+            int x = n->x + dx, y = n->y + dy, ring = dx < -1 || dx > 3 || dy < -1 || dy > 3 ? 2 : dx < 0 || dx > 2 || dy < 0 || dy > 2 ? 1 : 0;
+            if (!ring || abs(x - OC_CROSS_X) + abs(y - OC_CROSS_Y) > 16) continue;
+            uint32_t h = (uint32_t)s->tick * 73856093u ^ (uint32_t)x * 19349663u ^ (uint32_t)y * 83492791u;
+            tfa_fx_ground(s, x, y, OC_GFX_EXPLODE + (int)(h % 4), ring == 1 ? 1 : 3);
+        }
 }
 
 static void oc_lines_tick(TfaState* s) {
     TfaOcellusState* os = oc_state(s);
     for (int i = 0; i < TFA_OC_MAX_LINES; i++) {
         TfaOcLine* l = &os->lines[i];
-        if (!l->live || l->next_pulse != s->tick) continue;
-        if (l->next_pulse + TFA_OC1.pulse_repeat <= l->end) {
-            l->next_pulse += TFA_OC1.pulse_repeat;
-            oc_line_hazards(s, l, l->next_pulse);
-        } else {
-            l->live = 0;
-        }
+        if (!l->live || l->end_tick != s->tick) continue;
+        for (int k = 0; k < l->len; k++) tfa_fx_ground(s, l->x[k], l->y[k], l->end_gfx, l->len - k);
+        l->live = 0;
     }
+    if (os->explode_gfx_tick == s->tick) oc_explosion_floor(s, oc_boss(s));
     for (int p = 0; p < s->team_size; p++) {
         if (os->line_acc[p] <= 0 || s->tick - os->line_start[p] < TFA_OC1.tendril_heal_window) continue;
         if (tfa_alive(s, p)) {
@@ -384,18 +447,19 @@ static void oc_lines_tick(TfaState* s) {
 
 /* 7x7 around his centre minus the footprint; safe_dx/dy mark one unhurt tile or are 99. */
 static void oc_zone(TfaState* s, const TfaNpc* n, int safe_dx, int safe_dy, int start) {
+    oc_state(s)->explode_gfx_tick = start;
     int cx = n->x + 1, cy = n->y + 1, r = TFA_OC1.explode_radius;
     int x0 = cx - r, y0 = cy - r, side = 2 * r + 1;
     int lo = TFA_OC1.explode_min, hi = TFA_OC1.explode_max;
     if (safe_dx == 99) {
-        oc_haz(s, x0, y0, side, side, start, lo, hi, ATTACK_STYLE_NONE, 100, OC_GFX_EXPLODE, -1);
+        oc_haz(s, x0, y0, side, side, start, lo, hi, ATTACK_STYLE_NONE, 100, 0, -1);
         return;
     }
     int sx = cx + safe_dx, sy = cy + safe_dy;
-    oc_haz(s, x0, y0, side, sy - y0, start, lo, hi, ATTACK_STYLE_NONE, 100, OC_GFX_EXPLODE, -1);
-    oc_haz(s, x0, sy + 1, side, y0 + side - sy - 1, start, lo, hi, ATTACK_STYLE_NONE, 100, OC_GFX_EXPLODE, -1);
-    oc_haz(s, x0, sy, sx - x0, 1, start, lo, hi, ATTACK_STYLE_NONE, 100, OC_GFX_EXPLODE, -1);
-    oc_haz(s, sx + 1, sy, x0 + side - sx - 1, 1, start, lo, hi, ATTACK_STYLE_NONE, 100, OC_GFX_EXPLODE, -1);
+    oc_haz(s, x0, y0, side, sy - y0, start, lo, hi, ATTACK_STYLE_NONE, 100, 0, -1);
+    oc_haz(s, x0, sy + 1, side, y0 + side - sy - 1, start, lo, hi, ATTACK_STYLE_NONE, 100, 0, -1);
+    oc_haz(s, x0, sy, sx - x0, 1, start, lo, hi, ATTACK_STYLE_NONE, 100, 0, -1);
+    oc_haz(s, sx + 1, sy, x0 + side - sx - 1, 1, start, lo, hi, ATTACK_STYLE_NONE, 100, 0, -1);
 }
 
 static void oc_want(TfaState* s, OverheadPrayer prayer) {
@@ -466,9 +530,10 @@ static void oc_p1_charge(TfaState* s, TfaNpc* n) {
     n->act = TFA_ACT_SPECIAL;
     tfa_npc_anim(s, n, OC_ANIM_CHARGE);
     int explode = s->tick + TFA_OC1.corner_charge_to_explode;
+    os->line_turn = tfa_rand(s, TFA_MAX_PLAYERS);
     for (int k = 0; k < TFA_OC1.lines_corner; k++) {
-        if (k == 0) oc_spawn_line(s, explode);
-        else oc_at(s, TFA_OC1.line_gap * k, OCE_P1_LINE, explode, 0);
+        if (k == 0) oc_corner_line(s, n, 0);
+        else oc_at(s, TFA_OC1.line_gap * k, OCE_P1_LINE, k, 0);
     }
     oc_at(s, TFA_OC1.corner_charge_to_explode - TFA_OC1.explode_tell, OCE_P1_EXPLODE_TELL, 0, 0);
     oc_at(s, TFA_OC1.corner_charge_to_explode, OCE_P1_EXPLODE, 0, 0);
@@ -499,7 +564,7 @@ static void oc_p1_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
             }
             break;
         case OCE_P1_CHARGE: oc_p1_charge(s, n); break;
-        case OCE_P1_LINE: oc_spawn_line(s, e->arg2); break;
+        case OCE_P1_LINE: oc_corner_line(s, n, e->arg); break;
         case OCE_P1_EXPLODE_TELL: oc_zone(s, n, 99, 99, s->tick + TFA_OC1.explode_tell + 1); break;
         case OCE_P1_EXPLODE:
             tfa_npc_anim(s, n, OC_ANIM_EXPLODE);
@@ -527,6 +592,12 @@ static void oc_p1_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
             n->y = OC_CENTRE_Y;
             os->centre = 1;
             if (!e->arg) os->centre_gone = s->tick + OC_CENTRE_HIDE_FIRST, os->centre_back = s->tick + OC_CENTRE_HIDE_LAST;
+            {
+                /* The first V faces a raider along the dominant axis (P0 in 8 of 10 recorded middles, x on ties), then turns +512 per charge. */
+                const Player* pl = &s->players[oc_random_alive(s)].player;
+                int dx = pl->x - OC_CROSS_X, dy = pl->y - OC_CROSS_Y;
+                os->facing = abs(dx) >= abs(dy) ? (dx < 0 ? 1 : 3) : (dy < 0 ? 0 : 2);
+            }
             tfa_npc_anim(s, n, OC_ANIM_TP_IN);
             if (e->arg) {
                 oc_at(s, TFA_OC1.death_transform, OCE_P1_DYING_IN, 0, 0);
@@ -536,7 +607,7 @@ static void oc_p1_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
             break;
         case OCE_P1_MID_CHARGE:
             tfa_npc_anim(s, n, OC_ANIM_CHARGE);
-            for (int k = 0; k < TFA_OC1.lines_middle; k++) oc_spawn_line(s, s->tick + TFA_OC1.middle_charge_to_explode);
+            oc_middle_lines(s, n, (os->facing + e->arg) & 3);
             oc_at(s, TFA_OC1.middle_charge_to_explode, OCE_P1_MID_EXPLODE, e->arg, 0);
             os->next_attack_tick = s->tick + TFA_OC1.middle_charge_to_explode;
             break;
