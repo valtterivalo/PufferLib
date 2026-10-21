@@ -90,7 +90,8 @@ static void tfa_room_enter(TfaState* s, int room) {
         tp->stat_clock = 0;
         tfa_mark_stats_dirty(tp);
         if (s->episode_mode == TFA_EPISODE_RAID && s->raid_index >= 3) tfa_fill_supplies(&tp->player, tfa_kit_cells(tp->kit));
-        /* Every recorded room starts with P0 at full prayer and hit points (medians 90 and 99, 80 fights): raiders restore between rooms. */
+        /* Clearing a room restores prayer and hit points in one tick with no consumption (7 of 7 low transitions, e.g. prayer 0 -> 90 and
+           hit points 62 -> 99 the tick after the clear); every recorded room starts full (medians 90 and 99, 80 fights). */
         if (tp->life == TFA_LIFE_ALIVE) {
             tp->player.current_prayer = tp->player.base_prayer;
             if (tp->player.current_hitpoints < tp->player.base_hitpoints) tp->player.current_hitpoints = tp->player.base_hitpoints;
