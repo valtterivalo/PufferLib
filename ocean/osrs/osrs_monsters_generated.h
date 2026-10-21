@@ -332,7 +332,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .hp = 2600, .att_level = 250, .str_level = 225, .def_level = 170,
         .magic_level = 350, .range_level = 220,
         .attack_speed = 4, .size = 3, .max_hit = 0,
-        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 250, .magic_str_bonus = 0,
+        .melee_att_bonus = 150, .melee_str_bonus = 225, .magic_att_bonus = 250, .magic_str_bonus = 350,
         .range_att_bonus = 250, .ranged_str_bonus = 0,
         .stab_def = 115, .slash_def = 105, .crush_def = 20,
         .magic_def = 205, .ranged_def = 230, .ranged_light_def = 125, .ranged_heavy_def = 155, .def_floor_pct = 60
