@@ -94,16 +94,12 @@ static const TfaGuardianTuning TFA_GUARDIAN = {
 /* Party scaling: shield 550 at 2 players and 800 at 3 (24/24 bars). HP 1100 at 2 and 1575 at 3: the
    values for which forced-damage replays (tfa_replay_guardian.c) reproduce all 51 rises; the 3-player
    window is 1575 alone. A solo is scaled as a duo. Four players extrapolate. */
-static int tfa_guardian_scaled_players(const TfaState* s) {
-    return s->team_size < 2 ? 2 : s->team_size;
-}
-
 static int tfa_guardian_shield(const TfaState* s) {
-    return 550 + 250 * (tfa_guardian_scaled_players(s) - 2);
+    return tfa_party_hp(s, 550, 800);
 }
 
 static int tfa_guardian_hp(const TfaState* s) {
-    return 1100 + 475 * (tfa_guardian_scaled_players(s) - 2);
+    return tfa_party_hp(s, 1100, 1575);
 }
 
 /* Swoosh destinations recorded in the breath loop (31 swooshes): the boss SW tile. */

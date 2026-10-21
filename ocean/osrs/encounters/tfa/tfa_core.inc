@@ -12,6 +12,16 @@ static int tfa_alive(const TfaState* s, int p) {
     return p >= 0 && p < s->team_size && s->players[p].life == TFA_LIFE_ALIVE;
 }
 
+/* Boss HP and shields scale with party size: duo values from the wiki, trio values from recorded kills,
+   one step per extra raider; a solo is scaled as a duo. Every measured boss steps duo to trio by 1.45
+   (Ezekiel 3000 to 4350, Xarth 2600 to 3770, Dreadnoth 2100 to 3050, Guardian 1100 to 1575). */
+#define TFA_TRIO_SCALE_PCT 145
+
+static int tfa_party_hp(const TfaState* s, int duo, int trio) {
+    int n = s->team_size < 2 ? 2 : s->team_size;
+    return duo + (trio - duo) * (n - 2);
+}
+
 static int tfa_alive_count(const TfaState* s) {
     int n = 0;
     for (int p = 0; p < s->team_size; p++) n += tfa_alive(s, p);

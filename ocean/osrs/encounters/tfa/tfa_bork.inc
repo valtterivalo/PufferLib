@@ -120,6 +120,8 @@ static void tfa_bork_enter(TfaState* s) {
     const TfaRoomLayout* l = tfa_room_layout(TFA_ROOM_BORK);
     TfaNpc* b = tfa_npc_spawn(s, TFA_NPC_BORK, MON_TFA_BORK, BORK_NPC, l->boss_x, l->boss_y);
     TfaNpc* m = tfa_npc_spawn(s, TFA_NPC_SMORKS, MON_TFA_SMORKS, BORK_NPC_SMORKS, 30, 30);
+    b->hp = b->max_hp = tfa_party_hp(s, b->max_hp, b->max_hp * TFA_TRIO_SCALE_PCT / 100);
+    m->hp = m->max_hp = tfa_party_hp(s, m->max_hp, m->max_hp * TFA_TRIO_SCALE_PCT / 100);
     assert(tfa_npc_slot(s, b) == 0 && tfa_npc_slot(s, m) == 1);
     s->boss.bork = (TfaBorkState){
         .next_gong = TFA_BORK.first_gong,
