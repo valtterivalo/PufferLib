@@ -20,6 +20,7 @@
 #define GUARDIAN_ANIM_PYLON_DESPAWN 15025
 
 #define GUARDIAN_PROJ_RANGED 4201
+#define GUARDIAN_GFX_LAND 4389
 #define GUARDIAN_LOC_MUSHROOM_SPROUT 62578
 #define GUARDIAN_LOC_MUSHROOM_ARMED 62579
 #define GUARDIAN_LOC_MUSHROOM_BURST 62580
@@ -47,7 +48,9 @@ typedef struct {
     int vine_min_damage, vine_max_damage; /* 17..19 under Protect from Missiles */
     int vine_protected_pct;       /* 10..11 under Protect from Melee */
     int mushroom_arm;             /* 62578 -> 62579 after 3 ticks, 1171/1171 */
-    int mushroom_life;            /* untriggered armed mushrooms last 5..64 ticks */
+    int mushroom_armed_min;       /* armed to burst at least 2 ticks, never 1: 699/699 */
+    int mushroom_burst_life;      /* the burst loc stands 2 ticks: 652/652 */
+    int land_gfx_delay;           /* 4389 at the boss centre on the 14747 tick, delay 21 cycles: 65/65 */
     int mushroom_min_damage, mushroom_max_damage; /* rules.txt: 10-24 the tick after the burst */
     int breath_land;              /* players and pylon hit at 14754 +10: 57/58 */
     int breath_total_min, breath_total_max; /* split evenly: 3 x 21..23, 2 x 32..35, 1 x 70..71 */
@@ -80,7 +83,9 @@ static const TfaGuardianTuning TFA_GUARDIAN = {
     .vine_max_damage = 19,
     .vine_protected_pct = 60,
     .mushroom_arm = 3,
-    .mushroom_life = 60,
+    .mushroom_armed_min = 2,
+    .mushroom_burst_life = 2,
+    .land_gfx_delay = 21,
     .mushroom_min_damage = 10,
     .mushroom_max_damage = 24,
     .breath_land = 10,
@@ -176,8 +181,13 @@ static int tfa_guardian_tile_walkable(const TfaState* s, int x, int y) {
     return !tfa_layout_blocked(tfa_room_layout(s->room), x, y);
 }
 
+static int tfa_guardian_mushroom_at(const TfaState* s, int x, int y) {
+    for (int i = 0; i < TFA_MAX_HAZARDS; i++)
+        if (s->hazards[i].kind == TFA_HAZ_MUSHROOM && s->hazards[i].x == x && s->hazards[i].y == y) return 1;
+    return 0;
+}
+
 static void tfa_guardian_mushroom(TfaState* s, int x, int y) {
-    if (!tfa_guardian_tile_walkable(s, x, y)) return;
     tfa_hazard_add(s, (TfaHazard){
         .kind = TFA_HAZ_MUSHROOM,
         .style = ATTACK_STYLE_NONE,
@@ -185,7 +195,6 @@ static void tfa_guardian_mushroom(TfaState* s, int x, int y) {
         .owner = -1,
         .effect = TFA_EFFECT_POISON,
         .x = (int16_t)x, .y = (int16_t)y,
-        .end_tick = s->tick + TFA_GUARDIAN.mushroom_arm + TFA_GUARDIAN.mushroom_life,
         .arm_ticks = (int16_t)TFA_GUARDIAN.mushroom_arm,
         .min_damage = (int16_t)TFA_GUARDIAN.mushroom_min_damage,
         .max_damage = (int16_t)TFA_GUARDIAN.mushroom_max_damage,
@@ -194,7 +203,8 @@ static void tfa_guardian_mushroom(TfaState* s, int x, int y) {
     });
 }
 
-/* Two mushrooms per living player: one on the ring at distance 1 and one on the ring at 3 (rel. hist, 2p fights). */
+/* Two mushrooms per living player: one on the ring at distance 1 and one on the ring at 3 (rel. hist, 2p fights). A tile holds one mushroom
+   (1 of 1177 recorded sprouts lands on an occupied one), so an occupied draw takes the next tile round the ring. */
 static void tfa_guardian_special(TfaState* s, TfaNpc* g) {
     g->act = TFA_ACT_SPECIAL;
     tfa_npc_anim(s, g, GUARDIAN_ANIM_SPECIAL);
@@ -202,13 +212,19 @@ static void tfa_guardian_special(TfaState* s, TfaNpc* g) {
         if (!tfa_alive(s, p)) continue;
         const Player* pl = &s->players[p].player;
         for (int ring = 1; ring <= 3; ring += 2) {
-            int side = tfa_rand(s, 8 * ring);
-            int dx, dy;
-            if (side < 2 * ring) { dx = -ring + side; dy = ring; }
-            else if (side < 4 * ring) { dx = ring; dy = ring - (side - 2 * ring); }
-            else if (side < 6 * ring) { dx = ring - (side - 4 * ring); dy = -ring; }
-            else { dx = -ring; dy = -ring + (side - 6 * ring); }
-            tfa_guardian_mushroom(s, pl->x + dx, pl->y + dy);
+            int start = tfa_rand(s, 8 * ring);
+            for (int k = 0; k < 8 * ring; k++) {
+                int side = (start + k) % (8 * ring);
+                int dx, dy;
+                if (side < 2 * ring) { dx = -ring + side; dy = ring; }
+                else if (side < 4 * ring) { dx = ring; dy = ring - (side - 2 * ring); }
+                else if (side < 6 * ring) { dx = ring - (side - 4 * ring); dy = -ring; }
+                else { dx = -ring; dy = -ring + (side - 6 * ring); }
+                if (!tfa_guardian_tile_walkable(s, pl->x + dx, pl->y + dy)) break;
+                if (tfa_guardian_mushroom_at(s, pl->x + dx, pl->y + dy)) continue;
+                tfa_guardian_mushroom(s, pl->x + dx, pl->y + dy);
+                break;
+            }
         }
     }
 }
@@ -218,20 +234,24 @@ static void tfa_guardian_mushrooms_tick(TfaState* s) {
         TfaHazard* h = &s->hazards[i];
         if (h->kind != TFA_HAZ_MUSHROOM) continue;
         if (h->arm_ticks > 0) {
-            if (--h->arm_ticks == 0) h->loc_id = GUARDIAN_LOC_MUSHROOM_ARMED;
+            if (--h->arm_ticks == 0) {
+                h->loc_id = GUARDIAN_LOC_MUSHROOM_ARMED;
+                h->start_tick = s->tick;
+            }
             continue;
         }
         if (h->arm_ticks < 0) {
-            for (int p = 0; p < s->team_size; p++)
-                if (tfa_alive(s, p) && chebyshev_distance(h->x, h->y, s->players[p].player.x, s->players[p].player.y) <= 1)
-                    tfa_hazard_hit_player(s, h, p);
-            h->kind = TFA_HAZ_NONE;
+            if (h->arm_ticks == -TFA_GUARDIAN.mushroom_burst_life)
+                for (int p = 0; p < s->team_size; p++)
+                    if (tfa_alive(s, p) && chebyshev_distance(h->x, h->y, s->players[p].player.x, s->players[p].player.y) <= 1)
+                        tfa_hazard_hit_player(s, h, p);
+            if (++h->arm_ticks == 0) h->kind = TFA_HAZ_NONE;
             continue;
         }
-        if (s->tick >= h->end_tick) { h->kind = TFA_HAZ_NONE; continue; }
+        if (s->tick - h->start_tick < TFA_GUARDIAN.mushroom_armed_min) continue;
         for (int p = 0; p < s->team_size; p++) {
             if (tfa_alive(s, p) && chebyshev_distance(h->x, h->y, s->players[p].player.x, s->players[p].player.y) <= 1) {
-                h->arm_ticks = -1;
+                h->arm_ticks = (int16_t)-TFA_GUARDIAN.mushroom_burst_life;
                 h->loc_id = GUARDIAN_LOC_MUSHROOM_BURST;
                 break;
             }
@@ -374,6 +394,7 @@ static void tfa_guardian_tick(TfaState* s, TfaContext* ctx) {
                 gs->knockdowns++;
                 g->npc_id = GUARDIAN_NPC_GROUNDED;
                 tfa_npc_anim(s, g, GUARDIAN_ANIM_LAND);
+                tfa_fx_ground(s, g->x + 2, g->y + 2, GUARDIAN_GFX_LAND, TFA_GUARDIAN.land_gfx_delay);
                 gs->vine_timer = TFA_GUARDIAN.vine_first;
                 break;
             }

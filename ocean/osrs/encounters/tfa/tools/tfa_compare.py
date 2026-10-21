@@ -185,6 +185,51 @@ def compare(name, real, sim, failures):
     print(f"{'ok ' if ok else 'BAD'} {name:28s} real {fmt(real):42s} sim {fmt(sim)}")
 
 
+def guardian_ground(fights):
+    """Mushroom loc lifetimes and the 4389 land flash: burst life, armed to burst gaps, armed removals without a burst, and per 14747 anim the
+    4389 (tick offset, tile relative to the boss tile, delay, count)."""
+    burst_life, gaps, unbursted, land = hist([]), hist([]), 0, hist([])
+    for ev in fights.values():
+        armed, burst = {}, {}
+        bursts_at = {(e["t"], e["x"], e["y"]) for e in ev if e["kind"] == "OBJ+" and e["id"] == "62580"}
+        cleared = max((e["t"] for e in ev if e["kind"] == "OBJ-" and e["id"] == "62579"), default=-1)
+        for e in sorted(ev, key=lambda e: e["t"]):
+            tile = (e["x"], e["y"])
+            if e["kind"] == "OBJ+" and e["id"] == "62579":
+                armed[tile] = e["t"]
+            elif e["kind"] == "OBJ+" and e["id"] == "62580":
+                if tile in armed:
+                    gaps[e["t"] - armed.pop(tile)] += 1
+                burst[tile] = e["t"]
+            elif e["kind"] == "OBJ-" and e["id"] == "62580" and tile in burst:
+                burst_life[e["t"] - burst.pop(tile)] += 1
+            elif e["kind"] == "OBJ-" and e["id"] == "62579" and e["t"] != cleared and (e["t"], e["x"], e["y"]) not in bursts_at:
+                unbursted += 1
+        for a in (e for e in ev if e["kind"] == "ANIM" and base(e["actor"]) == "16660" and e["id"] == "14747"):
+            flashes = [g for g in ev if g["kind"] == "GFX" and g["id"] == "4389" and g["t"] == a["t"]]
+            land[(len(flashes),) + tuple((int(g["x"]) - int(a["x"]), int(g["y"]) - int(a["y"]), int(g["a"])) for g in flashes)] += 1
+        stray = [g for g in ev if g["kind"] == "GFX" and g["id"] == "4389" and not any(a["t"] == g["t"] and a["id"] == "14747" for a in ev if a["kind"] == "ANIM")]
+        land["stray"] += len(stray)
+    return burst_life, gaps, unbursted, land
+
+
+def guardian_ground_laws(real, sim, failures):
+    """Burst loc lives 2 ticks, armed to burst is never under 2 ticks and armed mushrooms outlive 60 ticks, and every 14747 draws exactly one
+    4389 at the boss tile + (2, 2) with delay 21 on the same tick."""
+    (rl, rg, ru, rland), (sl, sg, su, sland) = guardian_ground(real), guardian_ground(sim)
+    shapes_law("mushroom burst loc life", rl, sl, failures)
+    ok = min(rg) == min(sg) == 2
+    if not ok:
+        failures.append("armed to burst minimum")
+    print(f"{'ok ' if ok else 'BAD'} {'armed to burst minimum':28s} real {min(rg)} sim {min(sg)}")
+    ok = any(g > 60 for g in sg)
+    if not ok:
+        failures.append("armed outlives 60 ticks")
+    print(f"{'ok ' if ok else 'BAD'} {'armed outlives 60 ticks':28s} real {sum(n for g, n in rg.items() if g > 60)} gaps, sim {sum(n for g, n in sg.items() if g > 60)}")
+    print(f"--  {'armed removed before the clear':28s} real {ru} (cause not recorded), sim {su}")
+    shapes_law("4389 per 14747 (count, tile, delay)", rland, sland, failures)
+
+
 def guardian(real, sim):
     failures = []
     for anim in ("14751", "14753", "14754", "14748"):
@@ -207,6 +252,7 @@ def guardian(real, sim):
         compare(label, r, s, failures)
     compare("breath total (/10)", breath(real), breath(sim), failures)
     compare("shield per flying phase", shields(real), shields(sim), failures)
+    guardian_ground_laws(real, sim, failures)
     return failures
 
 
@@ -272,6 +318,68 @@ def blast_hits(fights):
     return amounts
 
 
+XARTH_PILE_IDS = {"62748", "62750", "62752", "62754", "62756", "62758", "62760", "62762"}
+
+
+def xarth_ground(fights):
+    """4379 per event (distinct tiles, duplicate rows, delay, tick offset from 14992); the first arena fire batch against the third 14989;
+    later batches against the cycle's first 14985; fire under P0 and orientation; the corpse pile fires against the third 14989; the rubble
+    removals against 14997."""
+    out = {k: hist([]) for k in ("aoe_tiles", "aoe_dups", "aoe_delay", "aoe_offset", "fire_first", "fire_later", "fire_under", "fire_orient", "piles", "rubble")}
+    for ev in fights.values():
+        boss = lambda a: [e["t"] for e in ev if e["kind"] == "ANIM" and base(e["actor"]) == "16684" and e["id"] == a]
+        aoes, blasts = boss("14992"), boss("14989")
+        by_tick = collections.defaultdict(list)
+        for e in ev:
+            if e["kind"] == "GFX" and e["id"] == "4379":
+                by_tick[e["t"]].append((e["x"], e["y"]))
+                out["aoe_delay"][e["a"]] += 1
+        for t, tiles in by_tick.items():
+            out["aoe_tiles"][len(set(tiles))] += 1
+            out["aoe_dups"][len(tiles) - len(set(tiles))] += 1
+            out["aoe_offset"][t - max(a for a in aoes if a <= t)] += 1
+        if len(blasts) < 3:
+            continue
+        land = blasts[2] + 3
+        ranged = sorted(boss("14985"))
+        starts = [x for i, x in enumerate(ranged) if i == 0 or x - ranged[i - 1] >= 9]
+        fires = collections.defaultdict(list)
+        for e in ev:
+            if e["kind"] == "OBJ+" and e["id"] == "62713":
+                fires[e["t"]].append((e["x"], e["y"]))
+                out["fire_orient"][e["b"]] += 1
+            elif e["kind"] == "OBJ+" and e["id"] in XARTH_PILE_IDS:
+                out["piles"][(e["t"] - land, e["id"], e["x"], e["y"], e["b"])] += 1
+            elif e["kind"] == "OBJ-" and e["id"] in ("62711", "62712"):
+                broke = [b["t"] for b in ev if b["kind"] == "ANIM" and b["id"] == "14997" and (b["x"], b["y"]) == (e["x"], e["y"])]
+                out["rubble"][(e["id"], e["x"], e["y"], min((e["t"] - b for b in broke), key=abs, default="no 14997"))] += 1
+        pos = {e["t"]: (e["x"], e["y"]) for e in ev if e["kind"] == "POS"}
+        for t, tiles in fires.items():
+            out["fire_under"][pos.get(t) in tiles] += 1
+            if t == land:
+                out["fire_first"][len(tiles)] += 1
+            elif t > land:
+                before = [x for x in starts if x <= t]
+                if before and t - before[-1] <= 12:
+                    out["fire_later"][t - before[-1]] += 1
+    return out
+
+
+def xarth_ground_laws(real, sim, failures):
+    """4379 is drawn once per tile with delay 121 on the 14992 tick, the arena fire starts as 7 tiles on the third blast's landing and then 6 to 8
+    ticks into each ranged cycle off the player, orientation 0, and the pile fires and rubble removals are the recorded sets."""
+    r, s = xarth_ground(real), xarth_ground(sim)
+    labels = (("aoe_delay", "4379 delay"), ("aoe_offset", "4379 offset from 14992"), ("aoe_dups", "4379 duplicate tiles"), ("fire_first", "first fire batch size"),
+              ("fire_later", "fire offset from cycle start"), ("fire_under", "fire spawn under P0"), ("fire_orient", "fire orientation"),
+              ("piles", "corpse pile fires"), ("rubble", "rubble removals"))
+    for key, label in labels:
+        shapes_law(label, r[key], s[key], failures)
+    ok = max(s["aoe_tiles"]) <= max(r["aoe_tiles"]) and min(s["aoe_tiles"]) >= 1
+    if not ok:
+        failures.append("4379 tiles per event")
+    print(f"{'ok ' if ok else 'BAD'} {'4379 tiles per event':28s} real {fmt(r['aoe_tiles']):42s} sim {fmt(s['aoe_tiles'])}")
+
+
 def xarth(real, sim):
     failures = []
     for anim in ("14984", "14985", "14992", "14989"):
@@ -292,6 +400,7 @@ def xarth(real, sim):
         failures.append("corpse hp")
     print(f"{'ok ' if ok else 'BAD'} {'corpse hp (max damage taken)':28s} real {max(v for v, n in rk.items() if n >= 3):<42} sim {max(sk)}")
     median_law("blast damage", blast_hits(real), blast_hits(sim), 3, failures)
+    xarth_ground_laws(real, sim, failures)
     return failures
 
 

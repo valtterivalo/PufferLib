@@ -13,6 +13,7 @@ typedef struct {
 typedef struct {
     int kind;
     int gfx;
+    int x, y;
 } DumpHazard;
 
 typedef struct {
@@ -98,12 +99,14 @@ int main(int argc, char** argv) {
                 int loc = h->kind == TFA_HAZ_NONE ? -1 : h->loc_id;
                 int gfx = h->kind == TFA_HAZ_NONE ? -1 : h->gfx_id;
                 if (d->gfx > 0 && d->gfx != loc)
-                    printf("%s\t%d\tOBJ-\t-\t%d\t%d\t%d\t1x1\t0\t-\n", fid, t, d->gfx, h->x, h->y);
+                    printf("%s\t%d\tOBJ-\t-\t%d\t%d\t%d\t1x1\t0\t-\n", fid, t, d->gfx, d->x, d->y);
                 if (loc > 0 && d->gfx != loc)
                     printf("%s\t%d\tOBJ+\t-\t%d\t%d\t%d\t1x1\t%d\t-\n", fid, t, loc, h->x, h->y, h->orientation);
                 if (gfx > 0 && d->kind != h->kind + 1000 * gfx)
                     printf("%s\t%d\tGFX\t-\t%d\t%d\t%d\t-\t-\t-\n", fid, t, gfx, h->x, h->y);
                 d->gfx = loc;
+                d->x = h->x;
+                d->y = h->y;
                 d->kind = h->kind == TFA_HAZ_NONE ? 0 : h->kind + 1000 * gfx;
             }
             for (int i = 0; i < s->fx_count; i++) {
