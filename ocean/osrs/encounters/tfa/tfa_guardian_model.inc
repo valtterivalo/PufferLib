@@ -31,6 +31,7 @@ typedef struct {
     int healed;
     int blast_land_tick;
     int double_magic_tick;
+    int fire_tick;
     int dead;
 } TfaXarthState;
 

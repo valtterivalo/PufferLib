@@ -14,6 +14,9 @@
 #define XARTH_ANIM_DEATH 14995
 #define XARTH_ANIM_PILLAR_BREAK 14997
 #define XARTH_GFX_AOE 4379
+#define XARTH_LOC_RUBBLE_1 62712
+#define XARTH_LOC_RUBBLE_2 62711
+#define XARTH_LOC_ARENA_FIRE 62713
 #define XARTH_PROJ_RANGED 4374
 #define XARTH_PROJ_MAGIC 4034
 
@@ -45,6 +48,9 @@ typedef struct {
     int corpse_offset;           /* corpses spawn 2 and 0 ticks before a cycle's first ranged */
     int heal_blast;              /* wiki: 200 healed starts an arena blast; P2 blasts 42..57 on all, then +10 to the next attack */
     int heal_blast_recover;
+    int aoe_gfx_delay;           /* 4379 starts 121 cycles after the cast, once per tile (60/60) */
+    int fire_first_tiles;        /* the first arena fire batch is 7 tiles on the third blast's landing tick (4/4) */
+    int fire_offset_min, fire_offset_span; /* later batches 6, 7 or 8 ticks after a cycle's first ranged: 26, 26, 21 of 73 */
 } TfaXarthTuning;
 
 static const TfaXarthTuning TFA_XARTH = {
@@ -77,9 +83,20 @@ static const TfaXarthTuning TFA_XARTH = {
     .corpse_offset = 2,
     .heal_blast = 200,
     .heal_blast_recover = 10,
+    .aoe_gfx_delay = 121,
+    .fire_first_tiles = 7,
+    .fire_offset_min = 6,
+    .fire_offset_span = 3,
 };
 
 static const int8_t TFA_XARTH_PILLAR_TILES[3][2] = { {33, 26}, {33, 36}, {36, 32} };
+static const int32_t TFA_XARTH_RUBBLE_LOCS[3] = { XARTH_LOC_RUBBLE_1, XARTH_LOC_RUBBLE_1, XARTH_LOC_RUBBLE_2 };
+
+/* The eight corpse pile fires at tick 88 (4/4 fights): loc id and tile, orientation 0. */
+static const int32_t TFA_XARTH_PILE_FIRES[8][3] = {
+    {62748, 31, 42}, {62750, 40, 32}, {62752, 31, 21}, {62754, 20, 32},
+    {62756, 20, 39}, {62758, 40, 39}, {62760, 40, 19}, {62762, 19, 20},
+};
 
 /* Arena interior is x, y in [24, 38]; corpses rise on the ring at 23 and 39. */
 #define XARTH_RING_LO 23
@@ -91,13 +108,19 @@ static TfaNpc* tfa_xarth_boss(TfaState* s) {
     return n;
 }
 
+static void tfa_xarth_loc(TfaState* s, int loc, int x, int y, int size) {
+    tfa_hazard_add(s, (TfaHazard){ .kind = TFA_HAZ_LOC, .w = (uint8_t)size, .h = (uint8_t)size, .owner = -1, .x = (int16_t)x, .y = (int16_t)y, .loc_id = loc });
+}
+
 static void tfa_xarth_enter(TfaState* s) {
     const TfaRoomLayout* l = tfa_room_layout(TFA_ROOM_XARTH);
     TfaNpc* x = tfa_npc_spawn(s, TFA_NPC_XARTH, MON_TFA_XARTH, XARTH_NPC, l->boss_x, l->boss_y);
     x->hp = x->max_hp = tfa_party_hp(s, MONSTER_DATABASE[MON_TFA_XARTH].hp, TFA_XARTH.hp_trio);
-    for (int i = 0; i < 3; i++)
+    for (int i = 0; i < 3; i++) {
         tfa_npc_spawn_inert(s, TFA_NPC_XARTH_PILLAR, XARTH_NPC_PILLAR, 2,
             TFA_XARTH_PILLAR_TILES[i][0], TFA_XARTH_PILLAR_TILES[i][1]);
+        tfa_xarth_loc(s, TFA_XARTH_RUBBLE_LOCS[i], TFA_XARTH_PILLAR_TILES[i][0], TFA_XARTH_PILLAR_TILES[i][1], 2);
+    }
     s->boss.xarth = (TfaXarthState){ .next_attack = TFA_XARTH.first_attack, .blast_land_tick = -1 };
 }
 
@@ -147,10 +170,11 @@ static void tfa_xarth_ranged(TfaState* s, TfaNpc* x) {
         SPOTANIM_TFA_XARTH_VFX_XARTH_ATTACK_RANGED_PROJECTILE_01_ANIM, TFA_XARTH.ranged_launch, TFA_XARTH.ranged_hit - TFA_XARTH.ranged_launch);
 }
 
-/* AOE tiles: each player's tile and, half the time, one neighbour (4-6 tiles for 3 players, 12/12 casts). */
+/* AOE tiles: each player's tile and, half the time, one neighbour (4-6 distinct tiles for 3 players, 12/12 casts), each drawn once. */
 static void tfa_xarth_aoe(TfaState* s, TfaNpc* x) {
     x->act = TFA_ACT_SPECIAL;
     tfa_npc_anim(s, x, XARTH_ANIM_AOE);
+    int tx[2 * TFA_MAX_PLAYERS], ty[2 * TFA_MAX_PLAYERS], n = 0;
     for (int p = 0; p < s->team_size; p++) {
         if (!tfa_alive(s, p)) continue;
         const Player* pl = &s->players[p].player;
@@ -162,20 +186,41 @@ static void tfa_xarth_aoe(TfaState* s, TfaNpc* x) {
                 dx = ENCOUNTER_MOVE_TARGET_DX[a] > 0 ? 1 : ENCOUNTER_MOVE_TARGET_DX[a] < 0 ? -1 : 0;
                 dy = ENCOUNTER_MOVE_TARGET_DY[a] > 0 ? 1 : ENCOUNTER_MOVE_TARGET_DY[a] < 0 ? -1 : 0;
             }
+            int hx = pl->x + dx, hy = pl->y + dy, seen = 0;
+            for (int j = 0; j < n; j++) seen |= tx[j] == hx && ty[j] == hy;
+            if (seen) continue;
+            tx[n] = hx;
+            ty[n++] = hy;
+            tfa_fx_ground(s, hx, hy, XARTH_GFX_AOE, TFA_XARTH.aoe_gfx_delay);
             tfa_hazard_add(s, (TfaHazard){
                 .kind = TFA_HAZ_STRIKE,
                 .style = ATTACK_STYLE_NONE,
                 .w = 1, .h = 1,
                 .owner = -1,
-                .x = (int16_t)(pl->x + dx), .y = (int16_t)(pl->y + dy),
+                .x = (int16_t)hx, .y = (int16_t)hy,
                 .start_tick = s->tick + TFA_XARTH.aoe_land,
                 .end_tick = s->tick + TFA_XARTH.aoe_land,
                 .min_damage = (int16_t)TFA_XARTH.aoe_min_damage,
                 .max_damage = (int16_t)TFA_XARTH.aoe_max_damage,
                 .protected_pct = 100,
-                .gfx_id = XARTH_GFX_AOE,
             });
         }
+    }
+}
+
+/* Arena fire on a random arena tile off the boss and every living player (0/248 under P0). It burns nothing: no recorded burn hit stands on a fire tile (2 of 7 fire ticks, burn hits come every 4 ticks from the AOE). */
+static void tfa_xarth_fire(TfaState* s, const TfaNpc* x, int tiles) {
+    const TfaRoomLayout* l = tfa_room_layout(TFA_ROOM_XARTH);
+    for (int k = 0; k < tiles; k++) {
+        int fx, fy, bad;
+        do {
+            fx = XARTH_RING_LO + tfa_rand(s, XARTH_RING_HI - XARTH_RING_LO + 1);
+            fy = XARTH_RING_LO + tfa_rand(s, XARTH_RING_HI - XARTH_RING_LO + 1);
+            bad = tfa_layout_blocked(l, fx, fy) || (fx >= x->x && fx < x->x + x->size && fy >= x->y && fy < x->y + x->size);
+            for (int p = 0; p < s->team_size; p++)
+                bad |= tfa_alive(s, p) && s->players[p].player.x == fx && s->players[p].player.y == fy;
+        } while (bad);
+        tfa_xarth_loc(s, XARTH_LOC_ARENA_FIRE, fx, fy, 1);
     }
 }
 
@@ -207,6 +252,10 @@ static void tfa_xarth_blast_land(TfaState* s, TfaNpc* x) {
     }
     for (int i = 0; i < TFA_MAX_NPCS; i++) {
         if (!broken[i]) continue;
+        for (int h = 0; h < TFA_MAX_HAZARDS; h++) {
+            TfaHazard* r = &s->hazards[h];
+            if (r->kind == TFA_HAZ_LOC && r->x == s->npcs[i].x && r->y == s->npcs[i].y && r->w == 2) r->kind = TFA_HAZ_NONE;
+        }
         s->npcs[i].npc_id = XARTH_NPC_PILLAR_BROKEN;
         tfa_npc_anim(s, &s->npcs[i], XARTH_ANIM_PILLAR_BREAK);
         s->npcs[i].state_ticks = 3;
@@ -255,6 +304,10 @@ static void tfa_xarth_npc_died(TfaState* s, TfaNpc* n, int attacker) {
     s->boss.xarth.dead = 1;
 }
 
+static int tfa_xarth_p1_end(void) {
+    return TFA_XARTH.p1_cycle * (TFA_XARTH.p1_cycles - 1) + TFA_XARTH.first_attack + TFA_XARTH.magic_interval * TFA_XARTH.p1_magics;
+}
+
 static void tfa_xarth_tick(TfaState* s, TfaContext* ctx) {
     TfaXarthState* xs = &s->boss.xarth;
     if (xs->dead) {
@@ -268,10 +321,16 @@ static void tfa_xarth_tick(TfaState* s, TfaContext* ctx) {
         TfaNpc* p = &s->npcs[i];
         if (p->active && p->npc_id == XARTH_NPC_PILLAR_BROKEN && --p->state_ticks <= 0) p->active = 0;
     }
-    if (xs->blast_land_tick == s->tick) tfa_xarth_blast_land(s, x);
+    if (xs->blast_land_tick == s->tick) {
+        tfa_xarth_blast_land(s, x);
+        if (xs->clock == tfa_xarth_p1_end() + TFA_XARTH.aoe_to_blast + TFA_XARTH.blast_land) {
+            for (int i = 0; i < 8; i++) tfa_xarth_loc(s, TFA_XARTH_PILE_FIRES[i][0], TFA_XARTH_PILE_FIRES[i][1], TFA_XARTH_PILE_FIRES[i][2], 1);
+            tfa_xarth_fire(s, x, TFA_XARTH.fire_first_tiles);
+        }
+    }
     tfa_xarth_corpses_tick(s, x);
 
-    int p1_end = TFA_XARTH.p1_cycle * (TFA_XARTH.p1_cycles - 1) + TFA_XARTH.first_attack + TFA_XARTH.magic_interval * TFA_XARTH.p1_magics;
+    int p1_end = tfa_xarth_p1_end();
     if (xs->clock <= p1_end + TFA_XARTH.aoe_to_blast) {
         int k = (xs->clock - TFA_XARTH.first_attack) % TFA_XARTH.p1_cycle;
         if (xs->clock < TFA_XARTH.first_attack || k < 0) return;
@@ -289,6 +348,8 @@ static void tfa_xarth_tick(TfaState* s, TfaContext* ctx) {
         xs->cycle_start = xs->clock + 2 * TFA_XARTH.magic_interval + TFA_XARTH.p2_cycle - 4 * TFA_XARTH.magic_interval;
     }
     if (xs->clock == xs->cycle_start - TFA_XARTH.corpse_offset || xs->clock == xs->cycle_start) tfa_xarth_spawn_corpse(s);
+    if (xs->clock == xs->cycle_start) xs->fire_tick = xs->clock + TFA_XARTH.fire_offset_min + tfa_rand(s, TFA_XARTH.fire_offset_span);
+    if (xs->clock == xs->fire_tick) tfa_xarth_fire(s, x, tfa_alive_count(s));
     if (xs->clock == xs->double_magic_tick) tfa_xarth_magic(s, x);
     if (xs->clock == xs->next_attack) {
         if (xs->healed >= TFA_XARTH.heal_blast) {

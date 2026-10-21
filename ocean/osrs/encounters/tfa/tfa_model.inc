@@ -1,7 +1,7 @@
 #define TFA_MAX_PLAYERS 4
 #define TFA_MAX_NPCS 64
 #define TFA_NUM_TARGET_SLOTS 16
-#define TFA_MAX_HAZARDS 256
+#define TFA_MAX_HAZARDS 512
 #define TFA_ARENA_MAX ENCOUNTER_ARENA_TOPOLOGY_MAX_DIMENSION
 #define TFA_PLAYER_PRAYER 99
 #define TFA_ROOM_MAX_TICKS 3000
@@ -111,6 +111,8 @@ typedef enum {
     TFA_HAZ_FLOOR,
     /* Guardian mushroom: arms, then bursts when a player comes within reach. */
     TFA_HAZ_MUSHROOM,
+    /* A loc that damages nothing, removed by its room. */
+    TFA_HAZ_LOC,
 } TfaHazardKind;
 
 typedef struct {
