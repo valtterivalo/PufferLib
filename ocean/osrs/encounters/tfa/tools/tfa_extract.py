@@ -93,7 +93,7 @@ def reduce_record(rec):
             geo = [1, 1, 0]
         else:
             raise ValueError(ok)
-        return [tag, t, s, p["objectId"], w["x"], w["y"], *geo, ok[0]]
+        return [tag, t, s, p["objectId"], w["x"], w["y"], *geo, {"GAME_OBJECT": "G", "WALL_OBJECT": "W", "GROUND_OBJECT": "F", "DECORATIVE_OBJECT": "D"}[ok], p["config"]]
     if kind == "SCENE_COLLISION_OBSERVED":
         g = p["grid"]
         assert g["encoding"] == "SIGNED_INT32_BIG_ENDIAN_BASE64_V1" and g["width"] == 104 and g["height"] == 104
@@ -485,7 +485,7 @@ def build_fight(rows, local, boss, first, last, first_row, gv, rule_ids):
                 continue
             if r[3] in seen_obj_gv:
                 x, y = rel(r[4], r[5])
-                add("OBJ+" if k == "B" else "OBJ-", "-", r[3], x, y, a=f"{r[6]}x{r[7]}", b=r[8])
+                add("OBJ+" if k == "B" else "OBJ-", "-", r[3], x, y, a=f"{r[6]}x{r[7]}", b=r[8], c=f"{r[9]}{r[10] & 31}r{r[10] >> 6 & 3}")
     f.pray_ticks = sorted(f.p0_pray)
     f.static_objects = collections.Counter(static_objects)
     f.static_npcs = sorted({(n[1], n[2] - ox, n[3] - oy) for n in first_row[12]})
