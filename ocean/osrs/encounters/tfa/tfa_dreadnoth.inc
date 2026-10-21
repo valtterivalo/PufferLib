@@ -11,6 +11,8 @@
 #define DREAD_ANIM_JELLY_SPAWN 15162
 #define DREAD_ANIM_JELLY_DEATH 1587
 #define DREAD_LOC_BLOOD_TILE 62609
+#define DREAD_GFX_JUMP 4209
+#define DREAD_GFX_MARK 4210
 #define DREAD_PROJ_VOLLEY 4211
 #define DREAD_PROJ_GLOB 4212
 #define DREAD_PROJ_LAUNCH 2
@@ -58,6 +60,13 @@ typedef struct {
     int blood_min, blood_max;    /* standing on object 62609: 7 or 8 (n=19) */
     int blood_per_slam;          /* 3 objects one tick after a slam around the boss, provisional placement */
     int blood_slam_delay;
+    int blood_per_jump;          /* 5 draws on the 7x7 around the landing 3 ticks after the anim: best of N=3..7 by likelihood over 52 jumps */
+    int blood_land_delay;        /* new tiles 3 ticks after 14780 (174 tiles, 52 jumps) */
+    int mark_per_tick;           /* 3 new markers per tick for 3 ticks (14 of 14 nine-tile groups 3,3,3, 28 of 75 slams 3,1) */
+    int mark_seed_tick;          /* first round reads the player tile 3 ticks after the slam (39 of 39 P0 seeds), the markers show at +4 */
+    int mark_ring1_weight;       /* derived tile: 186 within 1 of the seed, 79 at 2, so 5 per ring-1 tile against 1 per ring-2 tile (8 and 16 tiles) */
+    int mark_first_delay_seed;   /* GFX 4210 delay of a seed's first tick */
+    int mark_first_delay_derived;/* 265 derived tile starts a=31 */
 } TfaDreadnothTuning;
 
 static const TfaDreadnothTuning TFA_DREAD = {
@@ -103,6 +112,13 @@ static const TfaDreadnothTuning TFA_DREAD = {
     .blood_max = 8,
     .blood_per_slam = 3,
     .blood_slam_delay = 1,
+    .blood_per_jump = 5,
+    .blood_land_delay = 3,
+    .mark_per_tick = 3,
+    .mark_seed_tick = 3,
+    .mark_ring1_weight = 5,
+    .mark_first_delay_seed = 1,
+    .mark_first_delay_derived = 31,
 };
 
 static const int8_t DREAD_NEIGHBOUR[8][2] = { {-1,-1}, {0,-1}, {1,-1}, {-1,0}, {1,0}, {-1,1}, {0,1}, {1,1} };
@@ -162,6 +178,7 @@ static void tfa_dread_blood(TfaState* s, int x, int y) {
         .max_damage = (int16_t)TFA_DREAD.blood_max,
         .protected_pct = 100,
         .loc_id = DREAD_LOC_BLOOD_TILE,
+        .orientation = (int16_t)(512 * tfa_rand(s, 4)),
     });
 }
 
@@ -266,38 +283,41 @@ static void tfa_dread_jelly_act(TfaState* s, TfaNpc* j) {
     }
 }
 
-/* Spawn tiles of one slam: each player's tile first, then neighbours of tiles already chosen. */
-static void tfa_dread_pick_spawn_tiles(TfaState* s, int count) {
+/* One round of spawn markers (GFX 4210, 39 of 39 emergences equal the marker set at the last tick before). Round r runs mark_seed_tick + r
+   ticks after the slam and takes picks tiles, one per living player in turn: the player's own tile when unmarked (157 starts with
+   delay 1, 127 of them at +4), else a tile within 2 of the player's (265 starts with delay 31). The tile first shows next tick. */
+static void tfa_dread_mark_round(TfaState* s, int picks) {
     TfaDreadnothState* d = &s->boss.dreadnoth;
-    int added = 0;
-    for (int p = 0; p < s->team_size && added < count; p++) {
-        if (!tfa_alive(s, p)) continue;
-        int x = s->players[p].player.x, y = s->players[p].player.y;
-        int dup = 0;
-        for (int i = 0; i < d->spawn_n; i++) dup |= d->spawn_x[i] == x && d->spawn_y[i] == y;
-        if (dup || !tfa_dread_tile_free(s, x, y)) continue;
+    int alive[TFA_MAX_PLAYERS], n_alive = 0;
+    for (int p = 0; p < s->team_size; p++) if (tfa_alive(s, p)) alive[n_alive++] = p;
+    assert(n_alive > 0);
+    for (int k = 0; k < picks; k++) {
+        const Player* pl = &s->players[alive[k % n_alive]].player;
+        int x = pl->x, y = pl->y, seed = 1;
+        for (int i = 0; i < d->spawn_n && seed; i++) seed = d->spawn_x[i] != x || d->spawn_y[i] != y;
+        if (!seed) {
+            int cx[225], cy[225], cw[225], total = 0, n = 0;
+            for (int reach = 2; n == 0; reach++) {
+                for (int dx = -reach; dx <= reach; dx++) {
+                    for (int dy = -reach; dy <= reach; dy++) {
+                        int tx = pl->x + dx, ty = pl->y + dy, dup = !tfa_dread_tile_free(s, tx, ty);
+                        for (int i = 0; i < d->spawn_n && !dup; i++) dup = d->spawn_x[i] == tx && d->spawn_y[i] == ty;
+                        if (dup) continue;
+                        cx[n] = tx; cy[n] = ty;
+                        cw[n] = abs(dx) <= 1 && abs(dy) <= 1 ? TFA_DREAD.mark_ring1_weight : 1;
+                        total += cw[n++];
+                    }
+                }
+            }
+            int pick = tfa_rand(s, total), i = 0;
+            while (pick >= cw[i]) pick -= cw[i++];
+            x = cx[i]; y = cy[i];
+        }
         assert(d->spawn_n < TFA_DREAD_MAX_SPAWN);
         d->spawn_x[d->spawn_n] = (int8_t)x;
-        d->spawn_y[d->spawn_n++] = (int8_t)y;
-        added++;
-    }
-    while (added < count) {
-        int cx[TFA_DREAD_MAX_SPAWN * 8], cy[TFA_DREAD_MAX_SPAWN * 8], n = 0;
-        for (int i = 0; i < d->spawn_n; i++) {
-            for (int a = 0; a < 8; a++) {
-                int x = d->spawn_x[i] + DREAD_NEIGHBOUR[a][0];
-                int y = d->spawn_y[i] + DREAD_NEIGHBOUR[a][1];
-                int dup = !tfa_dread_tile_free(s, x, y);
-                for (int k = 0; k < d->spawn_n && !dup; k++) dup = d->spawn_x[k] == x && d->spawn_y[k] == y;
-                for (int k = 0; k < n && !dup; k++) dup = cx[k] == x && cy[k] == y;
-                if (!dup) { cx[n] = x; cy[n++] = y; }
-            }
-        }
-        assert(n > 0 && d->spawn_n < TFA_DREAD_MAX_SPAWN);
-        int pick = tfa_rand(s, n);
-        d->spawn_x[d->spawn_n] = (int8_t)cx[pick];
-        d->spawn_y[d->spawn_n++] = (int8_t)cy[pick];
-        added++;
+        d->spawn_y[d->spawn_n] = (int8_t)y;
+        d->mark_tick[d->spawn_n] = s->tick + 1;
+        d->mark_delay[d->spawn_n++] = (int8_t)(seed ? TFA_DREAD.mark_first_delay_seed : TFA_DREAD.mark_first_delay_derived);
     }
 }
 
@@ -316,7 +336,10 @@ static void tfa_dread_slam(TfaState* s, TfaNpc* b) {
                 SPOTANIM_TFA_DREADNOTH_TFA_UNNAMED_4211_ANIM, DREAD_PROJ_LAUNCH, TFA_DREAD.volley_delay[k] - DREAD_PROJ_LAUNCH);
         }
     }
-    tfa_dread_pick_spawn_tiles(s, TFA_DREAD.spawn_tiles[d->phase_slams - 1]);
+    int tiles = TFA_DREAD.spawn_tiles[d->phase_slams - 1];
+    for (int r = 0; r * TFA_DREAD.mark_per_tick < tiles; r++)
+        tfa_dread_schedule(s, s->tick + TFA_DREAD.mark_seed_tick + r, TFA_DREAD_EV_MARK, -1,
+            tiles - r * TFA_DREAD.mark_per_tick < TFA_DREAD.mark_per_tick ? tiles - r * TFA_DREAD.mark_per_tick : TFA_DREAD.mark_per_tick, 0);
     for (int k = 0; k < TFA_DREAD.blood_per_slam; k++)
         tfa_dread_schedule(s, s->tick + TFA_DREAD.blood_slam_delay, TFA_DREAD_EV_BLOOD, -1,
             b->x - 1 + tfa_rand(s, b->size + 2), b->y - 1 + tfa_rand(s, b->size + 2));
@@ -342,6 +365,10 @@ static void tfa_dread_jump(TfaState* s, TfaNpc* b) {
     b->y = (int16_t)best_ay;
     b->act = TFA_ACT_SPECIAL;
     tfa_npc_anim(s, b, DREAD_ANIM_JUMP);
+    tfa_fx_ground(s, b->x + b->size / 2, b->y + b->size / 2, DREAD_GFX_JUMP, 1);
+    for (int k = 0; k < TFA_DREAD.blood_per_jump; k++)
+        tfa_dread_schedule(s, s->tick + TFA_DREAD.blood_land_delay, TFA_DREAD_EV_BLOOD, -1,
+            b->x - 1 + tfa_rand(s, b->size + 2), b->y - 1 + tfa_rand(s, b->size + 2));
     for (int p = 0; p < s->team_size; p++) {
         if (!tfa_alive(s, p)) continue;
         tfa_dread_schedule(s, s->tick + TFA_DREAD.jump_land_delay, TFA_DREAD_EV_JUMP_LAND, p, b->x, b->y);
@@ -360,6 +387,9 @@ static void tfa_dread_fire_event(TfaState* s, TfaNpc* b, const TfaDreadEvent* ev
     switch ((TfaDreadEventKind)ev->kind) {
         case TFA_DREAD_EV_BLOOD:
             tfa_dread_blood(s, ev->x, ev->y);
+            return;
+        case TFA_DREAD_EV_MARK:
+            tfa_dread_mark_round(s, ev->x);
             return;
         case TFA_DREAD_EV_JUMP_LAND: {
             if (!tfa_alive(s, p)) return;
@@ -468,6 +498,9 @@ static void tfa_dread_tick(TfaState* s, TfaContext* ctx) {
         d->spawn_n = 0;
         d->spawn_tick = -1;
     }
+    for (int i = 0; i < d->spawn_n; i++)
+        if (s->tick >= d->mark_tick[i])
+            tfa_fx_ground(s, d->spawn_x[i], d->spawn_y[i], DREAD_GFX_MARK, s->tick == d->mark_tick[i] ? d->mark_delay[i] : 1);
     for (int i = 0; i < TFA_MAX_NPCS; i++) {
         TfaNpc* j = &s->npcs[i];
         if (j->active && j->kind == TFA_NPC_JELLY && j->anim_tick != s->tick) {

@@ -37,6 +37,7 @@ typedef struct {
 typedef enum {
     TFA_DREAD_EV_NONE = 0,
     TFA_DREAD_EV_BLOOD,
+    TFA_DREAD_EV_MARK,
     TFA_DREAD_EV_JUMP_LAND,
     TFA_DREAD_EV_JUMP_THROW,
     TFA_DREAD_EV_GLOB,
@@ -61,6 +62,8 @@ typedef struct {
     int spawn_tick;
     int spawn_n;
     int8_t spawn_x[TFA_DREAD_MAX_SPAWN], spawn_y[TFA_DREAD_MAX_SPAWN];
+    int32_t mark_tick[TFA_DREAD_MAX_SPAWN];
+    int8_t mark_delay[TFA_DREAD_MAX_SPAWN];
     int engaged;
     int walk_timer;
     int walk_window;
