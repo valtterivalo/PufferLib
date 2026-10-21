@@ -35,7 +35,8 @@ typedef enum {
     MON_TFA_VOID_RIFT = 28,
     MON_TFA_VOID_AUGMENTER = 29,
     MON_TFA_VOID_VINE = 30,
-    NUM_MONSTERS = 31
+    MON_TFA_XARTH_CORPSE = 31,
+    NUM_MONSTERS = 32
 } MonsterIndex;
 
 typedef struct {
@@ -368,6 +369,17 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .npc_id = 16681, .name = "Void Vine",
         .hp = 44, .att_level = 0, .str_level = 0, .def_level = 0,
         .magic_level = 0, .range_level = 0,
+        .attack_speed = 0, .size = 1, .max_hit = 0,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
+        .range_att_bonus = 0, .ranged_str_bonus = 0,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0,
+        .magic_def = 0, .ranged_def = 0
+    },
+    /* HP 62 measured (100 of 108 killed corpses took exactly 62); the wiki infobox is blank, levels 1 and bonuses 0 stand in. */
+    [MON_TFA_XARTH_CORPSE] = {
+        .npc_id = 16687, .name = "Corpse",
+        .hp = 62, .att_level = 1, .str_level = 1, .def_level = 1,
+        .magic_level = 1, .range_level = 1,
         .attack_speed = 0, .size = 1, .max_hit = 0,
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,

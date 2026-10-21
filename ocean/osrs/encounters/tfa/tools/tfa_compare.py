@@ -55,6 +55,33 @@ def anim_to_p0_hit(fights, anim, window=8):
     return hist(out)
 
 
+def targeted_hit_delay(fights, anim, window=8):
+    """Delay from an attack anim to the next P0 hit, for anims whose projectile (real) or target (sim) is P0."""
+    out = []
+    for ev in fights.values():
+        hits = [e for e in ev if e["kind"] == "HIT" and e["actor"] == "P0" and e["a"] in ("16", "12")]
+        for a in (e for e in ev if e["kind"] == "ANIM" and e["id"] == anim):
+            aimed = any(
+                (e["kind"] == "PROJ" and e["actor"] == a["actor"] and 0 <= e["t"] - a["t"] <= 3 and e["a"] == "P0")
+                or (e["kind"] == "TGT" and e["actor"] == a["actor"] and e["t"] == a["t"] and e["a"] == "P0")
+                for e in ev if abs(e["t"] - a["t"]) <= 3)
+            if not aimed:
+                continue
+            h = next((h for h in hits if a["t"] <= h["t"] <= a["t"] + window), None)
+            if h:
+                out.append(h["t"] - a["t"])
+    return hist(out)
+
+
+def median_law(name, real, sim, tol, failures):
+    r = sorted(real)
+    m = sorted(sim)
+    ok = bool(r) and bool(m) and abs(r[len(r) // 2] - m[len(m) // 2]) <= tol
+    if not ok:
+        failures.append(name)
+    print(f"{'ok ' if ok else 'BAD'} {name:28s} real median {r[len(r) // 2] if r else '-'} (n={len(r)}){'':22s} sim median {m[len(m) // 2] if m else '-'} (n={len(m)})")
+
+
 def ground_durations(fights):
     out = collections.defaultdict(list)
     for ev in fights.values():
@@ -158,6 +185,89 @@ def guardian(real, sim):
     return failures
 
 
+def schedule(fights, anim):
+    out = []
+    for ev in fights.values():
+        anims = [e for e in ev if e["kind"] == "ANIM" and base(e["actor"]) == "16684" and e["id"] in ATTACKS["xarth"]]
+        if not anims:
+            continue
+        t0 = anims[0]["t"]
+        out += [e["t"] - t0 for e in anims if e["id"] == anim]
+    return out
+
+
+def first_of(fights, anim):
+    out = []
+    for ev in fights.values():
+        anims = [e for e in ev if e["kind"] == "ANIM" and base(e["actor"]) == "16684" and e["id"] in ATTACKS["xarth"]]
+        if anims:
+            out.append(next((e["t"] - anims[0]["t"] for e in anims if e["id"] == anim), None))
+    return hist(out)
+
+
+def pillar_breaks(fights):
+    out = []
+    for ev in fights.values():
+        aoes = [e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14992"]
+        for e in ev:
+            if e["kind"] == "NPCID" and e["id"] == "16686" or (e["kind"] == "NPC+" and e["id"] == "16686"):
+                a = max((t for t in aoes if t <= e["t"]), default=None)
+                if a is not None:
+                    out.append(e["t"] - a)
+    return hist(out)
+
+
+def corpses(fights):
+    gaps, kills, steps = [], [], []
+    for ev in fights.values():
+        ts = sorted(e["t"] for e in ev if e["kind"] == "NPC+" and e["id"] == "16687")
+        gaps += [b - a for a, b in zip(ts, ts[1:])]
+        hp = collections.Counter()
+        pos = collections.defaultdict(list)
+        life = collections.Counter()
+        for e in ev:
+            if e["kind"] == "NPC+" and e["id"] == "16687":
+                life[e["actor"]] += 1
+            if e["kind"] == "HIT" and base(e["actor"]) == "16687":
+                hp[(e["actor"], life[e["actor"]])] += int(e["id"])
+            if e["kind"] == "NPOS" and base(e["actor"]) == "16687":
+                pos[e["actor"]].append((e["t"], int(e["x"]), int(e["y"])))
+        kills += [v for v in hp.values() if v > 0]
+        for p in pos.values():
+            steps += [max(abs(b[1] - a[1]), abs(b[2] - a[2])) for a, b in zip(p, p[1:]) if b[0] == a[0] + 1]
+    return hist(gaps), hist(kills), hist(steps)
+
+
+def blast_hits(fights):
+    off, amounts = [], []
+    for ev in fights.values():
+        for b in (e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14989"):
+            hs = [h for h in ev if h["kind"] == "HIT" and h["actor"].startswith("P") and h["t"] == b + 3 and h["a"] in ("16", "17") and int(h["id"]) >= 40]
+            amounts += [int(h["id"]) for h in hs]
+    return amounts
+
+
+def xarth(real, sim):
+    failures = []
+    for anim in ("14984", "14985", "14992", "14989"):
+        compare(f"{anim} next attack", next_attack(real, "xarth", anim), next_attack(sim, "xarth", anim), failures)
+    compare("AOE schedule", hist(schedule(real, "14992")), hist(schedule(sim, "14992")), failures)
+    compare("first ranged", first_of(real, "14985"), first_of(sim, "14985"), failures)
+    compare("14985 aimed P0 hit delay", targeted_hit_delay(real, "14985"), targeted_hit_delay(sim, "14985"), failures)
+    compare("14984 aimed P0 hit delay", targeted_hit_delay(real, "14984"), targeted_hit_delay(sim, "14984"), failures)
+    compare("pillar break after AOE", pillar_breaks(real), pillar_breaks(sim), failures)
+    rg, rk, rs = corpses(real)
+    sg, sk, ss = corpses(sim)
+    compare("corpse spawn gap", rg, sg, failures)
+    compare("corpse step", rs, ss, failures)
+    ok = max(sk) <= max(v for v, n in rk.items() if n >= 3)
+    if not ok:
+        failures.append("corpse hp")
+    print(f"{'ok ' if ok else 'BAD'} {'corpse hp (max damage taken)':28s} real {max(v for v, n in rk.items() if n >= 3):<42} sim {max(sk)}")
+    median_law("blast damage", blast_hits(real), blast_hits(sim), 3, failures)
+    return failures
+
+
 def main():
     boss, sim_path = sys.argv[1], sys.argv[2]
     party = sys.argv[3] if len(sys.argv) > 3 else None
@@ -166,7 +276,7 @@ def main():
         meta = {r["fight_id"]: r for r in csv.DictReader(open(FIXTURES / "tfa_fights.tsv"), delimiter="\t")}
         real = {k: v for k, v in real.items() if meta[k]["party_size"] == party}
     sim = load(sim_path)
-    failures = {"guardian": guardian}[boss](real, sim)
+    failures = {"guardian": guardian, "xarth": xarth}[boss](real, sim)
     print(f"{len(failures)} laws differ: {failures}" if failures else "all laws agree")
     sys.exit(1 if failures else 0)
 

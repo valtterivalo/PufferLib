@@ -23,3 +23,15 @@ typedef struct {
     int swoosh_tick;
     int cross_tick;
 } TfaGuardianState;
+
+typedef struct {
+    int clock;
+    int next_attack;
+    int cycle_start;
+    int slot;
+    int p2_started;
+    int healed;
+    int blast_land_tick;
+    int double_magic_tick;
+    int dead;
+} TfaXarthState;

@@ -202,6 +202,7 @@ typedef struct {
     int room_cleared_this_tick;
     union {
         TfaGuardianState guardian;
+        TfaXarthState xarth;
     } boss;
 } TfaState;
 

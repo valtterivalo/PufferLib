@@ -50,9 +50,8 @@ def parse_room(name):
         for y in range(by, by + size):
             flags[y][x] = 0
     starts = collections.Counter()
-    for m in re.finditer(r"P0@start=\((\d+), (\d+)\) P0@start-10=(\(\d+, \d+\)|None)", text):
-        tile = m.group(3) if m.group(3) != "None" else f"({m.group(1)}, {m.group(2)})"
-        starts[tuple(int(v) for v in tile.strip("()").split(", "))] += 1
+    for m in re.finditer(r"P0@start=\((\d+), (\d+)\)", text):
+        starts[(int(m.group(1)), int(m.group(2)))] += 1
     sx, sy = starts.most_common(1)[0][0]
     assert flags[sy][sx] == 0, (name, sx, sy)
     picks = [(sx, sy)]

@@ -70,8 +70,11 @@ int main(int argc, char** argv) {
                 }
                 if (n->active) {
                     printf("%s\t%d\tNPOS\t%d#%d\t%d\t%d\t%d\t-\t-\t-\n", fid, t, n->npc_id, i, n->npc_id, n->x, n->y);
-                    if (n->anim_tick == s->tick && n->anim_id >= 0 && d->anim_tick != s->tick)
+                    if (n->anim_tick == s->tick && n->anim_id >= 0 && d->anim_tick != s->tick) {
                         printf("%s\t%d\tANIM\t%d#%d\t%d\t%d\t%d\t-\t-\t-\n", fid, t, n->npc_id, i, n->anim_id, n->x, n->y);
+                        if (n->act != TFA_ACT_IDLE && n->target >= 0)
+                            printf("%s\t%d\tTGT\t%d#%d\t%d\t-\t-\tP%d\t-\t-\n", fid, t, n->npc_id, i, n->anim_id, n->target);
+                    }
                     for (int h = 0; h < n->hit_count_tick; h++)
                         printf("%s\t%d\tHIT\t%d#%d\t%d\t%d\t%d\t%d\t-\t-\n", fid, t, n->npc_id, i, n->hits_tick[h], n->x, n->y, n->hits_tick[h] > 0 ? 17 : 13);
                     if (n->max_hp > 0)
