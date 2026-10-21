@@ -444,7 +444,8 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .stab_def = 150, .slash_def = 120, .crush_def = 10,
         .magic_def = 100, .ranged_def = 110, .ranged_light_def = 100, .ranged_heavy_def = 80, .def_floor_pct = 60
     },
-    /* The Blade 16676 has no wiki stats: the P2 Ocellus defences stand in; it never loses hp, half its damage transfers to Ocellus. */
+    /* The Blade 16676 has no wiki stats: the P2 Ocellus defences stand in; it never loses hp, half its damage transfers to Ocellus. Light ranged
+       defence 200 fits P0's blowpipe misses (53 of 66 in ocellus_07-09; 100 gave 0.66, 250 gave 0.84). */
     [MON_TFA_OCELLUS_BLADE] = {
         .npc_id = 16676, .name = "The Blade",
         .hp = 1, .att_level = 1, .str_level = 1, .def_level = 250,
@@ -453,7 +454,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 150, .slash_def = 120, .crush_def = 10,
-        .magic_def = 100, .ranged_def = 110, .ranged_light_def = 100, .ranged_heavy_def = 80
+        .magic_def = 100, .ranged_def = 110, .ranged_light_def = 200, .ranged_heavy_def = 80
     },
     /* Void Siphon 16679: no wiki page. Killed by one 44 in recordings (3/3), so the Void Augmenter infobox (hp 44, def 175, mage 300) stands in. */
     [MON_TFA_VOID_SIPHON] = {

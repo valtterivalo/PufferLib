@@ -1708,6 +1708,8 @@ def ocellus(real, sim):
     support("destroy (form, end, next)", ocellus_destroys(real), ocellus_destroys(sim), failures)
     support("destroys at 75/50/25%", ocellus_destroy_hp(real), ocellus_destroy_hp(sim), failures)
     drained_miss_law("P1 miss after the drain", {"16674"}, real, sim, failures)
+    drained_miss_law("P3 miss after the drain", {"16677"}, real, sim, failures)
+    drained_miss_law("Blade miss", {"16676"}, real, sim, failures)
     support_reached("phase 4", ocellus_p4(real), ocellus_p4(sim), failures)
     ocellus_ground_laws(real, sim, failures)
     # Phase 1 only: phase 3's misses follow the team's Division throughput (run 6, 6 raiders, seven throws in phase 3: 0.43-0.48) that a 3-raider

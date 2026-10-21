@@ -796,6 +796,10 @@ static int tfa_ocellus_npc_damage(TfaState* s, TfaNpc* n, int damage, int attack
             oc_boss_heal(n, damage);
             return 0;
         }
+        /* P1 prays Melee while walking to a corner (wiki Strategies, 21 Oct): P0 switched to the blowpipe for 30 of 31 hits landed on him walking, the
+           one Soulreaper hit was a 0, against 25 misses in 68 Soulreaper hits on him standing. */
+        int walking = os->phase == TFA_OCELLUS_P1 && os->barrage && (n->x != OC_CORNERS[os->corner][0] || n->y != OC_CORNERS[os->corner][1]);
+        if (walking && style == ATTACK_STYLE_MELEE) return 0;
         int floor_hp = os->phase == TFA_OCELLUS_P3 ? 1 : 0;
         int applied = damage < n->hp - floor_hp ? damage : n->hp - floor_hp;
         n->hp -= applied;

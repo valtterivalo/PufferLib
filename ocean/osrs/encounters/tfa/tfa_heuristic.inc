@@ -279,7 +279,7 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
             : want == PRAYER_PROTECT_MAGIC ? ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC : ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED;
     /* Weapons per room from the recordings: P0 meleed Ezekiel (1043 Soulreaper attacks) and Ocellus phase 3 (80 Soulreaper hits to 37 ranged in runs 4
        and 5, full damage: he does not protect from melee), blowpiped the Guardian (364 of 852
-       attacks), crossbowed every other boss and barraged corpses and jellies (577 casts); the bow raiders shot everything but Ezekiel (no
+       attacks) and the Blade (44 of 44 hits in the two floored runs), crossbowed every other boss and barraged corpses and jellies (577 casts); the bow raiders shot everything but Ezekiel (no
        arrows there). Openers: the Zaryte special (75%) on the first crossbow shot, two Dragon warhammer specials on Ezekiel, two Tonalztics
        specials six ticks apart thrown from one tile (Guardian 4/4 fights, Xarth 3/3) by one bow raider, who throws another whenever 50% energy
        is back (2727 again at +126 to +256). Bork (one fight, 7 Soulreaper swings while P0 also carried the cannon remains) stays ranged. */
@@ -298,7 +298,7 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
     memset(wanted, ITEM_NONE, sizeof(wanted));
     if (stance == ATTACK_STYLE_RANGED) {
         memcpy(wanted, TFA_KIT_WORN[tp->kit], sizeof(wanted));
-        if (crossbow && s->room == TFA_ROOM_GUARDIAN) {
+        if (crossbow && (s->room == TFA_ROOM_GUARDIAN || target->kind == TFA_NPC_OCELLUS_BLADE)) {
             wanted[GEAR_SLOT_WEAPON] = ITEM_TOXIC_BLOWPIPE;
             wanted[GEAR_SLOT_SHIELD] = ITEM_NONE;
         }

@@ -69,6 +69,7 @@ ocellus_05	ocellus	session_20261020T222136.789Z	6901	6933	attack_anim	6929	7487	
 ocellus_06	ocellus	session_20261020T225649.044Z	10421	10441	attack_anim	-	11238	failed_to_survive_chat	wipe	3	1	2	11240	recording_joined_mid_fight	uncapped
 ocellus_07	ocellus	session_20261021T103603.940Z	16522	16637	attack_anim	16633	17482	failed_to_survive_chat	wipe	5	1	4	17484	recording_ended_mid_fight	uncapped
 ocellus_08	ocellus	session_20261021T151930.073Z	3375	3421	attack_anim	3417	4745	failed_to_survive_chat	wipe	6	1	5	4747	recording_joined_mid_fight	floored
+ocellus_09	ocellus	session_20261021T164442.807Z	4963	5002	attack_anim	4998	6357	failed_to_survive_chat	wipe	5	1	4	6359	recording_joined_mid_fight	floored
 xarth_01	xarth	session_20261020T164504.009Z	33119	33607	attack_anim	33601	34503	challenge_complete_chat	kill	3	0	0	34502	Challenge complete: Xarth. Duration: 9:01. Total: 32:55 (new personal best);ticks_start_to_complete=902	uncapped
 xarth_02	xarth	session_20261020T182203.561Z	44210	44485	attack_anim	44479	44913	challenge_complete_chat	kill	3	0	0	44912	Challenge complete: Xarth. Duration: 4:20. Total: 21:35 (new personal best);ticks_start_to_complete=434	uncapped
 xarth_03	xarth	session_20261020T192913.215Z	50175	50193	attack_anim	50187	50617	failed_to_survive_chat	wipe	3	1	2	50619	-	uncapped
