@@ -1,6 +1,7 @@
 fight_id	boss	recording	first_tick	start_tick	start_kind	challenge_tick	end_tick	end_kind	outcome	party_size	p0_deaths	other_deaths	last_boss_tick	notes	drain
 bork_01	bork	session_20261020T113451.691Z	2711	2743	attack_anim	2735	2910	failed_to_survive_chat	wipe	2	1	1	2911	recording_ended_mid_fight	uncapped
 bork_02	bork	session_20261021T103603.940Z	15091	15185	attack_anim	15177	15583	challenge_complete_chat	kill	5	1	1	15582	recording_joined_mid_fight;Challenge complete: Bork. Duration: 4:04. Total: 7:50 (new personal best);ticks_start_to_complete=406	uncapped
+bork_03	bork	session_20261021T212314.410Z	23917	23920	attack_anim	-	24112	challenge_complete_chat	kill	6	0	0	24111	recording_joined_mid_fight;Challenge complete: Bork. Duration: 3:48. Total: 7:44 (new personal best)	floored
 dreadnoth_01	dreadnoth	session_20261020T132640.798Z	14252	14342	attack_anim	14338	14493	failed_to_survive_chat	wipe	3	1	2	14495	-	uncapped
 dreadnoth_02	dreadnoth	session_20261020T135935.318Z	16637	16677	attack_anim	16673	16845	failed_to_survive_chat	wipe	3	1	2	16845	recording_ended_mid_fight	uncapped
 dreadnoth_03	dreadnoth	session_20261020T144826.321Z	22307	22331	attack_anim	22327	22584	last_boss_tick	unknown	3	1	1	22584	recording_ended_mid_fight	uncapped
@@ -16,6 +17,7 @@ dreadnoth_12	dreadnoth	session_20261020T190740.535Z	48142	48176	attack_anim	4815
 dreadnoth_13	dreadnoth	session_20261020T192913.215Z	49509	49539	attack_anim	49517	49868	challenge_complete_chat	kill	3	0	0	49867	Challenge complete: Dreadnoth the Jellied. Duration: 3:31. Total: 10:31 (new personal best);ticks_start_to_complete=351	uncapped
 dreadnoth_14	dreadnoth	session_20261020T192913.215Z	52321	52385	attack_anim	52365	52722	challenge_complete_chat	kill	3	0	0	52721	Challenge complete: Dreadnoth the Jellied. Duration: 3:34. Total: 17:06. Personal best: 3:31;ticks_start_to_complete=357	uncapped
 dreadnoth_15	dreadnoth	session_20261021T103603.940Z	15622	15729	attack_anim	15723	16026	challenge_complete_chat	kill	5	0	2	16025	Challenge complete: Dreadnoth the Jellied. Duration: 3:02. Total: 12:16 (new personal best);ticks_start_to_complete=303	uncapped
+dreadnoth_16	dreadnoth	session_20261021T212314.410Z	24215	24215	first_seen	-	24220	last_boss_tick	no_combat	6	0	0	24220	recording_ended_mid_fight	floored
 ezekiel_01	ezekiel	session_20261020T114520.705Z	3870	3916	attack_anim	3910	4195	failed_to_survive_chat	wipe	2	1	1	4197	-	uncapped
 ezekiel_02	ezekiel	session_20261020T115858.081Z	5379	5403	attack_anim	5397	5896	failed_to_survive_chat	wipe	2	1	1	5898	-	uncapped
 ezekiel_03	ezekiel	session_20261020T122517.940Z	7735	7735	first_seen	-	8568	last_boss_tick	no_combat	1	0	0	8568	recording_ended_mid_fight	uncapped

@@ -13,7 +13,7 @@ claimed = the note's count of attack-to-attack gaps equal to the stated value. c
 | Xarth 14983 next 4 | cycles-b | 4 (4) | 4 (4) | 4 (4) | match |
 | Xarth 14992 next 3 | cycles-b | 12 (12) | 15 (15) | 15 (15) | DIFFERS |
 | Dreadnoth 14780 next 8 | cycles-b | 44 (45) | 53 (58) | 53 (58) | DIFFERS |
-| Bork 14542 next 7 | cycles-b | 16 (18) | 31 (52) | 31 (52) | DIFFERS |
+| Bork 14542 next 7 | cycles-b | 16 (18) | 31 (73) | 31 (73) | DIFFERS |
 | Moia 14785 next 5 | cycles-b | 6 (9) | 8 (9) | 8 (9) | DIFFERS |
 | Ezekiel 14685 next 5 | cycles-a | 462 (481) | 464 (626) | 464 (626) | DIFFERS |
 | Ezekiel 14686 next 5 | cycles-a | 18 (18) | 19 (23) | 19 (23) | DIFFERS |
@@ -32,10 +32,10 @@ claimed = the note's count of attack-to-attack gaps equal to the stated value. c
 |---|---|---|
 | projectile 4201 flight ~2t | 2.5:1043 | match |
 | anim 14751 hit +4 (388 of 856 anims) | delay hist 0:18 1:13 2:6 3:11 4:392 5:9 6:6 7:2 8:5; anims 861 | DIFFERS |
-| projectile 4056 5t flight | 3.0:48 4.0:24 5.0:18 | DIFFERS |
-| projectile 4057 5t flight | 3.0:50 4.0:12 5.0:15 | DIFFERS |
-| projectile 4045 4t flight | 4.0:12 | match |
-| projectile 4440 4.5t flight | 4.5:7 | match |
+| projectile 4056 5t flight | 3.0:65 4.0:28 5.0:18 | DIFFERS |
+| projectile 4057 5t flight | 3.0:76 4.0:20 5.0:15 | DIFFERS |
+| projectile 4045 4t flight | 4.0:16 | match |
+| projectile 4440 4.5t flight | 4.5:10 | match |
 | anim 14686 magic lands 2t later | 2:23 | match |
 | anim 14777 slam hits melee 1t after the anim | all P0 hits by offset from anim: 0:49 1:84 2:9 3:10 4:79 5:85 6:85 7:41 8:11 | match |
 | anim 14777 then 3 ranged shots +4/+5/+6 (anim line) | offsets 4:79 5:85 6:85 | match |

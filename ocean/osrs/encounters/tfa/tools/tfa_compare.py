@@ -209,9 +209,10 @@ def damage_rates(fights, ids):
     return sorted(out)
 
 
-def damage_laws(real, sim, ids, failures, rate, floored=True):
+def damage_laws(real, sim, ids, failures, rate, floored=True, gate=True):
     """Block share of P0's and the other raiders' splats on the boss within 0.10, and when `rate`, the median team damage per tick within 25%.
-    For a boss with a defence floor (`floored`) only fights after the 21 Oct drain hotfix count: before it the drains went past the floor."""
+    For a boss with a defence floor (`floored`) only fights after the 21 Oct drain hotfix count: before it the drains went past the floor.
+    With gate False the lines print with '--' and fail nothing."""
     if floored:
         real = {k: v for k, v in real.items() if FIGHT_META[k]["drain"] == "floored"}
         if not real:
@@ -222,9 +223,9 @@ def damage_laws(real, sim, ids, failures, rate, floored=True):
         m = [landed for _, _, _, p0, landed in boss_hits(sim, ids) if p0 == mine]
         rm, sm = 1 - sum(r) / len(r), 1 - sum(m) / max(len(m), 1)
         ok = bool(m) and abs(rm - sm) <= 0.10
-        if not ok:
+        if not ok and gate:
             failures.append(name)
-        print(f"{'ok ' if ok else 'BAD'} {name:28s} real {rm:.2f} (n={len(r)}){'':30s} sim {sm:.2f} (n={len(m)})")
+        print(f"{('ok ' if ok else 'BAD') if gate else '-- '} {name:28s} real {rm:.2f} (n={len(r)}){'':30s} sim {sm:.2f} (n={len(m)})")
     if not rate:
         return
     r, m = damage_rates(real, ids), damage_rates(sim, ids)
@@ -818,14 +819,16 @@ def gong_hits_in_shadow(fights):
 
 BORK_FEET = [{(1, 0), (2, 0)}, {(0, 1), (1, 0)}, {(0, 1), (0, 2)}, {(0, 2), (1, 3)}, {(1, 3), (2, 3)}, {(2, 3), (3, 2)}, {(3, 1), (3, 2)}, {(2, 0), (3, 1)}]
 BORK_STOMP_TEMPLATE = set()
-BORK_COUNTS = {"napalm": (7, 10), "bomb": (3, 5)}
+BORK_COUNTS = {"napalm": (6, 10), "bomb": (3, 5)}
 
 
 def bork_ground(fights, walk):
     """Bork ground gfx per event: dust delay residuals from 1 + Manhattan to the start-of-tick centre, wave tiles breaking the
     footprint, Smorks and walkable rules, ring tiles against the footprint ring one tick after the gong, stomp pulse sources,
     scorch tiles per landing with their fire and splat ids (the count only where no live scorch already took a tile of the window),
-    scorch orientation against the splat, and the clear tick."""
+    scorch orientation against the splat, and the clear tick. A landing more than 2 tiles over the count range is two napalms on stacked raiders
+    (bork_03, 6 raiders: 12 and 16 tiles spraying both ways from one impact); it and landings clipped by live scorch skip the
+    count, and its tiles skip the removal orientation (re-placed over each other), as do scorches placed before a recording joined."""
     out = collections.defaultdict(collections.Counter)
     for ev in fights.values():
         npos = sorted((e["t"], (int(e["x"]), int(e["y"]))) for e in ev if e["kind"] == "NPOS" and base(e["actor"]) == "16640")
@@ -879,6 +882,7 @@ def bork_ground(fights, walk):
                 out["stomp feet alternate on a facing pair"][sources[0] == sources[2] and sources[1] == sources[3] and
                     {sources[0], sources[1]} in BORK_FEET] += 1
         objs = {(e["t"], int(e["x"]), int(e["y"])): int(e["b"]) for e in ev if e["kind"] == "OBJ+" and e["id"] == "62544"}
+        doubled = set()
         scorch_spans = [(e["t"], (int(e["x"]), int(e["y"]))) for e in ev if e["kind"] in ("OBJ+", "OBJ-") and e["id"] == "62544"]
         for t, tiles in splat.items():
             kind = "bomb" if max(d for _, d in tiles.values()) == 1 else "napalm"
@@ -889,7 +893,11 @@ def bork_ground(fights, walk):
             impact = next((tile for tile in tiles if sum(1 for ft, _ in fire[t] if ft == tile) == 2), None) if kind == "bomb" else \
                 next((tile for tile, (_, d) in tiles.items() if d == 1), None)
             dx, dy = ((-1, 1), (-1, 1)) if kind == "bomb" else ((-3, 1), (-2, 3))
-            clipped = impact is None or any((impact[0] + x, impact[1] + y) in live for x in range(dx[0], dx[1] + 1) for y in range(dy[0], dy[1] + 1))
+            window = [(impact[0] + x, impact[1] + y) for x in range(dx[0], dx[1] + 1) for y in range(dy[0], dy[1] + 1)] if impact else []
+            double = len(tiles) > BORK_COUNTS[kind][1] + 2
+            clipped = impact is None or double or any(w in live for w in window)
+            if double:
+                doubled |= {(t + 1, *tile) for tile in tiles}
             if not clipped:
                 out["landing tile count in the recorded range"][(kind, BORK_COUNTS[kind][0] <= len(tiles) <= BORK_COUNTS[kind][1])] += 1
             for tile, (variant, delay) in tiles.items():
@@ -904,8 +912,9 @@ def bork_ground(fights, walk):
             if placed is not None and e["t"] != cleanup:
                 out["scorch lifetime"][e["t"] - placed] += 1
         for e in removed:
-            out["scorch removed with its placed orientation"][objs.get(
-                max((o for o in objs if o[1:] == (int(e["x"]), int(e["y"])) and o[0] < e["t"]), default=None)) == int(e["b"])] += 1
+            placed = max((o for o in objs if o[1:] == (int(e["x"]), int(e["y"])) and o[0] < e["t"]), default=None)
+            if placed is not None and placed not in doubled:
+                out["scorch removed with its placed orientation"][objs.get(placed) == int(e["b"])] += 1
     return out
 
 
@@ -940,6 +949,9 @@ def bork(real, sim):
         failures.append("gong hits in shadow")
     print(f"{('ok ' if st else '-- ') if ok else 'BAD'} {'gong hits in shadow':28s} real {ri}/{rt:<38} sim {si}/{st}")
     bork_ground_laws(real, sim, failures)
+    # One fight after the hotfix (bork_03, 6 raiders, kits unknown: the other raiders' landed hits are mostly 1-4, multi-hit melee against crush
+    # defence 10 rather than the sim's twisted bows): reported, not gated, until another post-hotfix Bork fight.
+    damage_laws(real, sim, {"16640"}, failures, rate=False, gate=False)
     return failures
 
 

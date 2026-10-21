@@ -586,7 +586,8 @@ static void tfa_bork_tick(TfaState* s, TfaContext* ctx) {
     }
     TfaNpc* b = tfa_bork_npc(s);
     TfaNpc* m = tfa_bork_smorks(s);
-    b->act = TFA_ACT_IDLE;
+    /* A stunned Bork has no defence: other raiders' hits were 0 on 5 of 76 during the stun against 83 of 154 outside it (bork_03, after the hotfix). */
+    b->act = bs->stunned ? TFA_ACT_STUNNED : TFA_ACT_IDLE;
     m->act = TFA_ACT_IDLE;
     bs->clock++;
     bs->start_x = b->x;
