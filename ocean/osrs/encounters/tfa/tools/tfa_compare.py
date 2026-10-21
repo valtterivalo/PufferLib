@@ -1672,6 +1672,27 @@ def ocellus_p4(fights):
     return hist(out)
 
 
+def ocellus_p1_guard(fights):
+    """P1 Protect from Melee (overhead sprite 0): when it goes up, the latest barrage 14806 or expend 14810 and the ticks since; when it drops, the
+    next charge 14809 or teleport 14812 and the ticks to it. The death teleport (14814 within 6 ticks of it) has no recorded overhead yet and is left out."""
+    out = collections.Counter()
+    for ev in fights.values():
+        anims = [(e["t"], e["id"]) for e in ev if e["kind"] == "ANIM" and base(e["actor"]) == "16674"]
+        for e in ev:
+            if e["kind"] != "OVH" or base(e["actor"]) != "16674":
+                continue
+            t = e["t"]
+            if e["id"] != "-":
+                prev = [(a, i) for a, i in anims if a <= t and i in ("14806", "14810")]
+                if prev:
+                    out[("on", prev[-1][1], t - prev[-1][0])] += 1
+            else:
+                nxt = [(a, i) for a, i in anims if a >= t and i in ("14809", "14812")]
+                if nxt and not (nxt[0][1] == "14812" and any(i == "14814" and 0 < a - nxt[0][0] <= 6 for a, i in anims)):
+                    out[("off", nxt[0][1], nxt[0][0] - t)] += 1
+    return out
+
+
 def ocellus(real, sim):
     failures = []
     rs, ss = barrage_shapes(real), barrage_shapes(sim)
@@ -1710,6 +1731,7 @@ def ocellus(real, sim):
     drained_miss_law("P1 miss after the drain", {"16674"}, real, sim, failures)
     drained_miss_law("P3 miss after the drain", {"16677"}, real, sim, failures)
     drained_miss_law("Blade miss", {"16676"}, real, sim, failures)
+    support("P1 melee prayer window", ocellus_p1_guard(real), ocellus_p1_guard(sim), failures)
     support_reached("phase 4", ocellus_p4(real), ocellus_p4(sim), failures)
     ocellus_ground_laws(real, sim, failures)
     # Phase 1 only: phase 3's misses follow the team's Division throughput (run 6, 6 raiders, seven throws in phase 3: 0.43-0.48) that a 3-raider

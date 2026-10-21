@@ -184,6 +184,7 @@ typedef struct {
     int p4_step;
     int dead;
     int barrage;
+    int guard, guard_from;
     int busy_until;
     int free_roam_until;
     int quad_first;

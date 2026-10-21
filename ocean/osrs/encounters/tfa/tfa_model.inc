@@ -107,6 +107,7 @@ typedef struct {
     int32_t damage_taken_tick;
     int16_t def_drain;
     int16_t frozen_ticks;
+    int8_t overhead;
     int8_t hit_count_tick;
     int16_t hits_tick[OSRS_RENDER_HITS_MAX];
     int8_t hits_attacker[OSRS_RENDER_HITS_MAX];

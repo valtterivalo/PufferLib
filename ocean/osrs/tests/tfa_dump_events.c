@@ -8,6 +8,7 @@ typedef struct {
     int npc_id;
     uint32_t instance;
     int anim_tick;
+    int overhead;
 } DumpNpc;
 
 typedef struct {
@@ -90,6 +91,10 @@ int main(int argc, char** argv) {
                         printf("%s\t%d\tNHP\t%d#%d\t%d\t-\t-\t100\t-\t-\n", fid, t, n->npc_id, i,
                             n->max_shield > 0 && n->shield > 0 ? 100 * n->shield / n->max_shield : 100 * n->hp / n->max_hp);
                 }
+                if (n->active && n->overhead != d->overhead)
+                    printf("%s\t%d\tOVH\t%d#%d\t%s\t-\t-\t-\t-\t-\n", fid, t, n->npc_id, i,
+                        n->overhead == PRAYER_PROTECT_MELEE ? "0" : n->overhead == PRAYER_PROTECT_RANGED ? "1" : n->overhead == PRAYER_PROTECT_MAGIC ? "2" : "-");
+                d->overhead = n->overhead;
                 d->active = n->active;
                 d->npc_id = n->npc_id;
                 d->instance = n->instance_id;

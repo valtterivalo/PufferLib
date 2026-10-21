@@ -748,6 +748,13 @@ static void oc_dispatch(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
     else oc_p4_event(s, n, e);
 }
 
+static int oc_due(const TfaState* s, int kind, int tick) {
+    const TfaOcellusState* os = &s->boss.ocellus;
+    for (int i = 0; i < TFA_OC_MAX_EVENTS; i++)
+        if (os->events[i].kind == kind && os->events[i].tick == tick) return 1;
+    return 0;
+}
+
 static void tfa_ocellus_tick(TfaState* s, TfaContext* ctx) {
     TfaOcellusState* os = oc_state(s);
     if (os->dead) {
@@ -774,10 +781,17 @@ static void tfa_ocellus_tick(TfaState* s, TfaContext* ctx) {
         if (os->events[i].kind == OCE_NONE || os->events[i].tick != s->tick) continue;
         TfaOcEvent e = os->events[i];
         os->events[i].kind = OCE_NONE;
-        if (e.kind == OCE_P1_BARRAGE) os->barrage = 1;
+        if (e.kind == OCE_P1_BARRAGE) os->barrage = 1, os->guard = 1;
         if (e.kind == OCE_P1_CHARGE) os->barrage = 0;
+        if (e.kind == OCE_P1_EXPEND) os->guard_from = s->tick + 1;
         oc_dispatch(s, n, &e);
     }
+    /* P1 prays Melee from each barrage (or the tick after an expend) and drops it the tick before the charge or teleport that ends it, or on a
+       teleport straight out of the barrage: ocellus_10's overheads, 13 of 13 changes. */
+    if (os->guard_from == s->tick) os->guard = 1;
+    if (oc_due(s, OCE_P1_CHARGE, s->tick + 1) || oc_due(s, OCE_P1_TP_OUT, s->tick + 1) || (n->anim_id == OC_ANIM_TP_OUT && n->anim_tick == s->tick))
+        os->guard = 0;
+    n->overhead = (int8_t)(os->phase == TFA_OCELLUS_P1 && os->guard ? PRAYER_PROTECT_MELEE : PRAYER_NONE);
     n->attack_timer = (int16_t)(os->next_attack_tick > s->tick ? os->next_attack_tick - s->tick : 0);
 }
 
@@ -796,10 +810,7 @@ static int tfa_ocellus_npc_damage(TfaState* s, TfaNpc* n, int damage, int attack
             oc_boss_heal(n, damage);
             return 0;
         }
-        /* P1 prays Melee while walking to a corner (wiki Strategies, 21 Oct): P0 switched to the blowpipe for 30 of 31 hits landed on him walking, the
-           one Soulreaper hit was a 0, against 25 misses in 68 Soulreaper hits on him standing. */
-        int walking = os->phase == TFA_OCELLUS_P1 && os->barrage && (n->x != OC_CORNERS[os->corner][0] || n->y != OC_CORNERS[os->corner][1]);
-        if (walking && style == ATTACK_STYLE_MELEE) return 0;
+        if (n->overhead != PRAYER_NONE && encounter_prayer_correct_for_style(n->overhead, style)) return 0;
         int floor_hp = os->phase == TFA_OCELLUS_P3 ? 1 : 0;
         int applied = damage < n->hp - floor_hp ? damage : n->hp - floor_hp;
         n->hp -= applied;
