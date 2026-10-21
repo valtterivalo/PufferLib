@@ -189,7 +189,7 @@ typedef struct {
     int free_roam_until;
     int quad_first;
     int vine_pending;
-    int orb_x[TFA_MAX_PLAYERS], orb_y[TFA_MAX_PLAYERS], orb_heal[TFA_MAX_PLAYERS];
+    int orb_x[TFA_MAX_PLAYERS], orb_y[TFA_MAX_PLAYERS], orb_heal[TFA_MAX_PLAYERS], orb_from[TFA_MAX_PLAYERS], orb_until[TFA_MAX_PLAYERS];
     int no_line_heal;
     int centre;
     int centre_gone, centre_back;

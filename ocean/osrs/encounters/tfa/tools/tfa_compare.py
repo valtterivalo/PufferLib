@@ -1693,20 +1693,31 @@ def ocellus_p1_guard(fights):
     return out
 
 
-def ocellus_soul_split(fights):
-    """Soul split overhead (sprite 11): ticks from the latest quadrant attack 14844 to it, and how long it stays up."""
+def ocellus_p4_overheads(fights, horizon=56):
+    """Every P4 overhead change on 16677 as (sprite, ticks since the latest rise 14863): 15 Deflect Melee, 11 Soul Split, 16 Deflect Range. Only the
+    first horizon ticks of a cycle count: ocellus_11's recording ends 56 into its only cycle."""
     out = collections.Counter()
     for ev in fights.values():
-        quads = [e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14844"]
-        ovh = [e for e in ev if e["kind"] == "OVH" and base(e["actor"]) == "16677"]
-        for k, e in enumerate(ovh):
-            if e["id"].split("+")[0] != "11":
+        rises = [e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14863"]
+        for e in ev:
+            if e["kind"] != "OVH" or base(e["actor"]) != "16677":
                 continue
-            prev = [q for q in quads if q <= e["t"]]
-            if prev:
-                out[("on", e["t"] - prev[-1])] += 1
-            if k + 1 < len(ovh):
-                out[("up", ovh[k + 1]["t"] - e["t"])] += 1
+            prev = [r for r in rises if r <= e["t"]]
+            if prev and e["t"] - prev[-1] < horizon:
+                out[(e["id"].split("+")[0], e["t"] - prev[-1])] += 1
+    return out
+
+
+def ocellus_void_drops(fights, horizon=40):
+    """Void drop gfx 4339 as ticks since the latest rise; ocellus_11's P0 died 40 into the cycle."""
+    out = collections.Counter()
+    for ev in fights.values():
+        rises = [e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14863"]
+        for e in ev:
+            if e["kind"] == "GFX" and e["id"] == "4339":
+                prev = [r for r in rises if r <= e["t"]]
+                if prev and e["t"] - prev[-1] < horizon:
+                    out[e["t"] - prev[-1]] += 1
     return out
 
 
@@ -1718,7 +1729,8 @@ def ocellus_p4_laws(real, sim):
     shapes_law("14869 -> 4346 debris", gfx_offsets(real, "14869", "4346", 8), gfx_offsets(sim, "14869", "4346", 8), failures)
     rises = max(len([e for e in ev if e["kind"] == "ANIM" and e["id"] == "14863"]) for ev in real.values())
     support("phase 4", ocellus_p4(real), ocellus_p4(sim, rises), failures)
-    support("P4 soul split window", ocellus_soul_split(real), ocellus_soul_split(sim), failures)
+    support("P4 overheads", ocellus_p4_overheads(real), ocellus_p4_overheads(sim), failures)
+    support("P4 void drops", ocellus_void_drops(real), ocellus_void_drops(sim), failures)
     return failures
 
 

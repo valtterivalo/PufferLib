@@ -64,6 +64,9 @@
 #define OC_CENTRE_GONE_P2 9          /* OBJ- 9 after 14814, 2/2 */
 #define OC_BLADE_FALL_TICKS 32       /* 62707 replaces 62706 when the blade spawns, OBJ- 32 later, 2/2 */
 #define OC_LOC_VOID 62702
+#define OC_GFX_VOID_DROP 4339
+#define OC_GFX_ORB 4311
+#define OC_GFX_ORB_SHORT 4309
 
 typedef enum {
     OCE_NONE = 0,
@@ -115,6 +118,7 @@ typedef enum {
     OCE_P4_EXPLOSION,
     OCE_P4_RIFT_BLOW,
     OCE_P4_SPLIT,
+    OCE_P4_DEFLECT,
 } TfaOcEventKind;
 
 typedef struct {

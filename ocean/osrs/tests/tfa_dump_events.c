@@ -93,9 +93,11 @@ int main(int argc, char** argv) {
                         printf("%s\t%d\tNHP\t%d#%d\t%d\t-\t-\t100\t-\t-\n", fid, t, n->npc_id, i,
                             n->max_shield > 0 && n->shield > 0 ? 100 * n->shield / n->max_shield : 100 * n->hp / n->max_hp);
                 }
-                /* Overhead sprite ids as recorded: 0-2 the protections, 11 soul split. */
-                int sprite = n->overhead == PRAYER_PROTECT_MELEE ? 0 : n->overhead == PRAYER_PROTECT_RANGED ? 1 : n->overhead == PRAYER_PROTECT_MAGIC ? 2
-                    : s->room == TFA_ROOM_OCELLUS && n->kind == TFA_NPC_OCELLUS && s->boss.ocellus.soul_split ? 11 : -1;
+                /* Overhead sprite ids as recorded: 0-2 the protections, 11 soul split, 15/16 Ocellus' P4 Deflect Melee/Range. */
+                int p4 = s->room == TFA_ROOM_OCELLUS && n->kind == TFA_NPC_OCELLUS && s->boss.ocellus.phase == TFA_OCELLUS_P4;
+                int sprite = p4 && s->boss.ocellus.soul_split ? 11 : p4 && s->boss.ocellus.deflect == ATTACK_STYLE_MELEE ? 15
+                    : p4 && s->boss.ocellus.deflect == ATTACK_STYLE_RANGED ? 16
+                    : n->overhead == PRAYER_PROTECT_MELEE ? 0 : n->overhead == PRAYER_PROTECT_RANGED ? 1 : n->overhead == PRAYER_PROTECT_MAGIC ? 2 : -1;
                 if (n->active && sprite != d->overhead) {
                     if (sprite < 0) printf("%s\t%d\tOVH\t%d#%d\t-\t-\t-\t-\t-\t-\n", fid, t, n->npc_id, i);
                     else printf("%s\t%d\tOVH\t%d#%d\t%d\t-\t-\t-\t-\t-\n", fid, t, n->npc_id, i, sprite);
