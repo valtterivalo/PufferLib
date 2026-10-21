@@ -1,8 +1,12 @@
-/* Every model and animation the TFA viewer asks for exists in the caches it loads: scripted raids per room,
-   each tick's render entities, floating models and projectiles checked against the room pack, equipment and projectile caches.
-   A missing model aborts the viewer, a missing animation silently freezes the model. */
+/* The TFA viewer contract over scripted raids in every room:
+   - every model and animation it asks for exists in the caches it loads (a missing model aborts, a missing animation freezes);
+   - the sim's floor lines up with the exported scene: every walkable tile reachable from the starts or stood on is inside the scene
+     and walkable in its cache collision at the scene origin;
+   - nobody leaves the floor: players stand on walkable tiles, NPC footprints on walkable tiles or tiles the live NPC of that id
+     covered in the recordings (bosses on their platforms, the flying Guardian, pylons, pillars, swords). */
 #include "../encounters/encounter_tfa.h"
 #include "../osrs_anim.h"
+#include "../osrs_collision.h"
 #include "../osrs_npc_models.h"
 #include "osrs_test_check.h"
 
@@ -46,6 +50,52 @@ static int anim_present(AnimCache* const* caches, int anim) {
 
 static int g_reported;
 
+#define TFA_LIVE_MAX 20000
+
+typedef struct { int npc_id, x, y; } LivePos;
+
+static LivePos g_live[TFA_LIVE_MAX];
+static int g_nlive;
+
+static void live_positions_read(const char* room) {
+    char path[256];
+    snprintf(path, sizeof(path), "ocean/osrs/encounters/tfa/fixtures/tfa_%s_events.tsv", room);
+    FILE* f = fopen(path, "r");
+    assert(f);
+    char line[1024];
+    g_nlive = 0;
+    while (fgets(line, sizeof(line), f)) {
+        char* col[10] = {0};
+        char* save = NULL;
+        int n = 0;
+        for (char* tok = strtok_r(line, "\t\n", &save); tok && n < 10; tok = strtok_r(NULL, "\t\n", &save)) col[n++] = tok;
+        if (n < 7 || strcmp(col[2], "NPOS") != 0 || col[5][0] == '-') continue;
+        assert(g_nlive < TFA_LIVE_MAX);
+        g_live[g_nlive++] = (LivePos){ atoi(col[4]), atoi(col[5]), atoi(col[6]) };
+    }
+    fclose(f);
+}
+
+static int live_covered(const TfaNpc* n, int x, int y) {
+    for (int i = 0; i < g_nlive; i++)
+        if (g_live[i].npc_id == n->npc_id && x >= g_live[i].x && x < g_live[i].x + n->size && y >= g_live[i].y && y < g_live[i].y + n->size) return 1;
+    return 0;
+}
+
+static int scene_walkable(const CollisionMap* m, const EncounterDef* def, int x, int y) {
+    int wx = x + def->scene_origin_x, wy = y + def->scene_origin_y;
+    return collision_map_get(m, collision_region_hash(wx, wy)) && !(collision_get_flags(m, 0, wx, wy) & COLLISION_BLOCKED);
+}
+
+static int g_floor_reported;
+
+static void require_floor(int ok, const char* what, int x, int y, int tick, int room) {
+    if (ok || g_floor_reported >= 20) return;
+    g_floor_reported++;
+    printf("  room %d: %s at %d,%d tick %d\n", room, what, x, y, tick);
+    CHECK("on the floor", 0);
+}
+
 static void require(int ok, const char* what, uint32_t id, int room) {
     if (ok || g_reported >= 20) return;
     g_reported++;
@@ -70,6 +120,26 @@ static void check_room(const EncounterDef* def, int room) {
     tfa_finalize_context((EncounterState*)s, (EncounterContext*)ctx);
     EncounterOverlay* ov = calloc(1, sizeof(EncounterOverlay));
     RenderEntity ents[TFA_MAX_PLAYERS + TFA_MAX_NPCS];
+    live_positions_read(def->name + 4);
+    const CollisionMap* scene = collision_map_scene(def->scene);
+    const TfaRoomLayout* layout = tfa_room_layout(room);
+    uint8_t floor[TFA_ROOM_SIZE][TFA_ROOM_SIZE] = {{0}};
+    int queue[TFA_ROOM_SIZE * TFA_ROOM_SIZE], head = 0, tail = 0;
+    for (int k = 0; k < TFA_MAX_PLAYERS; k++) {
+        if (floor[layout->start_y[k]][layout->start_x[k]]) continue;
+        floor[layout->start_y[k]][layout->start_x[k]] = 1;
+        queue[tail++] = layout->start_y[k] * TFA_ROOM_SIZE + layout->start_x[k];
+    }
+    while (head < tail) {
+        int cx = queue[head] % TFA_ROOM_SIZE, cy = queue[head++] / TFA_ROOM_SIZE;
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++) {
+                int nx = cx + dx, ny = cy + dy;
+                if (tfa_layout_blocked(layout, nx, ny) || floor[ny][nx]) continue;
+                floor[ny][nx] = 1;
+                queue[tail++] = ny * TFA_ROOM_SIZE + nx;
+            }
+    }
     long floating = 0, projectiles = 0, ticks = 0;
     for (int e = 0; e < 20; e++) {
         tfa_reset_typed(s, ctx, 500 + e);
@@ -78,6 +148,24 @@ static void check_room(const EncounterDef* def, int room) {
             for (int p = 0; p < TFA_MAX_PLAYERS; p++) tfa_heuristic_actions(s, p, acts + p * TFA_NUM_ACTION_HEADS);
             tfa_step_team(s, ctx, acts);
             ticks++;
+            for (int p = 0; p < s->team_size; p++) {
+                if (s->players[p].life != TFA_LIFE_ALIVE) continue;
+                int x = s->players[p].player.x, y = s->players[p].player.y;
+                require_floor(!tfa_layout_blocked(layout, x, y), "player on a blocked tile", x, y, s->tick, room);
+                floor[y][x] = 1;
+            }
+            for (int i = 0; i < TFA_MAX_NPCS; i++) {
+                const TfaNpc* npc = &s->npcs[i];
+                if (!npc->active) continue;
+                for (int dx = 0; dx < npc->size; dx++)
+                    for (int dy = 0; dy < npc->size; dy++) {
+                        int x = npc->x + dx, y = npc->y + dy;
+                        require_floor(x >= 0 && y >= 0 && x < TFA_ROOM_SIZE && y < TFA_ROOM_SIZE, "npc outside the room", x, y, s->tick, room);
+                        int walkable = !tfa_layout_blocked(layout, x, y);
+                        require_floor(walkable || live_covered(npc, x, y), "npc off the floor where the live npc never stood", x, y, s->tick, room);
+                        if (walkable) floor[y][x] = 1;
+                    }
+            }
             int n = 0;
             tfa_fill_render_entities((EncounterState*)s, (EncounterContext*)ctx, ents, TFA_MAX_PLAYERS + TFA_MAX_NPCS, &n);
             for (int i = 0; i < n; i++) {
@@ -104,7 +192,15 @@ static void check_room(const EncounterDef* def, int room) {
             projectiles += ov->projectile_count;
         }
     }
-    printf("%-14s ticks %ld floating %ld projectiles %ld\n", def->name, ticks, floating, projectiles);
+    int floor_tiles = 0, aligned = 0;
+    for (int y = 0; y < TFA_ROOM_SIZE; y++)
+        for (int x = 0; x < TFA_ROOM_SIZE; x++) {
+            if (!floor[y][x]) continue;
+            floor_tiles++;
+            aligned += scene_walkable(scene, def, x, y);
+            require_floor(scene_walkable(scene, def, x, y), "sim floor not walkable in the scene", x, y, -1, room);
+        }
+    printf("%-14s ticks %ld floating %ld projectiles %ld floor %d/%d aligned with the scene\n", def->name, ticks, floating, projectiles, aligned, floor_tiles);
     CHECK("room drew hazards or projectiles", floating + projectiles > 0);
     free(ov);
     free(s);

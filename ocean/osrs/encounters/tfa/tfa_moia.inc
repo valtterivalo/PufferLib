@@ -90,9 +90,8 @@ static const int8_t TFA_MOIA_LOOP[36][2] = {
 static const int8_t TFA_MOIA_BINDER_START[8] = { 0, 28, 32, 24, 12, 16, 4, 8 };
 #define MOIA_LOOP_CENTRE 24
 
-/* Moia stands at the west spawn, then teleports north (30, 23) and south (30, 37): 3 of 3 seen. The east
-   tile closes the plus and is provisional. */
-static const int8_t TFA_MOIA_TELEPORTS[4][2] = { {23, 30}, {30, 23}, {30, 37}, {37, 30} };
+/* Moia stands at the west spawn, then teleports north (30, 23) and south (30, 37): 3 of 3 seen, cycled. */
+static const int8_t TFA_MOIA_TELEPORTS[3][2] = { {23, 30}, {30, 23}, {30, 37} };
 
 static TfaNpc* tfa_moia_boss(TfaState* s) {
     TfaNpc* n = tfa_npc_first(s, TFA_NPC_MOIA);
@@ -230,8 +229,8 @@ static void tfa_moia_tick(TfaState* s, TfaContext* ctx) {
         }
     }
     if (ms->teleports > 0 && t == TFA_MOIA.teleport_first + (ms->teleports - 1) * TFA_MOIA.loop + 1) {
-        m->x = TFA_MOIA_TELEPORTS[ms->teleports % 4][0];
-        m->y = TFA_MOIA_TELEPORTS[ms->teleports % 4][1];
+        m->x = TFA_MOIA_TELEPORTS[ms->teleports % 3][0];
+        m->y = TFA_MOIA_TELEPORTS[ms->teleports % 3][1];
     }
     if (dagger) {
         m->act = TFA_ACT_RANGED;

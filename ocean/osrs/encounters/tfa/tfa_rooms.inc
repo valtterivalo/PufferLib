@@ -1,7 +1,9 @@
-/* Room geometry over the 64x64 template region, flags indexed y * 64 + x with OSRS collision bits. */
+/* Room geometry over 64x64 room tiles, indexed y * 64 + x with OSRS collision bits: movement flags from the recordings,
+   projectile flags from the scene's cache collision (the recordings fold both into one blocked bit). */
 #define TFA_ROOM_SIZE 64
 typedef struct {
     const uint32_t* flags;
+    const uint32_t* los;
     int boss_x, boss_y;
     int start_x[TFA_MAX_PLAYERS], start_y[TFA_MAX_PLAYERS];
 } TfaRoomLayout;
@@ -26,6 +28,10 @@ static uint32_t tfa_topology_flags(void* data, int x, int y) {
     return tfa_layout_flags((const TfaRoomLayout*)data, x, y);
 }
 
+static uint32_t tfa_topology_los_flags(void* data, int x, int y) {
+    return ((const TfaRoomLayout*)data)->los[y * TFA_ROOM_SIZE + x];
+}
+
 static EncounterArenaTopology* TFA_TOPOLOGY_OWNER[TFA_ROOM_COUNT];
 
 static void tfa_build_topologies(TfaContext* ctx) {
@@ -40,10 +46,9 @@ static void tfa_build_topologies(TfaContext* ctx) {
             .revision = UINT64_C(0x5446410000000000) | (uint64_t)room,
             .tile_flags = tfa_topology_flags,
             .tile_flags_ctx = (void*)l,
-            .los_tile_flags = tfa_topology_flags,
+            .los_tile_flags = tfa_topology_los_flags,
             .los_tile_flags_ctx = (void*)l,
-            /* Moia's pocket is walled on walk flags only: P0 hit her from inside the ring in 12 of 12 attacks */
-            .los_build_mode = room == TFA_ROOM_MOIA ? ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_OPEN : ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_TILE_BLOCKED,
+            .los_build_mode = ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_FLAGGED,
         };
         if (!TFA_TOPOLOGY_OWNER[room]) {
             TFA_TOPOLOGY_OWNER[room] = encounter_arena_topology_build(&spec);

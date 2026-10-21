@@ -427,15 +427,14 @@ static void tfa_init_context_room(EncounterContext* context, int room) {
         .scene = SCENE, .npc_pack = SCENE, .scene_origin_x = OX, .scene_origin_y = OY, \
     };
 
-TFA_ROOM_DEF(TFA_ROOM_GUARDIAN, guardian, "TFA: Archive Guardian", "tfa_guardian", 4096, 5568)
-TFA_ROOM_DEF(TFA_ROOM_BORK, bork, "TFA: Bork and the Smorks", "tfa_bork", 4160, 5568)
-TFA_ROOM_DEF(TFA_ROOM_EZEKIEL, ezekiel, "TFA: Ezekiel", "tfa_ezekiel", 4032, 5504)
-TFA_ROOM_DEF(TFA_ROOM_DREADNOTH, dreadnoth, "TFA: Dreadnoth the Jellied", "tfa_dreadnoth", 4160, 5632)
-TFA_ROOM_DEF(TFA_ROOM_MOIA, moia, "TFA: Moia", "tfa_moia", 4032, 5632)
-TFA_ROOM_DEF(TFA_ROOM_XARTH, xarth, "TFA: Xarth", "tfa_xarth", 4160, 5504)
-TFA_ROOM_DEF(TFA_ROOM_DAGONHAI, dagonhai, "TFA: Dagon'hai Trio", "tfa_dagonhai", 4032, 5568)
-/* The Ocellus instance sits 8 tiles north of its template region: fixture (31,49) is template (31,41) in 9/9 scenes. */
-TFA_ROOM_DEF(TFA_ROOM_OCELLUS, ocellus, "TFA: Ocellus", "tfa_ocellus", 4096, 5624)
+TFA_ROOM_DEF(TFA_ROOM_GUARDIAN, guardian, "TFA: Archive Guardian", "tfa_guardian", TFA_SCENE_ORIGIN_X_GUARDIAN, TFA_SCENE_ORIGIN_Y_GUARDIAN)
+TFA_ROOM_DEF(TFA_ROOM_BORK, bork, "TFA: Bork and the Smorks", "tfa_bork", TFA_SCENE_ORIGIN_X_BORK, TFA_SCENE_ORIGIN_Y_BORK)
+TFA_ROOM_DEF(TFA_ROOM_EZEKIEL, ezekiel, "TFA: Ezekiel", "tfa_ezekiel", TFA_SCENE_ORIGIN_X_EZEKIEL, TFA_SCENE_ORIGIN_Y_EZEKIEL)
+TFA_ROOM_DEF(TFA_ROOM_DREADNOTH, dreadnoth, "TFA: Dreadnoth the Jellied", "tfa_dreadnoth", TFA_SCENE_ORIGIN_X_DREADNOTH, TFA_SCENE_ORIGIN_Y_DREADNOTH)
+TFA_ROOM_DEF(TFA_ROOM_MOIA, moia, "TFA: Moia", "tfa_moia", TFA_SCENE_ORIGIN_X_MOIA, TFA_SCENE_ORIGIN_Y_MOIA)
+TFA_ROOM_DEF(TFA_ROOM_XARTH, xarth, "TFA: Xarth", "tfa_xarth", TFA_SCENE_ORIGIN_X_XARTH, TFA_SCENE_ORIGIN_Y_XARTH)
+TFA_ROOM_DEF(TFA_ROOM_DAGONHAI, dagonhai, "TFA: Dagon'hai Trio", "tfa_dagonhai", TFA_SCENE_ORIGIN_X_DAGONHAI, TFA_SCENE_ORIGIN_Y_DAGONHAI)
+TFA_ROOM_DEF(TFA_ROOM_OCELLUS, ocellus, "TFA: Ocellus", "tfa_ocellus", TFA_SCENE_ORIGIN_X_OCELLUS, TFA_SCENE_ORIGIN_Y_OCELLUS)
 
 /* The wrapper's definition: config decides the room, no scene of its own. */
 static const EncounterDef ENCOUNTER_TFA = {

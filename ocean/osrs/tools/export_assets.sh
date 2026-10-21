@@ -48,7 +48,7 @@ if [ -n "$tfa_cache" ]; then
   t scene tfa_bork 65,87
   t scene tfa_dreadnoth 65,88
   t scene tfa_xarth 65,86
-  t scene tfa_ocellus 64,88 plane=1 altobjects=tfa_ocellus:62706,62955
+  t scene tfa_ocellus 64,87 64,88 plane=1 altobjects=tfa_ocellus:62706,62955
   t scene tfa_nexus 64,87 plane=2
 
   t npcs tfa_bork npc=16642 \
