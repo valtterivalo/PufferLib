@@ -91,4 +91,10 @@ typedef struct {
     int p4_cycle;
     int p4_step;
     int dead;
+    int barrage;
+    int busy_until;
+    int free_roam_until;
+    int quad_first;
+    int vine_pending;
+    int orb_x[TFA_MAX_PLAYERS], orb_y[TFA_MAX_PLAYERS], orb_heal[TFA_MAX_PLAYERS];
 } TfaOcellusState;

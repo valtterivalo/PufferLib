@@ -97,6 +97,7 @@ typedef enum {
     OCE_P3_SIPHON_PULSE,
     OCE_P3_AUGMENTER_BLOW,
     OCE_P3_WANT,
+    OCE_P3_ANIM,
     OCE_P4_START,
     OCE_P4_STEP,
     OCE_P4_EXPLOSION,
@@ -215,6 +216,9 @@ static const int8_t OC_CORNERS[4][2] = { {24, 54}, {24, 42}, {36, 42}, {36, 54} 
 static const int8_t OC_PINWHEEL[4][2] = { {-2, 1}, {1, 2}, {2, -1}, {-1, -2} };
 static const int8_t OC_DIRS[8][2] = { {0, 1}, {1, 0}, {0, -1}, {-1, 0}, {1, 1}, {1, -1}, {-1, -1}, {-1, 1} };
 
+/* The safe portal carries a player clockwise: (-,+) to (+,+) to (+,-) to (-,-). */
+static const int8_t OC_NEXT_QUAD[4] = { 2, 0, 3, 1 };
+
 static TfaOcellusState* oc_state(TfaState* s) { return &s->boss.ocellus; }
 
 static TfaNpc* oc_boss(TfaState* s) {
@@ -249,6 +253,8 @@ static int oc_sign(int v) { return (v > 0) - (v < 0); }
 
 static void oc_haz(TfaState* s, int x, int y, int w, int h, int start, int min, int max,
         AttackStyle style, int protected_pct, int gfx, int owner) {
+    int loc = gfx >= 60000 ? gfx : 0;
+    if (loc) gfx = 0;
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
     if (x + w > TFA_ROOM_SIZE) w = TFA_ROOM_SIZE - x;
@@ -259,7 +265,7 @@ static void oc_haz(TfaState* s, int x, int y, int w, int h, int start, int min, 
         .owner = (int8_t)owner, .x = (int16_t)x, .y = (int16_t)y,
         .start_tick = start, .end_tick = start,
         .min_damage = (int16_t)min, .max_damage = (int16_t)max,
-        .protected_pct = (int16_t)protected_pct, .gfx_id = gfx,
+        .protected_pct = (int16_t)protected_pct, .gfx_id = gfx, .loc_id = loc,
     });
 }
 
@@ -439,6 +445,12 @@ static void oc_p1_shot(TfaState* s, TfaNpc* n) {
         int d = chebyshev_distance(pl->x, pl->y, n->x + 1, n->y + 1);
         int flight = d < TFA_OC1.flight_split + 1 ? TFA_OC1.flight_near : TFA_OC1.flight_far;
         tfa_queue_npc_hit_land(s, p, tfa_rand_range(s, TFA_OC1.shot_min, TFA_OC1.shot_max), style, flight, 0, n);
+        if (style == ATTACK_STYLE_MAGIC)
+            tfa_fx_projectile(s, n, p, 4229, SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_WATER_ATTACK01_PROJANIM,
+                SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_WATER_ATTACK01_PROJANIM_ANIM, 0, flight);
+        else
+            tfa_fx_projectile(s, n, p, 4232, SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_FIRE_ATTACK01_PROJANIM,
+                SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_FIRE_ATTACK01_PROJANIM_ANIM, 0, flight);
     }
     os->next_attack_tick = s->tick + TFA_OC1.shot_gap;
 }
@@ -465,7 +477,7 @@ static void oc_p1_cut_to_middle(TfaState* s, int delay) {
 }
 
 static void oc_p1_zero_cut(TfaState* s) {
-    oc_cancel(s, OCE_P1_BARRAGE, OCE_P1_MID_EXPLODE);
+    oc_cancel(s, OCE_P1_BARRAGE, OCE_P1_EXPEND);
     oc_clear_hazards(s);
     memset(oc_state(s)->lines, 0, sizeof(oc_state(s)->lines));
     oc_at(s, TFA_OC1.death_out, OCE_P1_TP_OUT, 1, 0);
@@ -482,7 +494,7 @@ static void oc_p1_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
         case OCE_P1_EXPLODE_TELL: oc_zone(s, n, 99, 99, s->tick + TFA_OC1.explode_tell + 1); break;
         case OCE_P1_EXPLODE:
             tfa_npc_anim(s, n, OC_ANIM_EXPLODE);
-            oc_at(s, TFA_OC1.explode_to_next, OCE_P1_AFTER_EXPLODE, 0, 0);
+            oc_at(s, TFA_OC1.explode_to_next - 1, OCE_P1_AFTER_EXPLODE, 0, 0);
             os->next_attack_tick = s->tick + TFA_OC1.explode_to_next;
             break;
         case OCE_P1_AFTER_EXPLODE:
@@ -499,14 +511,14 @@ static void oc_p1_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
         case OCE_P1_TP_OUT:
             n->act = TFA_ACT_SPECIAL;
             tfa_npc_anim(s, n, OC_ANIM_TP_OUT);
-            oc_at(s, TFA_OC1.tp_in, OCE_P1_TP_IN, e->arg, 0);
+            oc_at(s, e->arg ? TFA_OC1.death_in : TFA_OC1.tp_in, OCE_P1_TP_IN, e->arg, 0);
             break;
         case OCE_P1_TP_IN:
             n->x = OC_CENTRE_X;
             n->y = OC_CENTRE_Y;
             tfa_npc_anim(s, n, OC_ANIM_TP_IN);
             if (e->arg) {
-                oc_at(s, TFA_OC1.death_in - TFA_OC1.tp_in + TFA_OC1.tp_in, OCE_P1_DYING_IN, 0, 0);
+                oc_at(s, TFA_OC1.death_transform, OCE_P1_DYING_IN, 0, 0);
             } else {
                 oc_at(s, TFA_OC1.mid_first_charge, OCE_P1_MID_CHARGE, 0, 0);
             }
@@ -696,7 +708,7 @@ static void oc_portals_tick(TfaState* s) {
         if (!portal->active || portal->kind != TFA_NPC_OCELLUS_PORTAL) continue;
         for (int p = 0; p < s->team_size; p++) {
             if (!tfa_alive(s, p) || !tfa_player_under_npc(&s->players[p], portal)) continue;
-            oc_place_player(s, p, (portal->state + 1) & 3);
+            oc_place_player(s, p, OC_NEXT_QUAD[portal->state]);
         }
     }
 }
