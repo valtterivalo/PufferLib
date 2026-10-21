@@ -185,6 +185,50 @@ def compare(name, real, sim, failures):
     print(f"{'ok ' if ok else 'BAD'} {name:28s} real {fmt(real):42s} sim {fmt(sim)}")
 
 
+PLAYER_DAMAGE_SPLATS = {"16", "17", "18", "19", "43", "44"}
+P0_SPLATS = {"16", "18", "44", "12"}
+RATE_WINDOW = 120
+
+
+def boss_hits(fights, ids):
+    """Player hitsplats on the boss: (fight, tick, damage, P0 or not, landed). A splashed spell leaves no splat, live and in the dump."""
+    return [(fid, e["t"], int(e["id"]), e["a"] in P0_SPLATS, e["a"] in PLAYER_DAMAGE_SPLATS) for fid, ev in fights.items() for e in ev
+            if e["kind"] == "HIT" and base(e["actor"]) in ids and e["a"] in PLAYER_DAMAGE_SPLATS | {"12", "13"}]
+
+
+def damage_rates(fights, ids):
+    """Team damage per tick on the boss over the first RATE_WINDOW ticks from its first player splat, for fights that last that long."""
+    hits = collections.defaultdict(list)
+    for fid, t, dmg, _, landed in boss_hits(fights, ids):
+        hits[fid].append((t, dmg if landed else 0))
+    out = []
+    for fid, hs in hits.items():
+        t0 = min(t for t, _ in hs)
+        if max(e["t"] for e in fights[fid]) - t0 >= RATE_WINDOW:
+            out.append(sum(d for t, d in hs if t < t0 + RATE_WINDOW) / RATE_WINDOW)
+    return sorted(out)
+
+
+def damage_laws(real, sim, ids, failures, rate):
+    """Block share of P0's and the other raiders' splats on the boss within 0.10, and when `rate`, the median team damage per tick within 25%."""
+    for name, mine in (("boss miss P0", True), ("boss miss others", False)):
+        r = [landed for _, _, _, p0, landed in boss_hits(real, ids) if p0 == mine]
+        m = [landed for _, _, _, p0, landed in boss_hits(sim, ids) if p0 == mine]
+        rm, sm = 1 - sum(r) / len(r), 1 - sum(m) / max(len(m), 1)
+        ok = bool(m) and abs(rm - sm) <= 0.10
+        if not ok:
+            failures.append(name)
+        print(f"{'ok ' if ok else 'BAD'} {name:28s} real {rm:.2f} (n={len(r)}){'':30s} sim {sm:.2f} (n={len(m)})")
+    if not rate:
+        return
+    r, m = damage_rates(real, ids), damage_rates(sim, ids)
+    rmed, smed = r[len(r) // 2], m[len(m) // 2] if m else 0
+    ok = bool(m) and abs(smed - rmed) <= 0.25 * rmed
+    if not ok:
+        failures.append("damage per tick")
+    print(f"{'ok ' if ok else 'BAD'} {'damage per tick':28s} real median {rmed:.1f} (n={len(r)}){'':22s} sim median {smed:.1f} (n={len(m)})")
+
+
 def guardian_ground(fights):
     """Mushroom loc lifetimes and the 4389 land flash: burst life, armed to burst gaps, armed removals without a burst, and per 14747 anim the
     4389 (tick offset, tile relative to the boss tile, delay, count)."""
@@ -253,6 +297,7 @@ def guardian(real, sim):
     compare("breath total (/10)", breath(real), breath(sim), failures)
     compare("shield per flying phase", shields(real), shields(sim), failures)
     guardian_ground_laws(real, sim, failures)
+    damage_laws(real, sim, {"16659", "16660"}, failures, rate=False)
     return failures
 
 
@@ -380,9 +425,22 @@ def xarth_ground_laws(real, sim, failures):
     print(f"{'ok ' if ok else 'BAD'} {'4379 tiles per event':28s} real {fmt(r['aoe_tiles']):42s} sim {fmt(s['aoe_tiles'])}")
 
 
+def xarth_phase_split(fights):
+    """Each fight cut at its first ranged attack (14985), which only phase 2 throws: the magic gap rule differs by phase, so a pooled
+    histogram would follow how long the raiders take in each phase."""
+    p1, p2 = {}, {}
+    for fid, ev in fights.items():
+        start = next((e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14985"), 1 << 30)
+        p1[fid] = [e for e in ev if e["t"] < start]
+        p2[fid] = [e for e in ev if e["t"] >= start]
+    return p1, p2
+
+
 def xarth(real, sim):
     failures = []
-    for anim in ("14984", "14985", "14992", "14989"):
+    for phase, r, s in zip(("P1", "P2"), xarth_phase_split(real), xarth_phase_split(sim)):
+        compare(f"14984 next attack {phase}", next_attack(r, "xarth", "14984"), next_attack(s, "xarth", "14984"), failures)
+    for anim in ("14985", "14992", "14989"):
         compare(f"{anim} next attack", next_attack(real, "xarth", anim), next_attack(sim, "xarth", anim), failures)
     compare("AOE schedule", hist(schedule(real, "14992")), hist(schedule(sim, "14992")), failures)
     compare("first ranged", first_of(real, "14985"), first_of(sim, "14985"), failures)
@@ -401,6 +459,7 @@ def xarth(real, sim):
     print(f"{'ok ' if ok else 'BAD'} {'corpse hp (max damage taken)':28s} real {max(v for v, n in rk.items() if n >= 3):<42} sim {max(sk)}")
     median_law("blast damage", blast_hits(real), blast_hits(sim), 3, failures)
     xarth_ground_laws(real, sim, failures)
+    damage_laws(real, sim, {"16684"}, failures, rate=True)
     return failures
 
 
@@ -508,7 +567,8 @@ BORK_COUNTS = {"napalm": (7, 10), "bomb": (3, 5)}
 def bork_ground(fights, walk):
     """Bork ground gfx per event: dust delay residuals from 1 + Manhattan to the start-of-tick centre, wave tiles breaking the
     footprint, Smorks and walkable rules, ring tiles against the footprint ring one tick after the gong, stomp pulse sources,
-    scorch tiles per landing with their fire and splat ids, scorch orientation against the splat, and the clear tick."""
+    scorch tiles per landing with their fire and splat ids (the count only where no live scorch already took a tile of the window),
+    scorch orientation against the splat, and the clear tick."""
     out = collections.defaultdict(collections.Counter)
     for ev in fights.values():
         npos = sorted((e["t"], (int(e["x"]), int(e["y"]))) for e in ev if e["kind"] == "NPOS" and base(e["actor"]) == "16640")
@@ -558,9 +618,19 @@ def bork_ground(fights, walk):
                         if all(d == 1 + abs(x - b[0] - dx) + abs(y - b[1] - dy) for (x, y), d in got.items())]
                 out["stomp source offset"][fits[0] if fits else None] += 1
         objs = {(e["t"], int(e["x"]), int(e["y"])): int(e["b"]) for e in ev if e["kind"] == "OBJ+" and e["id"] == "62544"}
+        scorch_spans = [(e["t"], (int(e["x"]), int(e["y"]))) for e in ev if e["kind"] in ("OBJ+", "OBJ-") and e["id"] == "62544"]
         for t, tiles in splat.items():
             kind = "bomb" if max(d for _, d in tiles.values()) == 1 else "napalm"
-            out["landing tile count in the recorded range"][(kind, BORK_COUNTS[kind][0] <= len(tiles) <= BORK_COUNTS[kind][1])] += 1
+            live = set()
+            for tt, tile in sorted(scorch_spans):
+                if tt <= t:
+                    live ^= {tile}
+            impact = next((tile for tile in tiles if sum(1 for ft, _ in fire[t] if ft == tile) == 2), None) if kind == "bomb" else \
+                next((tile for tile, (_, d) in tiles.items() if d == 1), None)
+            dx, dy = ((-1, 1), (-1, 1)) if kind == "bomb" else ((-3, 1), (-2, 3))
+            clipped = impact is None or any((impact[0] + x, impact[1] + y) in live for x in range(dx[0], dx[1] + 1) for y in range(dy[0], dy[1] + 1))
+            if not clipped:
+                out["landing tile count in the recorded range"][(kind, BORK_COUNTS[kind][0] <= len(tiles) <= BORK_COUNTS[kind][1])] += 1
             for tile, (variant, delay) in tiles.items():
                 n_fire = sum(1 for ft, _ in fire[t] if ft == tile)
                 out["tile (kind, delay, 4046 count)"][(kind, delay, n_fire)] += 1
@@ -859,12 +929,12 @@ def dreadnoth_ground(fights):
 
 def dreadnoth_ground_laws(real, sim, failures):
     """Blood counts, marker starts and marker spread follow where the raiders stand and die (scripted raiders stack and rarely move),
-    so their sim values must be recorded ones. The rest are two-way histograms, and the markers must equal the emerged jelly tiles."""
+    and the arena edge clips the blood ring wherever the boss walked after them, so their sim values must be recorded ones. The rest are two-way histograms, and the markers must equal the emerged jelly tiles."""
     labels = ("blood orientation", "blood tiles per event (cause, n)", "blood tile (cause, dx, dy) from boss SW", "4209 (delay, dx, dy)",
               "4210 tile start (tick after slam, delay)", "4210 new tiles per tick +4,+5,+6", "4210 derived distance from seed",
               "4210 last tick before emerge", "4210 markers == emerged tiles")
     for i, (label, r, s) in enumerate(zip(labels, dreadnoth_ground(real), dreadnoth_ground(sim))):
-        (recorded_law if i in (1, 4, 6) else shapes_law)(label, r, s, failures)
+        (recorded_law if i in (1, 2, 4, 6) else shapes_law)(label, r, s, failures)
 
 
 def dreadnoth(real, sim):
@@ -887,6 +957,7 @@ def dreadnoth(real, sim):
     compare("4211 launch, flight", projectile_offsets(real, "14777", "4211"), projectile_offsets(sim, "14777", "4211"), failures)
     set_law("slam P0 hit offsets", slam_hit_offsets(real), slam_hit_offsets(sim), failures)
     dreadnoth_ground_laws(real, sim, failures)
+    damage_laws(real, sim, {"16665"}, failures, rate=True)
     return failures
 
 
@@ -1091,6 +1162,7 @@ def ezekiel(real, sim):
     for label, r, s in zip(("star damage", "4-sword band damage", "3-sword band damage"), ezekiel_player_hits(real), ezekiel_player_hits(sim)):
         median_law(label, r, s, 3, failures)
     ezekiel_ground_laws(real, sim, failures)
+    damage_laws(real, sim, {"16652"}, failures, rate=True)
     return failures
 
 
@@ -1275,6 +1347,7 @@ def ocellus(real, sim):
     compare("14861 -> siphon spawn", first_offsets(real, "14861", "NPC+", "16679", 10), first_offsets(sim, "14861", "NPC+", "16679", 10), failures)
     compare("14881 -> first 14842", anim_offsets(real, "14881", "14842", 20), anim_offsets(sim, "14881", "14842", 20), failures)
     ocellus_ground_laws(real, sim, failures)
+    damage_laws(real, sim, {"16673", "16674", "16675", "16677"}, failures, rate=False)
     return failures
 
 

@@ -68,6 +68,8 @@ typedef struct {
     int16_t crush_def;
     int16_t magic_def;
     int16_t ranged_def;
+    int16_t ranged_light_def;
+    int16_t ranged_heavy_def;
 } MonsterStats;
 
 static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
@@ -79,7 +81,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = -20, .slash_def = -20, .crush_def = -20,
-        .magic_def = -20, .ranged_def = -20
+        .magic_def = -20, .ranged_def = -20, .ranged_light_def = -20, .ranged_heavy_def = -20
     },
     [MON_JAL_MEJRAH] = {
         .npc_id = 7692, .name = "Jal-MejRah",
@@ -89,7 +91,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 30, .ranged_str_bonus = 30,
         .stab_def = 30, .slash_def = 30, .crush_def = 30,
-        .magic_def = -20, .ranged_def = 45
+        .magic_def = -20, .ranged_def = 45, .ranged_light_def = 45, .ranged_heavy_def = 45
     },
     [MON_JAL_AK] = {
         .npc_id = 7693, .name = "Jal-Ak",
@@ -99,7 +101,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 45, .magic_att_bonus = 45, .magic_str_bonus = 45,
         .range_att_bonus = 45, .ranged_str_bonus = 45,
         .stab_def = 25, .slash_def = 25, .crush_def = 25,
-        .magic_def = 25, .ranged_def = 25
+        .magic_def = 25, .ranged_def = 25, .ranged_light_def = 25, .ranged_heavy_def = 25
     },
     [MON_JAL_AKREK_MEJ] = {
         .npc_id = 7694, .name = "Jal-AkRek-Mej",
@@ -109,7 +111,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 25, .magic_str_bonus = 25,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
-        .magic_def = 25, .ranged_def = 0
+        .magic_def = 25, .ranged_def = 0, .ranged_light_def = 0, .ranged_heavy_def = 0
     },
     [MON_JAL_AKREK_XIL] = {
         .npc_id = 7695, .name = "Jal-AkRek-Xil",
@@ -119,7 +121,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 25, .ranged_str_bonus = 25,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
-        .magic_def = 0, .ranged_def = 25
+        .magic_def = 0, .ranged_def = 25, .ranged_light_def = 25, .ranged_heavy_def = 25
     },
     [MON_JAL_AKREK_KET] = {
         .npc_id = 7696, .name = "Jal-AkRek-Ket",
@@ -129,7 +131,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 25, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 25, .slash_def = 25, .crush_def = 25,
-        .magic_def = 0, .ranged_def = 0
+        .magic_def = 0, .ranged_def = 0, .ranged_light_def = 0, .ranged_heavy_def = 0
     },
     [MON_JAL_IMKOT] = {
         .npc_id = 7697, .name = "Jal-ImKot",
@@ -139,7 +141,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 40, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 65, .slash_def = 65, .crush_def = 65,
-        .magic_def = 30, .ranged_def = 50
+        .magic_def = 30, .ranged_def = 50, .ranged_light_def = 50, .ranged_heavy_def = 50
     },
     [MON_JAL_XIL] = {
         .npc_id = 7698, .name = "Jal-Xil",
@@ -149,7 +151,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 40, .ranged_str_bonus = 50,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
-        .magic_def = 0, .ranged_def = 0
+        .magic_def = 0, .ranged_def = 0, .ranged_light_def = 0, .ranged_heavy_def = 0
     },
     [MON_JAL_ZEK] = {
         .npc_id = 7699, .name = "Jal-Zek",
@@ -159,7 +161,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 80, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
-        .magic_def = 0, .ranged_def = 0
+        .magic_def = 0, .ranged_def = 0, .ranged_light_def = 0, .ranged_heavy_def = 0
     },
     [MON_JALTOK_JAD] = {
         .npc_id = 7700, .name = "JalTok-Jad",
@@ -169,7 +171,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 100, .magic_str_bonus = 75,
         .range_att_bonus = 80, .ranged_str_bonus = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
-        .magic_def = 0, .ranged_def = 0
+        .magic_def = 0, .ranged_def = 0, .ranged_light_def = 0, .ranged_heavy_def = 0
     },
     [MON_YT_HURKOT] = {
         .npc_id = 7701, .name = "Yt-HurKot",
@@ -179,7 +181,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 100, .magic_str_bonus = 0,
         .range_att_bonus = 80, .ranged_str_bonus = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
-        .magic_def = 130, .ranged_def = 130
+        .magic_def = 130, .ranged_def = 130, .ranged_light_def = 130, .ranged_heavy_def = 130
     },
     [MON_TZKAL_ZUK] = {
         .npc_id = 7706, .name = "TzKal-Zuk",
@@ -189,7 +191,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 200, .magic_att_bonus = 550, .magic_str_bonus = 450,
         .range_att_bonus = 550, .ranged_str_bonus = 200,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
-        .magic_def = 350, .ranged_def = 100
+        .magic_def = 350, .ranged_def = 100, .ranged_light_def = 100, .ranged_heavy_def = 100
     },
     [MON_ZUK_SHIELD] = {
         .npc_id = 7707, .name = "Ancestral Glyph",
@@ -197,7 +199,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .magic_level = 0, .range_level = 0,
         .attack_speed = 0, .size = 5, .max_hit = 0,
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0, .range_att_bonus = 0, .ranged_str_bonus = 0,
-        .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def = 0, .ranged_def = 0
+        .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def = 0, .ranged_def = 0, .ranged_light_def = 0, .ranged_heavy_def = 0
     },
     [MON_JAL_MEJJAK] = {
         .npc_id = 7708, .name = "Jal-MejJak",
@@ -207,7 +209,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
-        .magic_def = 0, .ranged_def = 0
+        .magic_def = 0, .ranged_def = 0, .ranged_light_def = 0, .ranged_heavy_def = 0
     },
     [MON_ZULRAH_GREEN] = {
         .npc_id = 2042, .name = "Zulrah",
@@ -217,7 +219,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 50, .magic_str_bonus = 20,
         .range_att_bonus = 50, .ranged_str_bonus = 20,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
-        .magic_def = -45, .ranged_def = 50
+        .magic_def = -45, .ranged_def = 50, .ranged_light_def = 50, .ranged_heavy_def = 50
     },
     [MON_ZULRAH_RED] = {
         .npc_id = 2043, .name = "Zulrah",
@@ -227,7 +229,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 50, .magic_str_bonus = 20,
         .range_att_bonus = 50, .ranged_str_bonus = 20,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
-        .magic_def = 0, .ranged_def = 300
+        .magic_def = 0, .ranged_def = 300, .ranged_light_def = 300, .ranged_heavy_def = 300
     },
     [MON_ZULRAH_BLUE] = {
         .npc_id = 2044, .name = "Zulrah",
@@ -237,7 +239,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 50, .magic_str_bonus = 20,
         .range_att_bonus = 50, .ranged_str_bonus = 20,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
-        .magic_def = 300, .ranged_def = 0
+        .magic_def = 300, .ranged_def = 0, .ranged_light_def = 0, .ranged_heavy_def = 0
     },
     [MON_ZULRAH_SNAKELING_MELEE] = {
         .npc_id = 2045, .name = "Snakeling",
@@ -247,7 +249,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 120, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = -40, .slash_def = -40, .crush_def = -40,
-        .magic_def = -40, .ranged_def = -40
+        .magic_def = -40, .ranged_def = -40, .ranged_light_def = -40, .ranged_heavy_def = -40
     },
     [MON_ZULRAH_SNAKELING_MAGIC] = {
         .npc_id = 2046, .name = "Snakeling",
@@ -257,7 +259,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 80, .magic_str_bonus = -20,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = -40, .slash_def = -40, .crush_def = -40,
-        .magic_def = -40, .ranged_def = -40
+        .magic_def = -40, .ranged_def = -40, .ranged_light_def = -40, .ranged_heavy_def = -40
     },
     /* The Fractured Archive, OSRS Wiki infoboxes 2026-10-20 (ocean/osrs/encounters/tfa/fixtures/tfa_wiki_stats.md).
        ranged_def is the standard ranged defence. Blank wiki fields are 0. */
@@ -269,7 +271,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 350, .magic_str_bonus = 55,
         .range_att_bonus = 350, .ranged_str_bonus = 55,
         .stab_def = 120, .slash_def = 110, .crush_def = 20,
-        .magic_def = 130, .ranged_def = 120
+        .magic_def = 130, .ranged_def = 120, .ranged_light_def = 75, .ranged_heavy_def = 50
     },
     [MON_TFA_BORK] = {
         .npc_id = 16640, .name = "Bork",
@@ -279,7 +281,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 100, .melee_str_bonus = 40, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 140, .slash_def = 130, .crush_def = 10,
-        .magic_def = 300, .ranged_def = 50
+        .magic_def = 300, .ranged_def = 50, .ranged_light_def = 80, .ranged_heavy_def = 5
     },
     [MON_TFA_SMORKS] = {
         .npc_id = 16641, .name = "The Smorks",
@@ -289,7 +291,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 185, .magic_str_bonus = 35,
         .range_att_bonus = 250, .ranged_str_bonus = 30,
         .stab_def = 220, .slash_def = 170, .crush_def = 160,
-        .magic_def = 400, .ranged_def = 150
+        .magic_def = 400, .ranged_def = 150, .ranged_light_def = 80, .ranged_heavy_def = 80
     },
     [MON_TFA_EZEKIEL] = {
         .npc_id = 16652, .name = "Ezekiel",
@@ -299,7 +301,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 250, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 150, .slash_def = 90, .crush_def = 35,
-        .magic_def = 200, .ranged_def = 370
+        .magic_def = 200, .ranged_def = 370, .ranged_light_def = 445, .ranged_heavy_def = 320
     },
     [MON_TFA_DREADNOTH] = {
         .npc_id = 16665, .name = "Dreadnoth the Jellied",
@@ -309,7 +311,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 185, .melee_str_bonus = 35, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 180, .ranged_str_bonus = 20,
         .stab_def = 15, .slash_def = 20, .crush_def = 5,
-        .magic_def = 20, .ranged_def = 80
+        .magic_def = 20, .ranged_def = 80, .ranged_light_def = 100, .ranged_heavy_def = 80
     },
     [MON_TFA_MOIA] = {
         .npc_id = 16667, .name = "Moia",
@@ -319,7 +321,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 300, .magic_str_bonus = 0,
         .range_att_bonus = 350, .ranged_str_bonus = 35,
         .stab_def = 20, .slash_def = 110, .crush_def = 15,
-        .magic_def = 30, .ranged_def = 120
+        .magic_def = 30, .ranged_def = 120, .ranged_light_def = 60, .ranged_heavy_def = 140
     },
     [MON_TFA_XARTH] = {
         .npc_id = 16684, .name = "Xarth",
@@ -329,7 +331,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 250, .magic_str_bonus = 0,
         .range_att_bonus = 250, .ranged_str_bonus = 0,
         .stab_def = 115, .slash_def = 105, .crush_def = 20,
-        .magic_def = 205, .ranged_def = 230
+        .magic_def = 205, .ranged_def = 230, .ranged_light_def = 125, .ranged_heavy_def = 155
     },
     [MON_TFA_OCELLUS_P1] = {
         .npc_id = 16674, .name = "Ocellus",
@@ -339,7 +341,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 1, .melee_str_bonus = 1, .magic_att_bonus = 150, .magic_str_bonus = 0,
         .range_att_bonus = 150, .ranged_str_bonus = 0,
         .stab_def = 150, .slash_def = 95, .crush_def = 60,
-        .magic_def = 100, .ranged_def = 135
+        .magic_def = 100, .ranged_def = 135, .ranged_light_def = 50, .ranged_heavy_def = 50
     },
     [MON_TFA_OCELLUS_P3] = {
         .npc_id = 16677, .name = "Ocellus",
@@ -349,7 +351,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 150, .melee_str_bonus = 10, .magic_att_bonus = 350, .magic_str_bonus = 10,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 150, .slash_def = 100, .crush_def = 30,
-        .magic_def = 200, .ranged_def = 250
+        .magic_def = 200, .ranged_def = 250, .ranged_light_def = 250, .ranged_heavy_def = 250
     },
     [MON_TFA_VOID_RIFT] = {
         .npc_id = 16678, .name = "Void Rift",
@@ -359,7 +361,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
-        .magic_def = 0, .ranged_def = 0
+        .magic_def = 0, .ranged_def = 0, .ranged_light_def = 0, .ranged_heavy_def = 0
     },
     [MON_TFA_VOID_AUGMENTER] = {
         .npc_id = 16680, .name = "Void Augmenter",
@@ -369,7 +371,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
-        .magic_def = 0, .ranged_def = 0
+        .magic_def = 0, .ranged_def = 0, .ranged_light_def = 0, .ranged_heavy_def = 0
     },
     [MON_TFA_VOID_VINE] = {
         .npc_id = 16681, .name = "Void Vine",
@@ -379,7 +381,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
-        .magic_def = 0, .ranged_def = 0
+        .magic_def = 0, .ranged_def = 0, .ranged_light_def = 0, .ranged_heavy_def = 0
     },
     /* HP 62 measured (100 of 108 killed corpses took exactly 62); the wiki infobox is blank, levels 1 and bonuses 0 stand in. */
     [MON_TFA_XARTH_CORPSE] = {
@@ -390,7 +392,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
-        .magic_def = 0, .ranged_def = 0
+        .magic_def = 0, .ranged_def = 0, .ranged_light_def = 0, .ranged_heavy_def = 0
     },
     /* HP 135 fitted from four health-bar drops after hits of 32, 35, 55, 57 (tfa_moia_events.tsv, 1 fight, intersection 132..137).
        The wiki has no Undead binder page: levels 1 and bonuses 0 stand in, provisional. */
@@ -402,7 +404,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
-        .magic_def = 0, .ranged_def = 0
+        .magic_def = 0, .ranged_def = 0, .ranged_light_def = 0, .ranged_heavy_def = 0
     },
     /* HP 75 measured (every one of 308 jellies took exactly 75 over 14 fights); players land 98% of hits so defence 1 and zero bonuses stand in, offence levels are provisional, wiki has no page. */
     [MON_TFA_JELLY] = {
@@ -413,7 +415,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
-        .magic_def = 0, .ranged_def = 0
+        .magic_def = 0, .ranged_def = 0, .ranged_light_def = 0, .ranged_heavy_def = 0
     },
     /* Animated Sword: wiki has no page. Charge capacity 80 is the 50 + 30 hit pair that fills the bar (24 recorded sword hits),
        levels 1 and bonuses 0 stand in (provisional). */
@@ -425,7 +427,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
-        .magic_def = 0, .ranged_def = 0
+        .magic_def = 0, .ranged_def = 0, .ranged_light_def = 0, .ranged_heavy_def = 0
     },
     /* Wiki infobox Ocellus (Phase 2): levels and defences listed, hp blank (carried from the P3 pool in the sim). */
     [MON_TFA_OCELLUS_P2] = {
@@ -436,7 +438,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 150, .slash_def = 120, .crush_def = 10,
-        .magic_def = 100, .ranged_def = 110
+        .magic_def = 100, .ranged_def = 110, .ranged_light_def = 100, .ranged_heavy_def = 80
     },
     /* The Blade 16676 has no wiki stats: the P2 Ocellus defences stand in; it never loses hp, half its damage transfers to Ocellus. */
     [MON_TFA_OCELLUS_BLADE] = {
@@ -447,7 +449,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 150, .slash_def = 120, .crush_def = 10,
-        .magic_def = 100, .ranged_def = 110
+        .magic_def = 100, .ranged_def = 110, .ranged_light_def = 100, .ranged_heavy_def = 80
     },
     /* Void Siphon 16679: no wiki page. Killed by one 44 in recordings (3/3), so the Void Augmenter infobox (hp 44, def 175, mage 300) stands in. */
     [MON_TFA_VOID_SIPHON] = {
@@ -458,7 +460,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
-        .magic_def = 0, .ranged_def = 0
+        .magic_def = 0, .ranged_def = 0, .ranged_light_def = 0, .ranged_heavy_def = 0
     },
 };
 

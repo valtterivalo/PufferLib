@@ -247,26 +247,26 @@ static void test_bolt_functions(void) {
     uint32_t rng = 1;
     /* Ruby dragon bolts (e): certain through Evoke once the accuracy roll landed: 22% of 99 = 21 (floor 21.78), cap 110; 22% of 121 = 26; against 600 hitpoints the cap
      * 110 holds. The attacker pays 10% of its current hitpoints: 99 -> 9, 121 -> 12; under 10 hitpoints it cannot spare one and nothing happens. */
-    BoltProcResult r = osrs_resolve_bolt_proc(ITEM_RUBY_DRAGON_BOLTS_E, 7, 1, 42, 112, 99, 99, 1, 1, &rng);
+    BoltProcResult r = osrs_resolve_bolt_proc(ITEM_RUBY_DRAGON_BOLTS_E, 7, 1, 42, 112, 99, 99, 1, 1, 0, &rng);
     assert(r.proc_triggered && r.modified_damage == 21 && r.attacker_hp_cost == 9);
-    r = osrs_resolve_bolt_proc(ITEM_RUBY_DRAGON_BOLTS_E, 7, 1, 42, 112, 121, 121, 1, 1, &rng);
+    r = osrs_resolve_bolt_proc(ITEM_RUBY_DRAGON_BOLTS_E, 7, 1, 42, 112, 121, 121, 1, 1, 0, &rng);
     assert(r.proc_triggered && r.modified_damage == 26 && r.attacker_hp_cost == 12);
-    r = osrs_resolve_bolt_proc(ITEM_RUBY_DRAGON_BOLTS_E, 7, 1, 42, 112, 600, 99, 1, 1, &rng);
+    r = osrs_resolve_bolt_proc(ITEM_RUBY_DRAGON_BOLTS_E, 7, 1, 42, 112, 600, 99, 1, 1, 0, &rng);
     assert(r.modified_damage == 110);
-    r = osrs_resolve_bolt_proc(ITEM_RUBY_DRAGON_BOLTS_E, 7, 1, 42, 112, 99, 9, 1, 1, &rng);
+    r = osrs_resolve_bolt_proc(ITEM_RUBY_DRAGON_BOLTS_E, 7, 1, 42, 112, 99, 9, 1, 1, 0, &rng);
     assert(!r.proc_triggered && r.modified_damage == 7 && r.attacker_hp_cost == 0);
-    r = osrs_resolve_bolt_proc(ITEM_RUBY_DRAGON_BOLTS_E, 0, 0, 42, 112, 99, 99, 1, 1, &rng); /* the special missed: no effect */
+    r = osrs_resolve_bolt_proc(ITEM_RUBY_DRAGON_BOLTS_E, 0, 0, 42, 112, 99, 99, 1, 1, 0, &rng); /* the special missed: no effect */
     assert(!r.proc_triggered);
     /* Not the crossbow's passive: 20% of 99 = 19, cap 100. */
-    r = osrs_resolve_bolt_proc(ITEM_RUBY_DRAGON_BOLTS_E, 7, 1, 42, 112, 99, 99, 0, 1, &rng);
-    assert(r.modified_damage == 19 && osrs_resolve_bolt_proc(ITEM_RUBY_DRAGON_BOLTS_E, 7, 1, 42, 112, 900, 99, 0, 1, &rng).modified_damage == 100);
+    r = osrs_resolve_bolt_proc(ITEM_RUBY_DRAGON_BOLTS_E, 7, 1, 42, 112, 99, 99, 0, 1, 0, &rng);
+    assert(r.modified_damage == 19 && osrs_resolve_bolt_proc(ITEM_RUBY_DRAGON_BOLTS_E, 7, 1, 42, 112, 900, 99, 0, 1, 0, &rng).modified_damage == 100);
     /* Diamond: max 42 -> 126% = 52 from a Zaryte, 115% = 48 otherwise; uniform 0..max; certain through Evoke after a landed roll. */
     int top_zcb = 0, top_plain = 0;
     for (int i = 0; i < 20000; i++) {
-        r = osrs_resolve_bolt_proc(ITEM_DIAMOND_DRAGON_BOLTS_E, 5, 1, 42, 112, 99, 99, 1, 1, &rng);
+        r = osrs_resolve_bolt_proc(ITEM_DIAMOND_DRAGON_BOLTS_E, 5, 1, 42, 112, 99, 99, 1, 1, 0, &rng);
         assert(r.proc_triggered && r.modified_damage >= 0 && r.modified_damage <= 52);
         top_zcb = r.modified_damage > top_zcb ? r.modified_damage : top_zcb;
-        r = osrs_resolve_bolt_proc(ITEM_DIAMOND_DRAGON_BOLTS_E, 5, 1, 42, 112, 99, 99, 0, 1, &rng);
+        r = osrs_resolve_bolt_proc(ITEM_DIAMOND_DRAGON_BOLTS_E, 5, 1, 42, 112, 99, 99, 0, 1, 0, &rng);
         assert(r.proc_triggered && r.modified_damage <= 48);
         top_plain = r.modified_damage > top_plain ? r.modified_damage : top_plain;
     }
@@ -274,8 +274,8 @@ static void test_bolt_functions(void) {
     /* Chances of an unforced shot, rolled whether or not the accuracy roll passed: ruby 11% (needs the hitpoints), diamond 5% (PvP). */
     int ruby = 0, diamond = 0, n = 400000;
     for (int i = 0; i < n; i++) {
-        ruby += osrs_resolve_bolt_proc(ITEM_RUBY_DRAGON_BOLTS_E, 0, 0, 42, 112, 99, 99, 0, 0, &rng).proc_triggered;
-        diamond += osrs_resolve_bolt_proc(ITEM_DIAMOND_BOLTS_E, 0, 0, 42, 112, 99, 99, 0, 0, &rng).proc_triggered;
+        ruby += osrs_resolve_bolt_proc(ITEM_RUBY_DRAGON_BOLTS_E, 0, 0, 42, 112, 99, 99, 0, 0, 0, &rng).proc_triggered;
+        diamond += osrs_resolve_bolt_proc(ITEM_DIAMOND_BOLTS_E, 0, 0, 42, 112, 99, 99, 0, 0, 0, &rng).proc_triggered;
     }
     assert(near((double)ruby / n, 0.11, 0.003) && near((double)diamond / n, 0.05, 0.003));
     printf("bolts: ruby 21 / 26 / 110 for 99 / 121 / 600 hitpoints (cost 9 / 12), diamond max 52 / 48, rates %.3f / %.3f\n", (double)ruby / n, (double)diamond / n);

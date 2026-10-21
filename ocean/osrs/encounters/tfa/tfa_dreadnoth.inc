@@ -271,6 +271,7 @@ static void tfa_dread_jelly_act(TfaState* s, TfaNpc* j) {
         tfa_queue_npc_hit(s, p, tfa_rand_range(s, TFA_DREAD.jelly_min_hit, TFA_DREAD.jelly_max_hit), ATTACK_STYLE_MELEE, 0, 0, j);
         return;
     }
+    if (j->frozen_ticks > 0) return;
     int dx = tfa_dread_sign(pl->x - j->x), dy = tfa_dread_sign(pl->y - j->y);
     if (dx && dy && chebyshev_distance(j->x, j->y, pl->x, pl->y) == 1) dy = 0;
     if (!tfa_layout_blocked(tfa_room_layout(TFA_ROOM_DREADNOTH), j->x + dx, j->y + dy)) {

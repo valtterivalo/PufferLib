@@ -36,7 +36,7 @@ raw_id	enum	name	slot	two_handed	attack_speed	attack_range	style	attack_stab	att
 13073	ITEM_ELITE_VOID_ROBE	Elite void robe	legs	0	0	0	none	0	0	0	0	0	30	30	30	30	30	0	0	0	3	24180,27004	https://oldschool.runescape.wiki/w/Elite_void_robe#Normal	locked and (l)(or) share the stats
 1127	ITEM_RUNE_PLATEBODY	Rune platebody	body	0	0	0	none	0	0	0	-30	-15	82	80	72	-6	80	0	0	0	0		https://oldschool.runescape.wiki/w/Rune_platebody	
 24271	ITEM_NEITIZNOT_FACEGUARD	Neitiznot faceguard	head	0	0	0	none	0	0	0	0	0	36	34	38	3	34	6	0	0	3		https://oldschool.runescape.wiki/w/Neitiznot_faceguard	
-28474	ITEM_ICE_ANCIENT_SCEPTRE_L	Ice ancient sceptre (l)	weapon	0	4	10	magic	20	-1	50	20	0	2	3	1	15	0	60	0	10	-1	27626	https://oldschool.runescape.wiki/w/Ice_ancient_sceptre#Locked	magic range 10 as the hand staff rows
+28474	ITEM_ICE_ANCIENT_SCEPTRE_L	Ice ancient sceptre (l)	weapon	0	4	10	magic	20	-1	50	20	0	2	3	1	15	0	60	0	10	-1	27626,28262	https://oldschool.runescape.wiki/w/Ice_ancient_sceptre#Locked	magic range 10 as the hand staff rows
 861	ITEM_MAGIC_SHORTBOW	Magic shortbow	weapon	1	4	7	ranged	0	0	0	0	69	0	0	0	0	0	0	0	0	0		https://oldschool.runescape.wiki/w/Magic_shortbow	
 20849	ITEM_DRAGON_THROWNAXE	Dragon thrownaxe	weapon	0	5	4	ranged	0	0	0	0	36	0	0	0	0	0	0	47	0	0		https://oldschool.runescape.wiki/w/Dragon_thrownaxe	
 28869	ITEM_HUNTERS_SUNLIGHT_CROSSBOW	Hunters' sunlight crossbow	weapon	0	4	8	ranged	0	0	0	0	79	0	0	0	0	0	0	0	0	0		https://oldschool.runescape.wiki/w/Hunters'_sunlight_crossbow	
@@ -66,3 +66,5 @@ raw_id	enum	name	slot	two_handed	attack_speed	attack_range	style	attack_stab	att
 4749	ITEM_TORAGS_PLATEBODY	Torag's platebody	body	0	0	0	none	0	0	0	-30	-10	122	120	107	-6	132	0	0	0	0	4964,4965,4966,4967	https://oldschool.runescape.wiki/w/Torag's_platebody#Undamaged	degraded 100-25 variants share the undamaged stats
 10887	ITEM_BARRELCHEST_ANCHOR	Barrelchest anchor	weapon	1	6	1	melee	-2	10	92	0	0	0	0	0	0	0	100	0	0	0		https://oldschool.runescape.wiki/w/Barrelchest_anchor#Fixed	special Sunder (50%) not modelled: no special
 30955	ITEM_ARKAN_BLADE	Arkan blade	weapon	0	4	1	melee	55	70	0	0	0	0	0	0	0	0	64	0	0	1		https://oldschool.runescape.wiki/w/Arkan_blade	special Flames of Ralos (30%) not modelled: no special
+13576	ITEM_DRAGON_WARHAMMER	Dragon warhammer	weapon	0	6	1	melee	-4	-4	95	-4	0	0	0	0	0	0	85	0	0	0		https://oldschool.runescape.wiki/w/Dragon_warhammer	special Smash (50%) in osrs_special_attacks.h
+28922	ITEM_TONALZTICS_OF_RALOS	Tonalztics of ralos	weapon	0	7	7	ranged	0	0	0	0	115	0	0	0	0	0	0	55	0	2	28919	https://oldschool.runescape.wiki/w/Tonalztics_of_Ralos	range 7: TFA teammates threw its special from up to 8 tiles of the target point (47 throws); special Division (50%) in osrs_special_attacks.h

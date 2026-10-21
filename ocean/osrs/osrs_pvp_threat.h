@@ -278,7 +278,7 @@ static inline OsrsThreatWeapon osrs_threat_weapon_swapped(const EquipmentBonuses
         const OsrsThreatActor* who) {
     uint8_t worn_weapon = equipment[GEAR_SLOT_WEAPON];
     int dharok_set = worn_dharok_armour >= 3 && weapon != ITEM_NONE && (ITEM_DATABASE[weapon].effect_mask & OSRS_ITEM_EFFECT_DHAROK_PIECE);
-    if (weapon == ITEM_TOXIC_BLOWPIPE || worn_weapon == ITEM_TOXIC_BLOWPIPE) { /* the blowpipe's own dart replaces the ammunition: not a delta */
+    if (osrs_weapon_is_thrown(weapon) || osrs_weapon_is_thrown(worn_weapon)) { /* a thrown weapon drops the worn ammunition: not a delta */
         uint8_t loadout[NUM_GEAR_SLOTS];
         osrs_threat_loadout(equipment, weapon, loadout);
         EquipmentBonuses b;

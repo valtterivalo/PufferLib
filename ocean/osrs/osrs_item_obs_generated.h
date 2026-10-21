@@ -2,8 +2,8 @@
 #ifndef OSRS_ITEM_OBS_GENERATED_H
 #define OSRS_ITEM_OBS_GENERATED_H
 
-#define OSRS_ITEM_CONTENT_COUNT 280
-#define OSRS_ITEM_OBS_TABLE_ROWS 280
+#define OSRS_ITEM_CONTENT_COUNT 282
+#define OSRS_ITEM_OBS_TABLE_ROWS 282
 #define OSRS_ITEM_OBS_TABLE_COLS 14
 #define OSRS_ITEM_OBS_TABLE_BASE_HITPOINTS 99
 #define OSRS_ITEM_OBS_TABLE_BASE_PRAYER 99
@@ -292,6 +292,8 @@
     X(277, &ITEM_DATABASE[211], 211, 4749, 6, 1, 0, 0, 0, 0, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f) \
     X(278, &ITEM_DATABASE[212], 212, 10887, 4, 1, 0, 0, 0, 1, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.600000024f, 0.0666666701f, 0.0f) \
     X(279, &ITEM_DATABASE[213], 213, 30955, 4, 1, 0, 0, 0, 1, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.400000006f, 0.0666666701f, 0.0f) \
+    X(280, &ITEM_DATABASE[214], 214, 13576, 4, 1, 0, 0, 0, 1, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.600000024f, 0.0666666701f, 0.5f) \
+    X(281, &ITEM_DATABASE[215], 215, 28922, 4, 1, 0, 0, 0, 2, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.699999988f, 0.466666669f, 0.5f) \
 
 #define OSRS_CONSUMABLE_CONTENT_ROWS(X) \
     X(1, 4, 145) \
@@ -372,6 +374,7 @@
     X(24133, 21295) \
     X(24224, 21295) \
     X(27908, 22622) \
+    X(28031, 4587) \
     X(28039, 13652) \
     X(28055, 11840) \
     X(28069, 10551) \
@@ -442,6 +445,7 @@
     X(24180, 13073) \
     X(27004, 13073) \
     X(27626, 28474) \
+    X(28262, 28474) \
     X(22810, 22804) \
     X(3763, 4401) \
     X(1007, 4401) \
@@ -459,6 +463,7 @@
     X(4965, 4749) \
     X(4966, 4749) \
     X(4967, 4749) \
+    X(28919, 28922) \
 
 
 #endif

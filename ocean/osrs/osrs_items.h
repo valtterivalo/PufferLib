@@ -69,7 +69,7 @@ typedef struct {
 /* Rows after the fixed table hold items the sim has no hand-written row for, priced from their stats at run time (gearswapper/gs_stat_items.h
  * fills them from the Java item table: bonuses, speed, style, two-handedness; no special attack, no effects). The table is rewritten only at a
  * request boundary (osrs_stat_items_clear), never while worlds run. */
-#define OSRS_STAT_ITEM_SLOTS 40 /* NUM_ITEMS + slots must stay below ITEM_NONE (255); 40 is the floor scripts/gen_osrs_item_rows.py keeps */
+#define OSRS_STAT_ITEM_SLOTS 38 /* NUM_ITEMS + slots must stay below ITEM_NONE (255); 38 is the floor scripts/gen_osrs_item_rows.py keeps */
 #include "osrs_items_generated.h"
 
 static int osrs_stat_item_count;

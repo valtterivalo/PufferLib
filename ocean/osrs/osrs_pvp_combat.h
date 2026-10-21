@@ -994,7 +994,7 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
         /* Evoke: the bolt effect is certain once the accuracy roll landed, with the crossbow's boosted numbers. */
         if (spec_item_idx == ITEM_ZARYTE_CROSSBOW) {
             BoltProcResult bp = osrs_resolve_bolt_proc(attacker->equipped[GEAR_SLOT_AMMO], sr.damage[0], sr.landed, max_hit, attacker->current_ranged,
-                defender->current_hitpoints, attacker->current_hitpoints, 1, 1, &env->rng_state);
+                defender->current_hitpoints, attacker->current_hitpoints, 1, 1, 0, &env->rng_state);
             if (bp.proc_triggered) {
                 sr.damage[0] = bp.modified_damage;
                 sr.total_damage = bp.modified_damage;
@@ -1124,7 +1124,7 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
                     ammo_item, damage, hit_success, max_hit,
                     attacker->current_ranged,
                     defender->current_hitpoints, attacker->current_hitpoints,
-                    attacker->equipped[GEAR_SLOT_WEAPON] == ITEM_ZARYTE_CROSSBOW, 0, &env->rng_state
+                    attacker->equipped[GEAR_SLOT_WEAPON] == ITEM_ZARYTE_CROSSBOW, 0, 0, &env->rng_state
                 );
                 if (bp.proc_triggered) {
                     damage = bp.modified_damage;

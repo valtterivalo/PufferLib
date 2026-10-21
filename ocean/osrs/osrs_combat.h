@@ -20,6 +20,47 @@ static inline MeleeStyle osrs_item_melee_style(uint8_t weapon_item) {
     return style;
 }
 
+/** Thrown weapons fire themselves (the blowpipe its loaded darts): worn ammunition adds nothing, and the hit lands on the thrown delay. */
+static inline int osrs_weapon_is_thrown(uint8_t weapon_item) {
+    switch (weapon_item) {
+        case ITEM_TOXIC_BLOWPIPE:
+        case ITEM_DRAGON_DART:
+        case ITEM_DRAGON_KNIFE:
+        case ITEM_DRAGON_THROWNAXE:
+        case ITEM_TONALZTICS_OF_RALOS:
+            return 1;
+    }
+    return 0;
+}
+
+/** NPC ranged defence bonus a weapon's ammunition rolls against (wiki Ranged defence: light for darts, knives, thrownaxes and throwing weapons,
+    heavy for bolts and javelins, standard for arrows and everything else). */
+static inline int osrs_ranged_def_bonus_for_weapon(uint8_t weapon_item, int light_def, int standard_def, int heavy_def) {
+    if (osrs_weapon_is_thrown(weapon_item)) return light_def;
+    switch (weapon_item) {
+        case ITEM_RUNE_CROSSBOW:
+        case ITEM_ARMADYL_CROSSBOW:
+        case ITEM_ZARYTE_CROSSBOW:
+        case ITEM_DRAGON_CROSSBOW:
+        case ITEM_HUNTERS_SUNLIGHT_CROSSBOW:
+        case ITEM_HEAVY_BALLISTA:
+            return heavy_def;
+    }
+    return standard_def;
+}
+
+/** A staff with a built-in spell; any other magic weapon attacks in melee unless a spell is cast. */
+static inline int osrs_item_is_powered_staff(uint8_t weapon_item) {
+    switch (weapon_item) {
+        case ITEM_TRIDENT_OF_SWAMP:
+        case ITEM_SANGUINESTI_STAFF:
+        case ITEM_TUMEKENS_SHADOW:
+        case ITEM_EYE_OF_AYAK:
+            return 1;
+    }
+    return 0;
+}
+
 /** Built-in spell max hit of a powered staff at the given Magic level, before magic damage bonuses
     (osrs-dps-calc PlayerVsNPCCalc: trident of the swamp m/3-2, sanguinesti m/3-1, shadow m/3+1, eye of ayak m/3-6). */
 static inline int osrs_powered_staff_base_damage(uint8_t weapon_item, int magic_level) {
@@ -640,12 +681,10 @@ static inline void osrs_sum_equipment_bonuses(const uint8_t loadout[NUM_GEAR_SLO
         out->prayer += item->prayer;
     }
     uint8_t weapon = loadout[GEAR_SLOT_WEAPON];
-    if (weapon == ITEM_TOXIC_BLOWPIPE) {
-        uint8_t ammo = loadout[GEAR_SLOT_AMMO];
-        if (ammo != ITEM_NONE)
-            out->ranged_strength -= ITEM_DATABASE[ammo].ranged_strength;
+    if (osrs_weapon_is_thrown(weapon) && loadout[GEAR_SLOT_AMMO] != ITEM_NONE)
+        out->ranged_strength -= ITEM_DATABASE[loadout[GEAR_SLOT_AMMO]].ranged_strength;
+    if (weapon == ITEM_TOXIC_BLOWPIPE)
         out->ranged_strength += ITEM_DATABASE[ITEM_DRAGON_DART].ranged_strength;
-    }
     if (weapon != 255) {
         out->attack_speed = ITEM_DATABASE[weapon].attack_speed;
         out->attack_range = ITEM_DATABASE[weapon].attack_range;

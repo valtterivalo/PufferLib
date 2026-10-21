@@ -13,6 +13,9 @@
  *     the effect certain provided the special's accuracy roll landed.
  * Opal (e) keeps its older rate below. */
 enum { OSRS_RUBY_PVP_PER_MILLE = 110, OSRS_DIAMOND_PVP_PER_MILLE = 50 };
+/* Against NPCs (wiki Ruby_dragon_bolts_(e), Diamond_dragon_bolts_(e)): ruby 6.6%, diamond 11% with the Kandarin hard diary. TFA Zaryte crossbow shots
+ * capped at 110 on 31 of 565 shots (5.5%, specials included, each proc only shows as 110 while the target has 550+ hitpoints). */
+enum { OSRS_RUBY_PVE_PER_MILLE = 66, OSRS_DIAMOND_PVE_PER_MILLE = 110 };
 
 typedef struct {
     int proc_triggered;
@@ -20,11 +23,12 @@ typedef struct {
     int attacker_hp_cost; /* hitpoints the attacker pays for the effect (ruby) */
 } BoltProcResult;
 
-/** `zcb_weapon`: the shot is fired from a Zaryte crossbow (passive boost). `guaranteed`: the shot is its special (the effect is certain once `hit_accurate`). */
+/** `zcb_weapon`: the shot is fired from a Zaryte crossbow (passive boost). `guaranteed`: the shot is its special (the effect is certain once `hit_accurate`).
+    `vs_npc`: the PvE activation rates. */
 static inline BoltProcResult osrs_resolve_bolt_proc(
     int bolt_item_idx, int base_damage, int hit_accurate,
     int max_hit, int ranged_level, int target_current_hp, int attacker_current_hp,
-    int zcb_weapon, int guaranteed, uint32_t* rng_state
+    int zcb_weapon, int guaranteed, int vs_npc, uint32_t* rng_state
 ) {
     BoltProcResult r = { 0, base_damage, 0 };
 
@@ -32,7 +36,7 @@ static inline BoltProcResult osrs_resolve_bolt_proc(
 
     case ITEM_DIAMOND_BOLTS_E:
     case ITEM_DIAMOND_DRAGON_BOLTS_E: {
-        if (guaranteed ? !hit_accurate : !encounter_roll_ratio_u16(rng_state, OSRS_DIAMOND_PVP_PER_MILLE, 1000)) break;
+        if (guaranteed ? !hit_accurate : !encounter_roll_ratio_u16(rng_state, vs_npc ? OSRS_DIAMOND_PVE_PER_MILLE : OSRS_DIAMOND_PVP_PER_MILLE, 1000)) break;
         int effect_max = max_hit * (zcb_weapon ? 126 : 115) / 100;
         r.proc_triggered = 1;
         r.modified_damage = encounter_rand_int(rng_state, effect_max + 1);
@@ -49,7 +53,7 @@ static inline BoltProcResult osrs_resolve_bolt_proc(
     }
 
     case ITEM_RUBY_DRAGON_BOLTS_E: {
-        if (guaranteed ? !hit_accurate : !encounter_roll_ratio_u16(rng_state, OSRS_RUBY_PVP_PER_MILLE, 1000)) break;
+        if (guaranteed ? !hit_accurate : !encounter_roll_ratio_u16(rng_state, vs_npc ? OSRS_RUBY_PVE_PER_MILLE : OSRS_RUBY_PVP_PER_MILLE, 1000)) break;
         int cost = attacker_current_hp / 10;
         if (cost < 1) break;
         int cap = zcb_weapon ? 110 : 100;

@@ -12,6 +12,7 @@
 #include "../osrs_items.h"
 #include "../osrs_combat.h"
 #include "../osrs_special_attacks.h"
+#include "../osrs_bolt_procs.h"
 #include "../osrs_poison.h"
 #include "../osrs_collision.h"
 #include "../osrs_monsters_generated.h"

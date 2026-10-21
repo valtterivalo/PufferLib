@@ -20,7 +20,8 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
             soonest = hit->ticks_remaining;
             want = hit->attack_style == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED : PRAYER_PROTECT_MELEE;
         }
-        int best = target && target->attackable ? 4 : 1 << 30;
+        /* P0 barraged jellies whenever one was up and Dreadnoth otherwise (449 casts, 62 crossbow shots), the bow raiders only close jellies. */
+        int best = target && target->attackable && tp->kit == TFA_KIT_BOW ? 4 : 1 << 30;
         for (int i = 0; i < TFA_NUM_TARGET_SLOTS; i++) {
             const TfaNpc* j = &s->npcs[i];
             if (!j->active || j->kind != TFA_NPC_JELLY || !j->attackable) continue;
@@ -88,10 +89,6 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
             int line = w->state ? w->y : w->x;
             if ((w->state ? boss->y : boss->x) == line) { target = w; break; }
         }
-        if (p != 0 && tfa_player_npc_distance(tp, boss) < 3) {
-            hide_x = tp->player.x + 3 * ((tp->player.x > boss->x + 1) - (tp->player.x < boss->x + 1));
-            hide_y = tp->player.y + 3 * ((tp->player.y > boss->y + 1) - (tp->player.y < boss->y + 1));
-        }
     } else if (s->room == TFA_ROOM_OCELLUS) {
         const TfaOcellusState* os = &s->boss.ocellus;
         want = (OverheadPrayer)os->want_prayer;
@@ -126,9 +123,9 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
         const TfaXarthState* xs = &s->boss.xarth;
         target = tfa_npc_first(s, TFA_NPC_XARTH);
         want = xs->p2_started ? PRAYER_PROTECT_RANGED : PRAYER_PROTECT_MAGIC;
-        /* A twisted bow barely scratches a magic-level-1 corpse, so the bow stays on Xarth until a corpse is about to reach him. */
+        /* Corpses are barraged as they walk in (1307 recorded hits on corpses, 135 of 139 killed before reaching Xarth). */
         const TfaNpc* boss = target;
-        int best = 5;
+        int best = 1 << 30;
         for (int i = 0; i < TFA_MAX_NPCS && boss; i++) {
             const TfaNpc* c = &s->npcs[i];
             if (!c->active || c->kind != TFA_NPC_XARTH_CORPSE) continue;
@@ -149,19 +146,50 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
     if (tp->player.prayer != want)
         acts[OSRS_HEAD_OVERHEAD] = want == PRAYER_NONE ? ENCOUNTER_OVERHEAD_OFF : want == PRAYER_PROTECT_MELEE ? ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE
             : want == PRAYER_PROTECT_MAGIC ? ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC : ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED;
-    int melee = s->room == TFA_ROOM_BORK;
-    OffensivePrayer offensive = melee ? OFFENSIVE_PRAYER_PIETY : OFFENSIVE_PRAYER_RIGOUR;
+    /* Weapons per room from the recordings: P0 meleed Ezekiel (1043 Soulreaper attacks), blowpiped the Guardian (364 of 852
+       attacks), crossbowed every other boss and barraged corpses and jellies (577 casts); the bow raiders shot everything but Ezekiel (no
+       arrows there). Openers: the Zaryte special (75%) on the first crossbow shot, two Dragon warhammer specials on Ezekiel, a Tonalztics
+       special from each bow raider. Bork (one fight, 7 Soulreaper swings while P0 also carried the cannon remains) stays ranged. */
+    int crossbow = tp->kit == TFA_KIT_CROSSBOW;
+    int barrage = target->kind == TFA_NPC_XARTH_CORPSE || target->kind == TFA_NPC_JELLY || (crossbow && s->room == TFA_ROOM_DREADNOTH);
+    AttackStyle stance = barrage ? ATTACK_STYLE_MAGIC
+        : s->room == TFA_ROOM_EZEKIEL ? ATTACK_STYLE_MELEE
+        : ATTACK_STYLE_RANGED;
+    uint8_t spec_weapon = ITEM_NONE;
+    if (stance == ATTACK_STYLE_MELEE && crossbow && tp->player.special_energy >= 50) spec_weapon = ITEM_DRAGON_WARHAMMER;
+    if (stance == ATTACK_STYLE_RANGED && crossbow && tp->player.special_energy == 100) spec_weapon = ITEM_ZARYTE_CROSSBOW;
+    if (stance == ATTACK_STYLE_RANGED && !crossbow && tp->player.special_energy == 100) spec_weapon = ITEM_TONALZTICS_OF_RALOS;
+    uint8_t wanted[NUM_GEAR_SLOTS];
+    memset(wanted, ITEM_NONE, sizeof(wanted));
+    if (stance == ATTACK_STYLE_RANGED) {
+        memcpy(wanted, TFA_KIT_WORN[tp->kit], sizeof(wanted));
+        if (crossbow && s->room == TFA_ROOM_GUARDIAN) {
+            wanted[GEAR_SLOT_WEAPON] = ITEM_TOXIC_BLOWPIPE;
+            wanted[GEAR_SLOT_SHIELD] = ITEM_NONE;
+        }
+    } else if (stance == ATTACK_STYLE_MAGIC) {
+        wanted[GEAR_SLOT_WEAPON] = ITEM_ICE_ANCIENT_SCEPTRE_L;
+        wanted[GEAR_SLOT_BODY] = ITEM_ANCESTRAL_TOP;
+        wanted[GEAR_SLOT_LEGS] = ITEM_ANCESTRAL_BOTTOM;
+    } else {
+        wanted[GEAR_SLOT_WEAPON] = ITEM_SOULREAPER_AXE;
+        wanted[GEAR_SLOT_CAPE] = ITEM_INFERNAL_CAPE;
+        wanted[GEAR_SLOT_NECK] = ITEM_AMULET_OF_RANCOUR;
+        if (spec_weapon != ITEM_NONE) wanted[GEAR_SLOT_SHIELD] = ITEM_AVERNIC_DEFENDER;
+    }
+    if (spec_weapon != ITEM_NONE) wanted[GEAR_SLOT_WEAPON] = spec_weapon;
+    OffensivePrayer offensive = encounter_offensive_prayer_for_style(stance);
     if (tp->player.offensive_prayer != offensive)
-        acts[OSRS_HEAD_OFFENSIVE] = melee ? ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY : ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR;
+        acts[OSRS_HEAD_OFFENSIVE] = stance == ATTACK_STYLE_MELEE ? ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY
+            : stance == ATTACK_STYLE_MAGIC ? ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY : ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR;
     for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++) {
         const OsrsItemContentMetadata* md = osrs_inventory_cell_metadata(&tp->player.inventory_cells[cell]);
-        int wanted = melee
-            ? md->item_idx == ITEM_INQUISITORS_MACE || md->item_idx == ITEM_AVERNIC_DEFENDER
-            : md->item_idx == ITEM_TWISTED_BOW || md->item_idx == ITEM_DIZANAS_QUIVER || md->item_idx == ITEM_NECKLACE_OF_ANGUISH
-                || md->item_idx == ITEM_MASORI_BODY_F || md->item_idx == ITEM_MASORI_CHAPS_F;
-        if (wanted && md->gear_slot >= 0 && tp->player.equipped[md->gear_slot] != md->item_idx)
+        if (md->gear_slot >= 0 && md->item_idx != ITEM_NONE && wanted[md->gear_slot] == md->item_idx && !acts[OSRS_HEAD_EQUIP_SLOT(md->gear_slot)])
             acts[OSRS_HEAD_EQUIP_SLOT(md->gear_slot)] = cell + 1;
     }
+    if (spec_weapon != ITEM_NONE && tp->player.equipped[GEAR_SLOT_WEAPON] == spec_weapon && !tp->player.spec_armed)
+        acts[OSRS_HEAD_SPECIAL] = 1;
+    if (barrage) acts[OSRS_HEAD_SPELL] = OSRS_SPELL_ICE_BARRAGE;
     acts[OSRS_HEAD_PRIMARY] = TFA_PRIMARY_ATTACK_BASE + tfa_npc_slot(s, target);
     if (hide_x >= 0 && (tp->player.x != hide_x || tp->player.y != hide_y) && tp->player.attack_timer > 0) {
         int best = 1 << 30;

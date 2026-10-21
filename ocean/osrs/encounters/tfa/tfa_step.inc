@@ -13,7 +13,11 @@ static int tfa_npc_damage_cap(const TfaState* s, const TfaNpc* n, int damage) {
 static int tfa_npc_take_damage(TfaState* s, TfaNpc* n, int damage, int attacker, AttackStyle style) {
     int applied = tfa_boss_npc_damage(s, n, damage, attacker, style);
     n->damage_taken_tick += applied;
-    if (n->hit_count_tick < OSRS_RENDER_HITS_MAX) n->hits_tick[n->hit_count_tick++] = (int16_t)applied;
+    if (n->hit_count_tick < OSRS_RENDER_HITS_MAX) {
+        n->hits_attacker[n->hit_count_tick] = (int8_t)attacker;
+        n->hits_style[n->hit_count_tick] = (int8_t)style;
+        n->hits_tick[n->hit_count_tick++] = (int16_t)applied;
+    }
     tfa_credit_damage(s, attacker, applied);
     if (n->active && n->hp <= 0 && n->max_hp > 0) tfa_boss_npc_died(s, n, attacker);
     return applied;
@@ -92,6 +96,7 @@ static void tfa_step_team(TfaState* s, TfaContext* ctx, const int* actions) {
     for (int i = 0; i < TFA_MAX_NPCS; i++) {
         s->npcs[i].damage_taken_tick = 0;
         s->npcs[i].hit_count_tick = 0;
+        if (s->npcs[i].frozen_ticks > 0) s->npcs[i].frozen_ticks--;
     }
 
     for (int p = 0; p < s->team_size; p++) {

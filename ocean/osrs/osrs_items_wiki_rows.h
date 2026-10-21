@@ -2,7 +2,7 @@
 #ifndef OSRS_ITEMS_WIKI_ROWS_H
 #define OSRS_ITEMS_WIKI_ROWS_H
 
-#define OSRS_ITEM_WIKI_ROW_COUNT 51
+#define OSRS_ITEM_WIKI_ROW_COUNT 53
 
 /* X(enum, raw_id, name, slot, two_handed, speed, range, attack_style, attack stab/slash/crush/magic/ranged, defence stab/slash/crush/magic/ranged,
  *   melee_strength, ranged_strength, magic_damage, prayer); attack_style: 0 none, 1 melee, 2 ranged, 3 magic (get_item_attack_style). */
@@ -58,6 +58,8 @@
     X(ITEM_TORAGS_PLATEBODY, 4749, "Torag's platebody", SLOT_BODY, 0, 0, 0, 0, 0, 0, 0, -30, -10, 122, 120, 107, -6, 132, 0, 0, 0, 0) \
     X(ITEM_BARRELCHEST_ANCHOR, 10887, "Barrelchest anchor", SLOT_WEAPON, 1, 6, 1, 1, -2, 10, 92, 0, 0, 0, 0, 0, 0, 0, 100, 0, 0, 0) \
     X(ITEM_ARKAN_BLADE, 30955, "Arkan blade", SLOT_WEAPON, 0, 4, 1, 1, 55, 70, 0, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 1) \
+    X(ITEM_DRAGON_WARHAMMER, 13576, "Dragon warhammer", SLOT_WEAPON, 0, 6, 1, 1, -4, -4, 95, -4, 0, 0, 0, 0, 0, 0, 85, 0, 0, 0) \
+    X(ITEM_TONALZTICS_OF_RALOS, 28922, "Tonalztics of ralos", SLOT_WEAPON, 0, 7, 7, 2, 0, 0, 0, 0, 115, 0, 0, 0, 0, 0, 0, 55, 0, 2) \
 
 /* X(raw_id, enum): ids that share the stats of a wiki row (charged and ornament variants). */
 #define OSRS_ITEM_WIKI_ALIAS_ROWS(X) \
@@ -70,6 +72,7 @@
     X(24180, ITEM_ELITE_VOID_ROBE) \
     X(27004, ITEM_ELITE_VOID_ROBE) \
     X(27626, ITEM_ICE_ANCIENT_SCEPTRE_L) \
+    X(28262, ITEM_ICE_ANCIENT_SCEPTRE_L) \
     X(22810, ITEM_DRAGON_KNIFE) \
     X(3763, ITEM_TEAM_44_CAPE) \
     X(1007, ITEM_TEAM_44_CAPE) \
@@ -87,5 +90,6 @@
     X(4965, ITEM_TORAGS_PLATEBODY) \
     X(4966, ITEM_TORAGS_PLATEBODY) \
     X(4967, ITEM_TORAGS_PLATEBODY) \
+    X(28919, ITEM_TONALZTICS_OF_RALOS) \
 
 #endif

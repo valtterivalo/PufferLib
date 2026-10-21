@@ -168,8 +168,8 @@ static void test_spec_accuracy_matches_resolver(void) {
         }
         OsrsSpecAccuracy a = osrs_spec_accuracy(item);
         float expected = osrs_hit_chance(base_att * a.att_num / a.att_den, def_roll * a.def_num / a.def_den);
-        /* The dagger and the shortbow roll their two hits one by one: damage shows if either lands. */
-        if (item == ITEM_DRAGON_DAGGER || item == ITEM_MAGIC_SHORTBOW_I) expected = 1 - (1 - expected) * (1 - expected);
+        /* The dagger, the shortbow and the Tonalztics roll their two hits one by one: damage shows if either lands. */
+        if (item == ITEM_DRAGON_DAGGER || item == ITEM_MAGIC_SHORTBOW_I || item == ITEM_TONALZTICS_OF_RALOS) expected = 1 - (1 - expected) * (1 - expected);
         if (item == ITEM_VOLATILE_STAFF) expected *= 58.0f / 59.0f; /* a fixed 0..58 roll shows no damage 1 time in 59 */
         uint32_t rng = 777u + (uint32_t)item;
         int hits = 0, n = 200000;

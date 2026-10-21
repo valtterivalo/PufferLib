@@ -167,6 +167,7 @@ static void tfa_write_mask_for(TfaState* s, TfaContext* ctx, int p, unsigned cha
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
         mask[osrs_base_action_head_mask_offset(TFA_NUM_TARGET_SLOTS, OSRS_HEAD_EQUIP_SLOT(slot))] = 1;
     if (tp->life != TFA_LIFE_ALIVE || s->episode_over) return;
+    mask[spell + OSRS_SPELL_ICE_BARRAGE] = 1;
 
     if (tp->stunned_ticks <= 0 && tp->rooted_ticks <= 0) {
         for (int a = 1; a < OSRS_PRIMARY_MOVE_ACTIONS; a++) {

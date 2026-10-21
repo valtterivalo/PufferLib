@@ -5,7 +5,8 @@
 #define TFA_ROOM_SIZE 64
 #define TFA_DANGER_HORIZON 6
 #define TFA_ARENA_MAX ENCOUNTER_ARENA_TOPOLOGY_MAX_DIMENSION
-#define TFA_PLAYER_PRAYER 99
+/* Prayer level of the recorded raider (real level 90 on 18980 of 18980 menu actions). */
+#define TFA_PLAYER_PRAYER 90
 #define TFA_ROOM_MAX_TICKS 3000
 
 typedef enum {
@@ -100,8 +101,12 @@ typedef struct {
     int16_t counter;
     uint32_t instance_id;
     int32_t damage_taken_tick;
+    int16_t def_drain;
+    int16_t frozen_ticks;
     int8_t hit_count_tick;
     int16_t hits_tick[OSRS_RENDER_HITS_MAX];
+    int8_t hits_attacker[OSRS_RENDER_HITS_MAX];
+    int8_t hits_style[OSRS_RENDER_HITS_MAX];
     EncounterPendingHitQueue hits;
 } TfaNpc;
 
@@ -174,6 +179,8 @@ typedef struct {
     int16_t rooted_ticks;
     int16_t stunned_ticks;
     int16_t injured_ticks;
+    uint8_t kit;
+    uint8_t queued_spell;
     float reward;
     float damage_dealt_tick;
     float damage_taken_tick;
@@ -295,3 +302,31 @@ typedef struct {
     int world_offset_x;
     int world_offset_y;
 } TfaContext;
+
+/* Raider kits from the recordings. The recorder's player (P0) wore and carried the same set at the start of 58 of 58 fights (item containers 94
+   and 93): a Zaryte crossbow with ruby dragon bolts (e) (its 110 caps), Soulreaper axe and Dragon warhammer, an Ice ancient sceptre with
+   ancestral robes, a blowpipe. The other raiders are only seen through their projectiles: dragon arrows 1120 (5-tick twisted bow cadence, 3940
+   throws), Tonalztics of ralos specials 2727 opening the fights (47), ice barrage 368 on adds (872), blowpipe darts 1122. They get the twisted bow
+   and the Tonalztics in place of the crossbow, bolts, buckler and warhammer. */
+typedef enum { TFA_KIT_CROSSBOW = 0, TFA_KIT_BOW } TfaKit;
+
+static const uint8_t TFA_KIT_WORN[2][NUM_GEAR_SLOTS] = {
+    [TFA_KIT_CROSSBOW] = {
+        ITEM_NEITIZNOT_FACEGUARD, ITEM_DIZANAS_QUIVER, ITEM_NECKLACE_OF_RUPTURE, ITEM_RUBY_DRAGON_BOLTS_E,
+        ITEM_ZARYTE_CROSSBOW, ITEM_TWISTED_BUCKLER, ITEM_MASORI_BODY_F, ITEM_MASORI_CHAPS_F,
+        ITEM_BARROWS_GLOVES, ITEM_AVERNIC_TREADS, ITEM_ULTOR_RING,
+    },
+    [TFA_KIT_BOW] = {
+        ITEM_NEITIZNOT_FACEGUARD, ITEM_DIZANAS_QUIVER, ITEM_NECKLACE_OF_RUPTURE, ITEM_DRAGON_ARROWS,
+        ITEM_TWISTED_BOW, ITEM_NONE, ITEM_MASORI_BODY_F, ITEM_MASORI_CHAPS_F,
+        ITEM_BARROWS_GLOVES, ITEM_AVERNIC_TREADS, ITEM_ULTOR_RING,
+    },
+};
+
+static const uint8_t TFA_KIT_SWITCHES[2][6] = {
+    [TFA_KIT_CROSSBOW] = { ITEM_DRAGON_WARHAMMER, ITEM_TOXIC_BLOWPIPE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE },
+    [TFA_KIT_BOW] = { ITEM_TONALZTICS_OF_RALOS, ITEM_TOXIC_BLOWPIPE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE },
+};
+
+static const uint8_t TFA_KIT_MELEE[] = { ITEM_SOULREAPER_AXE, ITEM_INFERNAL_CAPE, ITEM_AMULET_OF_RANCOUR, ITEM_AVERNIC_DEFENDER };
+static const uint8_t TFA_KIT_MAGIC[] = { ITEM_ICE_ANCIENT_SCEPTRE_L, ITEM_ANCESTRAL_TOP, ITEM_ANCESTRAL_BOTTOM };

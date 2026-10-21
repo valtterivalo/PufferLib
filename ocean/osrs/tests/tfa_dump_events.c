@@ -82,8 +82,10 @@ int main(int argc, char** argv) {
                         if (n->act != TFA_ACT_IDLE && n->target >= 0)
                             printf("%s\t%d\tTGT\t%d#%d\t%d\t-\t-\tP%d\t-\t-\n", fid, t, n->npc_id, i, n->anim_id, n->target);
                     }
+                    /* A splashed spell shows no hitsplat: P0's ice barrages never left a block splat (0 of 716). */
                     for (int h = 0; h < n->hit_count_tick; h++)
-                        printf("%s\t%d\tHIT\t%d#%d\t%d\t%d\t%d\t%d\t-\t-\n", fid, t, n->npc_id, i, n->hits_tick[h], n->x, n->y, n->hits_tick[h] > 0 ? 17 : 13);
+                        if (n->hits_style[h] != ATTACK_STYLE_MAGIC || n->hits_tick[h] > 0) printf("%s\t%d\tHIT\t%d#%d\t%d\t%d\t%d\t%d\t-\t-\n", fid, t, n->npc_id, i, n->hits_tick[h], n->x, n->y,
+                            n->hits_attacker[h] == 0 ? (n->hits_tick[h] > 0 ? 16 : 12) : (n->hits_tick[h] > 0 ? 17 : 13));
                     if (n->max_hp > 0)
                         printf("%s\t%d\tNHP\t%d#%d\t%d\t-\t-\t100\t-\t-\n", fid, t, n->npc_id, i,
                             n->max_shield > 0 && n->shield > 0 ? 100 * n->shield / n->max_shield : 100 * n->hp / n->max_hp);

@@ -48,6 +48,7 @@ typedef struct {
     int spec_cost;
     int attack_speed_override;  /* 0 = use weapon speed */
     int landed;                 /* the accuracy roll passed (set by the specials whose follow-up needs it: Zaryte crossbow) */
+    int def_drain_magic_pct;    /* the caller lowers Defence by this percent of the target's Magic level (Tonalztics of ralos) */
 } SpecResult;
 
 /** Spec energy cost by weapon item index; 0 = the weapon has no special (the Soulreaper axe has one that costs stacks, not energy: osrs_spec_is_stack_special). */
@@ -70,6 +71,8 @@ static inline int osrs_spec_cost(int weapon_item_idx) {
         case ITEM_GRANITE_MAUL_ORNATE:  return 50;
         case ITEM_DRAGON_DAGGER:        return 25;
         case ITEM_ELDER_MAUL:           return 50;
+        case ITEM_DRAGON_WARHAMMER:     return 50;
+        case ITEM_TONALZTICS_OF_RALOS:  return 50;
         case ITEM_TOXIC_BLOWPIPE:       return 50;
         case ITEM_MAGIC_SHORTBOW_I:     return 50;
         case ITEM_DARK_BOW:             return 55;
@@ -321,6 +324,32 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
+    /* Smash (wiki Dragon_warhammer): unboosted accuracy, 50% more damage, a landed hit lowers Defence by 30%. */
+    case ITEM_DRAGON_WARHAMMER: {
+        r.spec_cost = 50;
+        r.num_hits = 1;
+        if (encounter_roll_hit_chance(rng_state, att_roll, def_roll)) {
+            r.damage[0] = encounter_rand_int(rng_state, max_hit * 3 / 2 + 1);
+            r.def_drain = target_def_level * 30 / 100;
+        }
+        r.total_damage = r.damage[0];
+        break;
+    }
+
+    /* Division (wiki Tonalztics_of_Ralos): two throws at 50% more accuracy, each landed throw lowers Defence by 10% of the target's Magic level. */
+    case ITEM_TONALZTICS_OF_RALOS: {
+        int spec_att = att_roll * 3 / 2;
+        r.spec_cost = 50;
+        r.num_hits = 2;
+        for (int i = 0; i < 2; i++) {
+            if (!encounter_roll_hit_chance(rng_state, spec_att, def_roll)) continue;
+            r.damage[i] = encounter_rand_int(rng_state, max_hit + 1);
+            r.def_drain_magic_pct += 10;
+        }
+        r.total_damage = r.damage[0] + r.damage[1];
+        break;
+    }
+
     case ITEM_TOXIC_BLOWPIPE: {
         int spec_att = att_roll * 2;
         int spec_max = max_hit * 3 / 2;
@@ -473,6 +502,19 @@ static inline void osrs_spec_result_force_max(
         forced.num_hits = 1;
         forced.damage[0] = max_hit * 5 / 4;
         forced.def_drain = target_def_level * 30 / 100;
+        break;
+
+    case ITEM_DRAGON_WARHAMMER:
+        forced.num_hits = 1;
+        forced.damage[0] = max_hit * 3 / 2;
+        forced.def_drain = target_def_level * 30 / 100;
+        break;
+
+    case ITEM_TONALZTICS_OF_RALOS:
+        forced.num_hits = 2;
+        forced.damage[0] = max_hit;
+        forced.damage[1] = max_hit;
+        forced.def_drain_magic_pct = 20;
         break;
 
     case ITEM_BGS:
@@ -630,6 +672,8 @@ static inline OsrsSpecAccuracy osrs_spec_accuracy(int weapon_item_idx) {
             a.att_num = 2; a.attack_type = MELEE_BONUS_SLASH; break;
         case ITEM_DRAGON_CLAWS: a.attack_type = MELEE_BONUS_SLASH; break;
         case ITEM_STATIUS_WARHAMMER: a.att_num = 5; a.att_den = 4; a.attack_type = MELEE_BONUS_CRUSH; break;
+        case ITEM_DRAGON_WARHAMMER: a.attack_type = MELEE_BONUS_CRUSH; break;
+        case ITEM_TONALZTICS_OF_RALOS: a.att_num = 3; a.att_den = 2; break;
         case ITEM_VESTAS: case ITEM_VESTAS_BLIGHTED: a.def_den = 4; a.attack_type = MELEE_BONUS_SLASH; a.defence_type = MELEE_BONUS_STAB; break;
         case ITEM_VOIDWAKER: a.certain = 1; a.attack_type = MELEE_BONUS_SLASH; break;
         case ITEM_GRANITE_MAUL: case ITEM_GRANITE_MAUL_ORNATE: a.attack_type = MELEE_BONUS_CRUSH; break;

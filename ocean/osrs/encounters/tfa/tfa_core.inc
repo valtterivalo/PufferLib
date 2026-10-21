@@ -95,7 +95,9 @@ static void tfa_mark_stats_dirty(TfaPlayer* tp) {
 
 /* An empty weapon slot punches: melee. */
 static AttackStyle tfa_player_weapon_style(const TfaPlayer* tp) {
-    AttackStyle style = (AttackStyle)get_item_attack_style(tp->player.equipped[GEAR_SLOT_WEAPON]);
+    uint8_t weapon = tp->player.equipped[GEAR_SLOT_WEAPON];
+    AttackStyle style = (AttackStyle)get_item_attack_style(weapon);
+    if (style == ATTACK_STYLE_MAGIC && !osrs_item_is_powered_staff(weapon)) return ATTACK_STYLE_MELEE;
     return style == ATTACK_STYLE_NONE ? ATTACK_STYLE_MELEE : style;
 }
 
@@ -229,19 +231,22 @@ static void tfa_resolve_npc_hits(TfaState* s, TfaNpc* n) {
         int attacker = h->source_npc_slot;
         int damage = h->damage;
         AttackStyle style = (AttackStyle)h->attack_style;
+        int freezes = h->spell_type == ENCOUNTER_SPELL_ICE;
         encounter_pending_hit_queue_remove(q, i, "tfa-npc");
         i--;
-        if (n->active) tfa_npc_take_damage(s, n, damage, attacker, style);
+        if (!n->active) continue;
+        if (freezes && n->frozen_ticks < BARRAGE_FREEZE_TICKS) n->frozen_ticks = BARRAGE_FREEZE_TICKS;
+        tfa_npc_take_damage(s, n, damage, attacker, style);
     }
 }
 
-/* Player hits on NPCs carry the attacking player's index in source_npc_slot. */
-static void tfa_queue_player_hit(TfaState* s, TfaNpc* n, int attacker, int damage, AttackStyle style, int delay) {
+/* Player hits on NPCs carry the attacking player's index in source_npc_slot; a landed ice spell freezes the NPC as it lands. */
+static void tfa_queue_player_hit(TfaState* s, TfaNpc* n, int attacker, int damage, AttackStyle style, int delay, int freezes) {
     EncounterPendingHit hit = {
         .active = 1,
         .ticks_remaining = (int8_t)delay,
         .attack_style = (int8_t)style,
-        .spell_type = ENCOUNTER_SPELL_NONE,
+        .spell_type = freezes ? ENCOUNTER_SPELL_ICE : ENCOUNTER_SPELL_NONE,
         .source_npc_type = -1,
         .source_npc_slot = (int8_t)attacker,
         .hit_success = (int8_t)(damage > 0),
@@ -261,13 +266,24 @@ static void tfa_credit_damage(TfaState* s, int attacker, int applied) {
     s->team_damage_dealt_tick += (float)applied;
 }
 
+static int tfa_npc_def_level(const TfaNpc* n) {
+    return MONSTER_DATABASE[n->monster].def_level - n->def_drain;
+}
+
+/* Special attack drains floor Defence at 0. */
+static void tfa_npc_drain_defence(TfaNpc* n, const SpecResult* sr) {
+    const MonsterStats* m = &MONSTER_DATABASE[n->monster];
+    n->def_drain += sr->def_drain + m->magic_level * sr->def_drain_magic_pct / 100;
+    if (n->def_drain > m->def_level) n->def_drain = m->def_level;
+}
+
 /* A stunned NPC has no defence: the zero-hit fraction fell from 23% to 3% of player hits during Ezekiel's weakened window. */
-static int tfa_npc_def_roll(const TfaNpc* n, AttackStyle style, int melee_style) {
+static int tfa_npc_def_roll(const TfaNpc* n, AttackStyle style, int melee_style, uint8_t weapon) {
     if (n->act == TFA_ACT_STUNNED) return 0;
     const MonsterStats* m = &MONSTER_DATABASE[n->monster];
     return encounter_npc_target_def_roll(
-        m->def_level, m->magic_level, m->stab_def, m->slash_def, m->crush_def,
-        m->magic_def, m->ranged_def, style, melee_style);
+        tfa_npc_def_level(n), m->magic_level, m->stab_def, m->slash_def, m->crush_def, m->magic_def,
+        osrs_ranged_def_bonus_for_weapon(weapon, m->ranged_light_def, m->ranged_def, m->ranged_heavy_def), style, melee_style);
 }
 
 static void tfa_hazard_add(TfaState* s, TfaHazard h) {

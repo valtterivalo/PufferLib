@@ -291,6 +291,7 @@ static void tfa_xarth_corpses_tick(TfaState* s, TfaNpc* x) {
             c->active = 0;
             continue;
         }
+        if (c->frozen_ticks > 0) continue;
         int tx = x->x + 1, ty = x->y + 1;
         c->x += (tx > c->x) - (tx < c->x);
         c->y += (ty > c->y) - (ty < c->y);

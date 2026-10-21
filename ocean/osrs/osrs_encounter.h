@@ -336,6 +336,8 @@ static inline EncounterProjectileTiming encounter_player_projectile_timing(
                 options.reduce_delay = -1;
                 options.visual_hit_early_ticks = 1;
             }
+        } else if (osrs_weapon_is_thrown(weapon)) {
+            kind = ENCOUNTER_PROJECTILE_DELAY_THROWN;
         } else if (weapon == ITEM_TWISTED_BOW) {
             options.visual_delay_ticks = 1;
         }

@@ -1,26 +1,16 @@
-static const uint8_t TFA_LOADOUT_RANGED[NUM_GEAR_SLOTS] = {
-    ITEM_MASORI_MASK_F, ITEM_DIZANAS_QUIVER, ITEM_NECKLACE_OF_ANGUISH, ITEM_DRAGON_ARROWS,
-    ITEM_TWISTED_BOW, ITEM_NONE, ITEM_MASORI_BODY_F, ITEM_MASORI_CHAPS_F,
-    ITEM_ZARYTE_VAMBRACES, ITEM_AVERNIC_TREADS, ITEM_VENATOR_RING,
-};
-
-static const uint8_t TFA_LOADOUT_MELEE_SWITCH[NUM_GEAR_SLOTS] = {
-    ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE,
-    ITEM_INQUISITORS_MACE, ITEM_AVERNIC_DEFENDER, ITEM_NONE, ITEM_NONE,
-    ITEM_NONE, ITEM_NONE, ITEM_NONE,
-};
-
-static const uint8_t TFA_LOADOUT_MAGIC_SWITCH[NUM_GEAR_SLOTS] = {
-    ITEM_NONE, ITEM_NONE, ITEM_OCCULT_NECKLACE, ITEM_NONE,
-    ITEM_TUMEKENS_SHADOW, ITEM_NONE, ITEM_ANCESTRAL_TOP, ITEM_ANCESTRAL_BOTTOM,
-    ITEM_NONE, ITEM_NONE, ITEM_NONE,
-};
-
+/* P0's supplies at the first room: Saradomin brews 12, super restores 6 (21 of 24 Guardian starts), one anglerfish. One brew fewer here keeps
+   a cell free for the shield a two-handed switch unequips. */
 static const struct { uint16_t raw_osrs_id; int count; } TFA_SUPPLIES[] = {
-    { 6685, 8 },
+    { 6685, 11 },
     { 3024, 6 },
-    { 13441, 8 },
+    { 13441, 1 },
 };
+
+/* Boosted levels on the recorded menu actions: Defence 120 and 119 most often, Attack and Strength 118 (super combat), Ranged 112 (divine
+   ranging), Magic unboosted (14054 of 18980). */
+#define TFA_BOOSTED_MELEE 118
+#define TFA_BOOSTED_DEFENCE 120
+#define TFA_BOOSTED_RANGED 112
 
 static void tfa_player_reset(TfaState* s, int p) {
     TfaPlayer* tp = &s->players[p];
@@ -32,11 +22,16 @@ static void tfa_player_reset(TfaState* s, int p) {
     pl->special_energy = 100;
     osrs_item_effect_state_init(&pl->item_effect_state);
     osrs_interaction_init(&pl->interaction);
-    encounter_apply_loadout(pl, TFA_LOADOUT_RANGED, GEAR_RANGED);
-    const uint8_t* switches[] = { TFA_LOADOUT_MELEE_SWITCH, TFA_LOADOUT_MAGIC_SWITCH };
-    encounter_populate_inventory(pl, switches, 2, NULL);
+    tp->kit = p == 0 ? TFA_KIT_CROSSBOW : TFA_KIT_BOW;
+    pl->current_attack = pl->current_strength = TFA_BOOSTED_MELEE;
+    pl->current_defence = TFA_BOOSTED_DEFENCE;
+    pl->current_ranged = TFA_BOOSTED_RANGED;
+    encounter_apply_loadout(pl, TFA_KIT_WORN[tp->kit], GEAR_RANGED);
     int cell = 0;
-    while (cell < OSRS_INVENTORY_SIZE && !osrs_inventory_cell_is_empty(&pl->inventory_cells[cell])) cell++;
+    for (size_t k = 0; k < sizeof(TFA_KIT_MELEE); k++) pl->inventory_cells[cell++] = osrs_inventory_cell_from_item(TFA_KIT_MELEE[k]);
+    for (size_t k = 0; k < sizeof(TFA_KIT_MAGIC); k++) pl->inventory_cells[cell++] = osrs_inventory_cell_from_item(TFA_KIT_MAGIC[k]);
+    for (int k = 0; k < 6 && TFA_KIT_SWITCHES[tp->kit][k] != ITEM_NONE; k++)
+        pl->inventory_cells[cell++] = osrs_inventory_cell_from_item(TFA_KIT_SWITCHES[tp->kit][k]);
     for (size_t k = 0; k < sizeof(TFA_SUPPLIES) / sizeof(*TFA_SUPPLIES); k++) {
         for (int n = 0; n < TFA_SUPPLIES[k].count; n++) {
             assert(cell < OSRS_INVENTORY_SIZE);

@@ -22,7 +22,8 @@ static int tfa_lookup_attack_target(void* ctx, int target_slot, OsrsAttackTarget
         .x = n->x,
         .y = n->y,
         .size = n->size,
-        .attack_range = tfa_player_stats(&lookup->s->players[lookup->p])->attack_range,
+        .attack_range = lookup->s->players[lookup->p].queued_spell ? COMBAT_SPELL_ATTACK_RANGE
+            : tfa_player_stats(&lookup->s->players[lookup->p])->attack_range,
     };
     return 1;
 }
@@ -80,22 +81,87 @@ static void tfa_record_player_attack(TfaState* s, int p, const TfaNpc* n, int da
 
 static int tfa_npc_damage_cap(const TfaState* s, const TfaNpc* n, int damage);
 
+static void tfa_player_heal(TfaPlayer* tp, int amount) {
+    tp->player.current_hitpoints += amount;
+    if (tp->player.current_hitpoints > tp->player.base_hitpoints)
+        tp->player.current_hitpoints = tp->player.base_hitpoints;
+}
+
+/* Ice barrage on n and the attackable NPCs within a tile of it. Only adds freeze, as the hit lands: corpses paused 33-36 ticks after a cast
+   (27 recorded freezes), bosses never stop. One manual cast ends the interaction. */
+static void tfa_player_cast_barrage(TfaState* s, int p, TfaNpc* n) {
+    TfaPlayer* tp = &s->players[p];
+    EncounterLoadoutStats ls;
+    encounter_compute_player_equipped_stats(&tp->player, ATTACK_STYLE_MAGIC, FIGHT_STYLE_AUTOCAST, ICE_BARRAGE_MAX_HIT, &ls);
+    uint8_t weapon = tp->player.equipped[GEAR_SLOT_WEAPON];
+    OsrsTargetRef target = { .kind = OSRS_TARGET_NPC, .id = tfa_npc_slot(s, n) };
+    OsrsPreparedAttackEffects fx = osrs_prepare_attack_effects(
+        &tp->player.equipment_effect_profile, &tp->player.item_effect_state, weapon, ATTACK_STYLE_MAGIC,
+        OSRS_MAGIC_ATTACK_ANCIENT_ICE, target, 1, osrs_player_att_roll(ls.eff_level, ls.attack_bonus), ls.max_hit,
+        osrs_target_effect_context_none(), tp->player.current_hitpoints, tp->player.base_hitpoints);
+    BarrageTarget targets[TFA_NUM_TARGET_SLOTS];
+    TfaNpc* hit_npcs[TFA_NUM_TARGET_SLOTS];
+    int freeze[TFA_NUM_TARGET_SLOTS] = {0};
+    int count = 0;
+    for (int i = -1; i < TFA_NUM_TARGET_SLOTS; i++) {
+        TfaNpc* t = i < 0 ? n : &s->npcs[i];
+        if (i >= 0 && (t == n || !t->active || !t->attackable)) continue;
+        const MonsterStats* m = &MONSTER_DATABASE[t->monster];
+        int freezes = t->kind == TFA_NPC_XARTH_CORPSE || t->kind == TFA_NPC_JELLY;
+        hit_npcs[count] = t;
+        targets[count] = (BarrageTarget){
+            .active = 1, .x = t->x, .y = t->y, .magic_level = m->magic_level, .magic_def_bonus = m->magic_def,
+            .npc_idx = tfa_npc_slot(s, t), .frozen_ticks = freezes ? &freeze[count] : NULL,
+        };
+        count++;
+    }
+    osrs_barrage_resolve(targets, count, fx.attack_roll, fx.max_hit, &s->rng_state, ENCOUNTER_SPELL_ICE, fx.use_double_accuracy);
+    osrs_finalize_attack_effects(&tp->player.equipment_effect_profile, &tp->player.item_effect_state, weapon, ATTACK_STYLE_MAGIC,
+        OSRS_MAGIC_ATTACK_ANCIENT_ICE, target, 1, fx.use_double_accuracy, targets[0].hit, targets[0].damage, &s->rng_state);
+    int primary_damage = 0;
+    for (int k = 0; k < count; k++) {
+        if (!targets[k].rolled) continue;
+        TfaNpc* t = hit_npcs[k];
+        int delay = encounter_player_projectile_timing(ATTACK_STYLE_MAGIC, weapon, 0, tfa_player_npc_distance(tp, t)).damage_delay_ticks;
+        int dmg = tfa_npc_damage_cap(s, t, targets[k].damage);
+        tfa_queue_player_hit(s, t, p, dmg, ATTACK_STYLE_MAGIC, delay, freeze[k] > 0);
+        if (k == 0) primary_damage = dmg;
+    }
+    tp->player.attack_timer = COMBAT_SPELL_CAST_SPEED;
+    tp->queued_spell = OSRS_SPELL_NONE;
+    tfa_record_player_attack(s, p, n, primary_damage, ATTACK_STYLE_MAGIC, 0);
+    osrs_interaction_clear(&tp->player.interaction);
+}
+
 static void tfa_player_attack(TfaState* s, int p, TfaNpc* n) {
     TfaPlayer* tp = &s->players[p];
+    if (tp->queued_spell == OSRS_SPELL_ICE_BARRAGE) {
+        tfa_player_cast_barrage(s, p, n);
+        return;
+    }
     const EncounterLoadoutStats* ls = tfa_player_stats(tp);
     AttackStyle style = ls->style;
     uint8_t weapon = tp->player.equipped[GEAR_SLOT_WEAPON];
+    uint8_t ammo = tp->player.equipped[GEAR_SLOT_AMMO];
+    int bolts = style == ATTACK_STYLE_RANGED && !osrs_weapon_is_thrown(weapon);
     MeleeStyle melee_style = osrs_item_melee_style(weapon);
     const MonsterStats* m = &MONSTER_DATABASE[n->monster];
     OsrsTargetRef target = { .kind = OSRS_TARGET_NPC, .id = tfa_npc_slot(s, n) };
-    int def_roll = tfa_npc_def_roll(n, style, melee_style);
+    int def_roll = tfa_npc_def_roll(n, style, melee_style, weapon);
     int distance = tfa_player_npc_distance(tp, n);
     int delay = encounter_player_projectile_timing(style, weapon, 0, distance).damage_delay_ticks;
 
     if (tp->player.spec_armed && osrs_spec_cost(weapon) > 0 &&
             tp->player.special_energy >= osrs_spec_cost(weapon)) {
         int att_roll = osrs_player_att_roll(ls->eff_level, ls->attack_bonus);
-        SpecResult sr = osrs_resolve_spec(weapon, att_roll, ls->max_hit, def_roll, m->def_level, &s->rng_state);
+        SpecResult sr = osrs_resolve_spec(weapon, att_roll, ls->max_hit, def_roll, tfa_npc_def_level(n), &s->rng_state);
+        if (weapon == ITEM_ZARYTE_CROSSBOW) {
+            BoltProcResult bp = osrs_resolve_bolt_proc(ammo, sr.damage[0], sr.landed, ls->max_hit, tp->player.current_ranged,
+                n->hp, tp->player.current_hitpoints, 1, 1, 1, &s->rng_state);
+            if (bp.proc_triggered) sr.damage[0] = bp.modified_damage;
+            tp->player.current_hitpoints -= bp.attacker_hp_cost;
+        }
+        tfa_npc_drain_defence(n, &sr);
         tp->player.special_energy -= sr.spec_cost;
         tp->player.used_special_this_tick = 1;
         tp->player.attack_timer = sr.attack_speed_override ? sr.attack_speed_override : ls->attack_speed;
@@ -103,14 +169,10 @@ static void tfa_player_attack(TfaState* s, int p, TfaNpc* n) {
         int total = 0;
         for (int h = 0; h < sr.num_hits; h++) {
             int dmg = tfa_npc_damage_cap(s, n, sr.damage[h]);
-            tfa_queue_player_hit(s, n, p, dmg, style, delay);
+            tfa_queue_player_hit(s, n, p, dmg, style, delay, 0);
             total += dmg;
         }
-        if (sr.heal > 0) {
-            tp->player.current_hitpoints += sr.heal;
-            if (tp->player.current_hitpoints > tp->player.base_hitpoints)
-                tp->player.current_hitpoints = tp->player.base_hitpoints;
-        }
+        if (sr.heal > 0) tfa_player_heal(tp, sr.heal);
         tfa_record_player_attack(s, p, n, total, style, 1);
         return;
     }
@@ -125,16 +187,19 @@ static void tfa_player_attack(TfaState* s, int p, TfaNpc* n) {
     int hit = fx.use_double_accuracy
         ? encounter_roll_hit_chance_double(&s->rng_state, fx.attack_roll, def_roll)
         : encounter_roll_hit_chance(&s->rng_state, fx.attack_roll, def_roll);
-    int dmg = hit ? tfa_npc_damage_cap(s, n, fx.min_hit + tfa_rand(s, fx.max_hit - fx.min_hit + 1)) : 0;
-    tfa_queue_player_hit(s, n, p, dmg, style, delay);
+    int roll = hit ? fx.min_hit + tfa_rand(s, fx.max_hit - fx.min_hit + 1) : 0;
+    if (bolts) {
+        BoltProcResult bp = osrs_resolve_bolt_proc(ammo, roll, hit, fx.max_hit, tp->player.current_ranged,
+            n->hp, tp->player.current_hitpoints, weapon == ITEM_ZARYTE_CROSSBOW, 0, 1, &s->rng_state);
+        if (bp.proc_triggered) roll = bp.modified_damage;
+        tp->player.current_hitpoints -= bp.attacker_hp_cost;
+    }
+    int dmg = tfa_npc_damage_cap(s, n, roll);
+    tfa_queue_player_hit(s, n, p, dmg, style, delay, 0);
     OsrsPostAttackEffects post = osrs_finalize_attack_effects(
         &tp->player.equipment_effect_profile, &tp->player.item_effect_state, weapon, style,
         magic_kind, target, 1, fx.use_double_accuracy, hit, dmg, &s->rng_state);
-    if (post.heal_amount > 0) {
-        tp->player.current_hitpoints += post.heal_amount;
-        if (tp->player.current_hitpoints > tp->player.base_hitpoints)
-            tp->player.current_hitpoints = tp->player.base_hitpoints;
-    }
+    if (post.heal_amount > 0) tfa_player_heal(tp, post.heal_amount);
     tfa_record_player_attack(s, p, n, dmg, style, 0);
 }
 
@@ -144,13 +209,17 @@ static void tfa_player_turn(TfaState* s, TfaContext* ctx, int p, const int* acts
     tfa_player_apply_inventory(s, p, acts);
 
     int primary = acts[OSRS_HEAD_PRIMARY];
+    int cast = acts[OSRS_HEAD_SPELL] == OSRS_SPELL_ICE_BARRAGE ? OSRS_SPELL_ICE_BARRAGE : OSRS_SPELL_NONE;
     OsrsPlayerCommand command = { .kind = OSRS_PLAYER_CMD_NONE };
+    if (cast) tp->queued_spell = (uint8_t)cast;
     if (primary >= TFA_PRIMARY_ATTACK_BASE && primary < TFA_PRIMARY_DIM) {
         command.kind = OSRS_PLAYER_CMD_TARGET;
         command.target_slot = primary - TFA_PRIMARY_ATTACK_BASE;
+        tp->queued_spell = (uint8_t)cast;
         tp->dest_x = -1;
         tp->dest_y = -1;
     } else if (primary > 0 && primary < OSRS_PRIMARY_MOVE_ACTIONS) {
+        tp->queued_spell = OSRS_SPELL_NONE;
         tp->dest_x = tp->player.x + ENCOUNTER_MOVE_TARGET_DX[primary];
         tp->dest_y = tp->player.y + ENCOUNTER_MOVE_TARGET_DY[primary];
         command.kind = OSRS_PLAYER_CMD_MOVE;
@@ -205,4 +274,5 @@ static void tfa_player_tick_timers(TfaState* s, int p) {
     int poison = osrs_poison_tick(&tp->poison);
     if (poison > 0) tfa_damage_player_now(s, p, poison, ATTACK_STYLE_NONE);
     if (tp->burn_ticks > 0) tp->burn_ticks--;
+    osrs_tick_special_regen(pl);
 }
