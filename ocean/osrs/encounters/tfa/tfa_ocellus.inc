@@ -767,7 +767,8 @@ static void oc_p2_enter(TfaState* s, TfaNpc* n) {
     os->phase_start = s->tick;
     n->npc_id = OC_NPC_P2;
     n->monster = MON_TFA_OCELLUS_P2;
-    n->def_drain = 0;
+    n->def_drain = 0;          /* phase 1's drain stays behind (pre-hotfix phase 3 missed at full defence, 0.56-0.66); P2 to P3 and the quadrant changes keep it
+                                  (hotfix: no defence restore on P3 quadrant transitions; run 6 phase 3 misses 0.44-0.57 after Division throws there, as at 150) */
     n->attackable = 0;
     n->act = TFA_ACT_IDLE;
     n->hp = n->max_hp = tfa_party_hp(s->team_size, TFA_OC1.hp_base_p3, TFA_OC1.hp_base_p3 * TFA_TRIO_SCALE_PCT / 100);

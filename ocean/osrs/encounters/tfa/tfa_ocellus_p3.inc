@@ -159,7 +159,6 @@ static void oc_p3_start(TfaState* s, TfaNpc* n) {
     os->phase_start = s->tick;
     n->npc_id = OC_NPC_P3;
     n->monster = MON_TFA_OCELLUS_P3;
-    n->def_drain = 0;          /* a new form keeps no drain: phase 3 misses 0.56-0.66 live, as at full defence, after a drained phase 1 at 0.17-0.22 */
     n->attackable = 1;
     n->max_hp = tfa_party_hp(s->team_size, TFA_OC1.hp_base_p3, TFA_OC1.hp_base_p3 * TFA_TRIO_SCALE_PCT / 100);
     if (n->hp > n->max_hp) n->hp = n->max_hp;

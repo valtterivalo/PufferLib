@@ -226,6 +226,8 @@ def recordings():
 
 
 TFA_RELEASE_DAY = "20261020"
+# Jagex's 21 Oct hotfix capped defence drains (60% floors): run 5 (10:36 UTC) still drained past them, run 6 (15:19) did not.
+DRAIN_UNCAPPED_UNTIL = "20261021T103603.940Z"
 
 
 def cached_rows(src):
@@ -987,7 +989,7 @@ def main():
     for f in sorted(recs, key=lambda f: (f.rec, f.first)):
         counters[f.boss] += 1
         f.fight_id = f"{f.boss}_{counters[f.boss]:02d}"
-    fights_tsv = ["fight_id\tboss\trecording\tfirst_tick\tstart_tick\tstart_kind\tchallenge_tick\tend_tick\tend_kind\toutcome\tparty_size\tp0_deaths\tother_deaths\tlast_boss_tick\tnotes"]
+    fights_tsv = ["fight_id\tboss\trecording\tfirst_tick\tstart_tick\tstart_kind\tchallenge_tick\tend_tick\tend_kind\toutcome\tparty_size\tp0_deaths\tother_deaths\tlast_boss_tick\tnotes\tdrain"]
     for f in sorted(recs, key=lambda f: (f.boss, f.fight_id)):
         notes = []
         if f.joined_mid:
@@ -998,7 +1000,7 @@ def main():
             notes.append(f.complete_text)
         if f.challenge_tick is not None and f.outcome == "kill":
             notes.append(f"ticks_start_to_complete={f.end - f.challenge_tick}")
-        fights_tsv.append("\t".join(str(x) for x in (f.fight_id, f.boss, f.rec, f.first, f.start, f.start_kind, "-" if f.challenge_tick is None else f.challenge_tick, f.end, f.end_kind, f.outcome, f.party_size, len(f.p0_deaths), len(f.other_deaths), f.last, ";".join(notes) or "-")))
+        fights_tsv.append("\t".join(str(x) for x in (f.fight_id, f.boss, f.rec, f.first, f.start, f.start_kind, "-" if f.challenge_tick is None else f.challenge_tick, f.end, f.end_kind, f.outcome, f.party_size, len(f.p0_deaths), len(f.other_deaths), f.last, ";".join(notes) or "-", "uncapped" if f.rec[len("session_"):] <= DRAIN_UNCAPPED_UNTIL else "floored")))
     (OUT / "tfa_fights.tsv").write_text("\n".join(fights_tsv) + "\n")
     all_fights = {}
     for boss in GROUPS:

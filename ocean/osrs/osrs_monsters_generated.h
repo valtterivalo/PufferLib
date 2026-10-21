@@ -70,6 +70,7 @@ typedef struct {
     int16_t ranged_def;
     int16_t ranged_light_def;
     int16_t ranged_heavy_def;
+    uint8_t def_floor_pct;    /* defence drains stop at this share of def_level; 0 drains to 0 */
 } MonsterStats;
 
 static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
@@ -271,7 +272,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 350, .magic_str_bonus = 55,
         .range_att_bonus = 350, .ranged_str_bonus = 55,
         .stab_def = 120, .slash_def = 110, .crush_def = 20,
-        .magic_def = 130, .ranged_def = 120, .ranged_light_def = 75, .ranged_heavy_def = 50
+        .magic_def = 130, .ranged_def = 120, .ranged_light_def = 75, .ranged_heavy_def = 50, .def_floor_pct = 60
     },
     [MON_TFA_BORK] = {
         .npc_id = 16640, .name = "Bork",
@@ -281,7 +282,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 100, .melee_str_bonus = 40, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 140, .slash_def = 130, .crush_def = 10,
-        .magic_def = 300, .ranged_def = 50, .ranged_light_def = 80, .ranged_heavy_def = 5
+        .magic_def = 300, .ranged_def = 50, .ranged_light_def = 80, .ranged_heavy_def = 5, .def_floor_pct = 60
     },
     [MON_TFA_SMORKS] = {
         .npc_id = 16641, .name = "The Smorks",
@@ -301,7 +302,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 250, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 150, .slash_def = 90, .crush_def = 35,
-        .magic_def = 200, .ranged_def = 370, .ranged_light_def = 445, .ranged_heavy_def = 320
+        .magic_def = 200, .ranged_def = 370, .ranged_light_def = 445, .ranged_heavy_def = 320, .def_floor_pct = 60
     },
     [MON_TFA_DREADNOTH] = {
         .npc_id = 16665, .name = "Dreadnoth the Jellied",
@@ -321,7 +322,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 300, .magic_str_bonus = 0,
         .range_att_bonus = 350, .ranged_str_bonus = 35,
         .stab_def = 20, .slash_def = 110, .crush_def = 15,
-        .magic_def = 30, .ranged_def = 120, .ranged_light_def = 60, .ranged_heavy_def = 140
+        .magic_def = 30, .ranged_def = 120, .ranged_light_def = 60, .ranged_heavy_def = 140, .def_floor_pct = 60
     },
     [MON_TFA_XARTH] = {
         .npc_id = 16684, .name = "Xarth",
@@ -331,7 +332,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 250, .magic_str_bonus = 0,
         .range_att_bonus = 250, .ranged_str_bonus = 0,
         .stab_def = 115, .slash_def = 105, .crush_def = 20,
-        .magic_def = 205, .ranged_def = 230, .ranged_light_def = 125, .ranged_heavy_def = 155
+        .magic_def = 205, .ranged_def = 230, .ranged_light_def = 125, .ranged_heavy_def = 155, .def_floor_pct = 60
     },
     [MON_TFA_OCELLUS_P1] = {
         .npc_id = 16674, .name = "Ocellus",
@@ -341,7 +342,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 1, .melee_str_bonus = 1, .magic_att_bonus = 150, .magic_str_bonus = 0,
         .range_att_bonus = 150, .ranged_str_bonus = 0,
         .stab_def = 150, .slash_def = 95, .crush_def = 60,
-        .magic_def = 100, .ranged_def = 135, .ranged_light_def = 50, .ranged_heavy_def = 50
+        .magic_def = 100, .ranged_def = 135, .ranged_light_def = 50, .ranged_heavy_def = 50, .def_floor_pct = 60
     },
     [MON_TFA_OCELLUS_P3] = {
         .npc_id = 16677, .name = "Ocellus",
@@ -351,7 +352,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 150, .melee_str_bonus = 10, .magic_att_bonus = 350, .magic_str_bonus = 10,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 150, .slash_def = 100, .crush_def = 30,
-        .magic_def = 200, .ranged_def = 250, .ranged_light_def = 250, .ranged_heavy_def = 250
+        .magic_def = 200, .ranged_def = 250, .ranged_light_def = 250, .ranged_heavy_def = 250, .def_floor_pct = 60
     },
     [MON_TFA_VOID_RIFT] = {
         .npc_id = 16678, .name = "Void Rift",
@@ -438,7 +439,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 150, .slash_def = 120, .crush_def = 10,
-        .magic_def = 100, .ranged_def = 110, .ranged_light_def = 100, .ranged_heavy_def = 80
+        .magic_def = 100, .ranged_def = 110, .ranged_light_def = 100, .ranged_heavy_def = 80, .def_floor_pct = 60
     },
     /* The Blade 16676 has no wiki stats: the P2 Ocellus defences stand in; it never loses hp, half its damage transfers to Ocellus. */
     [MON_TFA_OCELLUS_BLADE] = {
