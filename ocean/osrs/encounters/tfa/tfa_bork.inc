@@ -277,7 +277,7 @@ static void tfa_bork_scorch(TfaState* s, int x, int y, int orientation) {
 }
 
 static int tfa_bork_scorched(const TfaState* s, int x, int y) {
-    for (int i = 0; i < TFA_MAX_HAZARDS; i++)
+    for (int i = 0; i < s->hazard_hi; i++)
         if (s->hazards[i].kind == TFA_HAZ_FLOOR && s->hazards[i].loc_id == BORK_OBJ_SCORCH && s->hazards[i].x == x && s->hazards[i].y == y) return 1;
     return 0;
 }
@@ -406,7 +406,7 @@ static void tfa_bork_pending_tick(TfaState* s, TfaNpc* b, TfaNpc* m) {
                 tfa_bork_scorch(s, e.x, e.y, e.arg);
                 break;
             case TFA_BORK_PEND_SCORCH_CLEAR:
-                for (int h = 0; h < TFA_MAX_HAZARDS; h++)
+                for (int h = 0; h < s->hazard_hi; h++)
                     if (s->hazards[h].kind == TFA_HAZ_FLOOR && s->hazards[h].loc_id == BORK_OBJ_SCORCH) s->hazards[h].end_tick = s->tick;
                 break;
             case TFA_BORK_PEND_RING:

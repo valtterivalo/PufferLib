@@ -182,7 +182,7 @@ static int tfa_guardian_tile_walkable(const TfaState* s, int x, int y) {
 }
 
 static int tfa_guardian_mushroom_at(const TfaState* s, int x, int y) {
-    for (int i = 0; i < TFA_MAX_HAZARDS; i++)
+    for (int i = 0; i < s->hazard_hi; i++)
         if (s->hazards[i].kind == TFA_HAZ_MUSHROOM && s->hazards[i].x == x && s->hazards[i].y == y) return 1;
     return 0;
 }
@@ -230,7 +230,7 @@ static void tfa_guardian_special(TfaState* s, TfaNpc* g) {
 }
 
 static void tfa_guardian_mushrooms_tick(TfaState* s) {
-    for (int i = 0; i < TFA_MAX_HAZARDS; i++) {
+    for (int i = 0; i < s->hazard_hi; i++) {
         TfaHazard* h = &s->hazards[i];
         if (h->kind != TFA_HAZ_MUSHROOM) continue;
         if (h->arm_ticks > 0) {

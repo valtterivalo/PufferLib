@@ -152,7 +152,7 @@ static void tfa_dread_schedule(TfaState* s, int tick, TfaDreadEventKind kind, in
 }
 
 static int tfa_dread_blood_at(const TfaState* s, int x, int y) {
-    for (int i = 0; i < TFA_MAX_HAZARDS; i++) {
+    for (int i = 0; i < s->hazard_hi; i++) {
         const TfaHazard* h = &s->hazards[i];
         if (h->kind == TFA_HAZ_FLOOR && h->loc_id == DREAD_LOC_BLOOD_TILE && h->x == x && h->y == y) return 1;
     }

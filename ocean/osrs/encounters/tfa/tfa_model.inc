@@ -2,6 +2,8 @@
 #define TFA_MAX_NPCS 64
 #define TFA_NUM_TARGET_SLOTS 16
 #define TFA_MAX_HAZARDS 512
+#define TFA_ROOM_SIZE 64
+#define TFA_DANGER_HORIZON 6
 #define TFA_ARENA_MAX ENCOUNTER_ARENA_TOPOLOGY_MAX_DIMENSION
 #define TFA_PLAYER_PRAYER 99
 #define TFA_ROOM_MAX_TICKS 3000
@@ -229,9 +231,18 @@ typedef struct {
 #include "tfa_moia_model.inc"
 
 typedef struct {
+    int8_t x0, y0, x1, y1;
+    int8_t owner;
+} TfaDangerRect;
+
+typedef struct {
     TfaPlayer players[TFA_MAX_PLAYERS];
     TfaNpc npcs[TFA_MAX_NPCS];
     TfaHazard hazards[TFA_MAX_HAZARDS];
+    int hazard_hi;
+    int8_t danger[TFA_MAX_PLAYERS + 1][TFA_ROOM_SIZE * TFA_ROOM_SIZE];
+    TfaDangerRect danger_rects[TFA_MAX_HAZARDS];
+    int danger_rect_count;
     int team_size;
     int tick;
     int room_tick;

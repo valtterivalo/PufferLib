@@ -30,7 +30,7 @@ static void tfa_kill_player(TfaState* s, int p) {
 }
 
 static void tfa_hazards_tick(TfaState* s) {
-    for (int i = 0; i < TFA_MAX_HAZARDS; i++) {
+    for (int i = 0; i < s->hazard_hi; i++) {
         TfaHazard* h = &s->hazards[i];
         if (h->kind != TFA_HAZ_STRIKE && h->kind != TFA_HAZ_FLOOR) continue;
         if (s->tick >= h->start_tick) {
@@ -139,4 +139,5 @@ static void tfa_step_team(TfaState* s, TfaContext* ctx, const int* actions) {
         s->players[p].reward = tfa_player_reward(s, ctx, p);
         s->episode_return += s->players[p].reward;
     }
+    tfa_danger_build(s);
 }

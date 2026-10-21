@@ -1,6 +1,5 @@
 /* Room geometry over 64x64 room tiles, indexed y * 64 + x with OSRS collision bits: movement flags from the recordings,
    projectile flags from the scene's cache collision (the recordings fold both into one blocked bit). */
-#define TFA_ROOM_SIZE 64
 typedef struct {
     const uint32_t* flags;
     const uint32_t* los;

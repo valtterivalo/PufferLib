@@ -90,6 +90,8 @@ static void tfa_reset_typed(TfaState* s, TfaContext* ctx, uint32_t seed) {
     s->raid_index = 0;
     if (s->episode_mode == TFA_EPISODE_RAID) room = tfa_raid_room(0, s->path);
     tfa_room_enter(s, room);
+    memset(s->danger, -1, sizeof(s->danger));
+    tfa_danger_build(s);
     ctx->log.room_attempts[s->room] += 1.0f;
 }
 
@@ -342,7 +344,7 @@ static void tfa_render_post_tick(EncounterState* state, EncounterContext* contex
         oc_portal_visual(s, &s->npcs[i], &model, &anim);
         encounter_emit_floating_model(ov, ENCOUNTER_PROJECTILE_TARGET_FIXED, -1, s->npcs[i].x, s->npcs[i].y, model, anim, 0.0f, 0.0f, 1.0f);
     }
-    for (int i = 0; i < TFA_MAX_HAZARDS; i++) {
+    for (int i = 0; i < s->hazard_hi; i++) {
         const TfaHazard* h = &s->hazards[i];
         if (h->kind == TFA_HAZ_NONE) continue;
         int px, py, turned;

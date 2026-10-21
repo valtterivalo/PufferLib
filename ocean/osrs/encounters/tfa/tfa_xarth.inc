@@ -213,14 +213,18 @@ static void tfa_xarth_aoe(TfaState* s, TfaNpc* x) {
    ticks from the AOE). */
 static void tfa_xarth_fire(TfaState* s, const TfaNpc* x, int tiles) {
     const TfaRoomLayout* l = tfa_room_layout(TFA_ROOM_XARTH);
-    int free_x[(XARTH_RING_HI - XARTH_RING_LO + 1) * (XARTH_RING_HI - XARTH_RING_LO + 1)], free_y[sizeof(free_x) / sizeof(*free_x)], n = 0;
+    enum { SIDE = XARTH_RING_HI - XARTH_RING_LO + 1 };
+    uint8_t burning[SIDE][SIDE] = {{0}};
+    for (int i = 0; i < s->hazard_hi; i++)
+        if (s->hazards[i].kind == TFA_HAZ_LOC && s->hazards[i].loc_id == XARTH_LOC_ARENA_FIRE)
+            burning[s->hazards[i].y - XARTH_RING_LO][s->hazards[i].x - XARTH_RING_LO] = 1;
+    int free_x[SIDE * SIDE], free_y[SIDE * SIDE], n = 0;
     for (int fx = XARTH_RING_LO; fx <= XARTH_RING_HI; fx++)
         for (int fy = XARTH_RING_LO; fy <= XARTH_RING_HI; fy++) {
-            int bad = tfa_layout_blocked(l, fx, fy) || (fx >= x->x && fx < x->x + x->size && fy >= x->y && fy < x->y + x->size);
+            int bad = burning[fy - XARTH_RING_LO][fx - XARTH_RING_LO] || tfa_layout_blocked(l, fx, fy)
+                || (fx >= x->x && fx < x->x + x->size && fy >= x->y && fy < x->y + x->size);
             for (int p = 0; p < s->team_size; p++)
                 bad |= tfa_alive(s, p) && s->players[p].player.x == fx && s->players[p].player.y == fy;
-            for (int i = 0; i < TFA_MAX_HAZARDS && !bad; i++)
-                bad = s->hazards[i].kind == TFA_HAZ_LOC && s->hazards[i].loc_id == XARTH_LOC_ARENA_FIRE && s->hazards[i].x == fx && s->hazards[i].y == fy;
             if (!bad) free_x[n] = fx, free_y[n++] = fy;
         }
     for (int k = 0; k < tiles && n > 0; k++) {
@@ -258,7 +262,7 @@ static void tfa_xarth_blast_land(TfaState* s, TfaNpc* x) {
     }
     for (int i = 0; i < TFA_MAX_NPCS; i++) {
         if (!broken[i]) continue;
-        for (int h = 0; h < TFA_MAX_HAZARDS; h++) {
+        for (int h = 0; h < s->hazard_hi; h++) {
             TfaHazard* r = &s->hazards[h];
             if (r->kind == TFA_HAZ_LOC && r->x == s->npcs[i].x && r->y == s->npcs[i].y && r->w == 2) r->kind = TFA_HAZ_NONE;
         }

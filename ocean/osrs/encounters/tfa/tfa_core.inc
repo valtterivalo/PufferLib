@@ -278,6 +278,7 @@ static void tfa_hazard_add(TfaState* s, TfaHazard h) {
         d->kind = h.kind; d->style = h.style; d->w = h.w; d->h = h.h; d->owner = h.owner; d->effect = h.effect;
         d->x = h.x; d->y = h.y; d->start_tick = h.start_tick; d->end_tick = h.end_tick; d->arm_ticks = h.arm_ticks;
         d->min_damage = h.min_damage; d->max_damage = h.max_damage; d->protected_pct = h.protected_pct; d->gfx_id = h.gfx_id; d->loc_id = h.loc_id; d->orientation = h.orientation;
+        if (i >= s->hazard_hi) s->hazard_hi = i + 1;
         return;
     }
     int loc = s->hazards[0].loc_id, same = 0;
@@ -288,6 +289,41 @@ static void tfa_hazard_add(TfaState* s, TfaHazard h) {
 
 static int tfa_hazard_covers(const TfaHazard* h, int x, int y) {
     return x >= h->x && x < h->x + h->w && y >= h->y && y < h->y + h->h;
+}
+
+/* Ticks until a hazard can hit each tile (-1 none within TFA_DANGER_HORIZON), rebuilt after every step and reset so observations and
+   the scripted raiders read tiles instead of scanning hazards: grid TFA_MAX_PLAYERS holds the hazards that hit everyone, grid p
+   those owned by player p. Each build clears only the previous build's rects. */
+static void tfa_danger_build(TfaState* s) {
+    while (s->hazard_hi > 0 && s->hazards[s->hazard_hi - 1].kind == TFA_HAZ_NONE) s->hazard_hi--;
+    for (int r = 0; r < s->danger_rect_count; r++) {
+        const TfaDangerRect* d = &s->danger_rects[r];
+        int8_t* grid = s->danger[d->owner < 0 ? TFA_MAX_PLAYERS : d->owner];
+        for (int y = d->y0; y < d->y1; y++) memset(&grid[y * TFA_ROOM_SIZE + d->x0], -1, (size_t)(d->x1 - d->x0));
+    }
+    s->danger_rect_count = 0;
+    for (int i = 0; i < s->hazard_hi; i++) {
+        const TfaHazard* h = &s->hazards[i];
+        if (h->kind == TFA_HAZ_NONE || h->kind == TFA_HAZ_LOC) continue;
+        int t, x0 = h->x, y0 = h->y, x1 = h->x + h->w, y1 = h->y + h->h;
+        if (h->kind == TFA_HAZ_MUSHROOM) {
+            t = h->arm_ticks > 0 ? h->arm_ticks : 1;
+            x0--; y0--; x1++; y1++;
+        } else {
+            t = h->start_tick > s->tick ? h->start_tick - s->tick : 0;
+        }
+        if (t > TFA_DANGER_HORIZON) continue;
+        x0 = x0 < 0 ? 0 : x0; y0 = y0 < 0 ? 0 : y0;
+        x1 = x1 > TFA_ROOM_SIZE ? TFA_ROOM_SIZE : x1; y1 = y1 > TFA_ROOM_SIZE ? TFA_ROOM_SIZE : y1;
+        if (x0 >= x1 || y0 >= y1) continue;
+        s->danger_rects[s->danger_rect_count++] = (TfaDangerRect){ (int8_t)x0, (int8_t)y0, (int8_t)x1, (int8_t)y1, h->owner };
+        int8_t* grid = s->danger[h->owner < 0 ? TFA_MAX_PLAYERS : h->owner];
+        for (int y = y0; y < y1; y++)
+            for (int x = x0; x < x1; x++) {
+                int8_t* d = &grid[y * TFA_ROOM_SIZE + x];
+                if (*d < 0 || t < *d) *d = (int8_t)t;
+            }
+    }
 }
 
 static void tfa_ocellus_tendril_hit(TfaState* s, int p);
