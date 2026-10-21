@@ -1,4 +1,4 @@
-/* The TFA viewer contract over scripted raids in every room:
+/* The TFA viewer contract over scripted raids in every room, team sizes 1-4:
    - every model and animation it asks for exists in the caches it loads (a missing model aborts, a missing animation freezes);
    - the sim's floor lines up with the exported scene: every walkable tile reachable from the starts or stood on is inside the scene
      and walkable in its cache collision at the scene origin;
@@ -142,6 +142,7 @@ static void check_room(const EncounterDef* def, int room) {
     }
     long floating = 0, projectiles = 0, ticks = 0;
     for (int e = 0; e < 20; e++) {
+        ctx->config.team_size = 1 + e % TFA_MAX_PLAYERS;
         tfa_reset_typed(s, ctx, 500 + e);
         int acts[TFA_MAX_PLAYERS * TFA_NUM_ACTION_HEADS];
         while (!s->episode_over) {
