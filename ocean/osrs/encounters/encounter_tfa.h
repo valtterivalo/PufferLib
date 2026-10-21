@@ -27,6 +27,7 @@
 #include "tfa/tfa_guardian.inc"
 #include "tfa/tfa_xarth.inc"
 #include "tfa/tfa_bork.inc"
+#include "tfa/tfa_moia.inc"
 #include "tfa/tfa_bosses.inc"
 #include "tfa/tfa_heuristic.inc"
 #include "tfa/tfa_def.inc"

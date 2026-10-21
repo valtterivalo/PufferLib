@@ -6,9 +6,34 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
     OverheadPrayer want = PRAYER_NONE;
     const TfaNpc* target = NULL;
     int hide_x = -1, hide_y = -1;
+    int flee = 0;
     if (s->room == TFA_ROOM_GUARDIAN) {
         target = tfa_npc_first(s, TFA_NPC_GUARDIAN);
         want = s->boss.guardian.phase == TFA_GUARDIAN_GROUNDED ? PRAYER_PROTECT_MELEE : PRAYER_PROTECT_RANGED;
+    } else if (s->room == TFA_ROOM_MOIA) {
+        target = tfa_npc_first(s, TFA_NPC_MOIA);
+        want = s->boss.moia.magic_land_tick == s->tick + 1 ? PRAYER_PROTECT_MAGIC : PRAYER_PROTECT_RANGED;
+        int here_min = 1 << 30, best_min = -1;
+        for (int i = 0; i < TFA_MAX_NPCS; i++) {
+            const TfaNpc* b = &s->npcs[i];
+            if (!b->active || b->kind != TFA_NPC_BINDER) continue;
+            int d = chebyshev_distance(b->x, b->y, tp->player.x, tp->player.y);
+            if (d < here_min) here_min = d;
+        }
+        if (here_min <= 3) {
+            for (int a = 1; a < OSRS_PRIMARY_MOVE_ACTIONS; a++) {
+                int nx = tp->player.x + ENCOUNTER_MOVE_TARGET_DX[a], ny = tp->player.y + ENCOUNTER_MOVE_TARGET_DY[a];
+                if (tfa_layout_blocked(tfa_room_layout(s->room), nx, ny)) continue;
+                int nmin = 1 << 30;
+                for (int i = 0; i < TFA_MAX_NPCS; i++) {
+                    const TfaNpc* b = &s->npcs[i];
+                    if (!b->active || b->kind != TFA_NPC_BINDER) continue;
+                    int d = chebyshev_distance(b->x, b->y, nx, ny);
+                    if (d < nmin) nmin = d;
+                }
+                if (nmin > best_min) { best_min = nmin; flee = nmin > here_min ? a : 0; }
+            }
+        }
     } else if (s->room == TFA_ROOM_BORK) {
         const TfaBorkState* bs = &s->boss.bork;
         const TfaNpc* bork = tfa_npc_first(s, TFA_NPC_BORK);
@@ -69,6 +94,7 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
             if (d < best) { best = d; acts[OSRS_HEAD_PRIMARY] = a; }
         }
     }
+    if (flee) acts[OSRS_HEAD_PRIMARY] = flee;
     int here = tfa_tile_danger(s, p, tp->player.x, tp->player.y);
     if (here >= 0 && here <= 1) {
         for (int a = 1; a < OSRS_PRIMARY_MOVE_ACTIONS; a++) {
