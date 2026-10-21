@@ -50,7 +50,7 @@ def reduce_record(rec):
         pl = p["player"]
         so = p["sceneOrigin"]
         npcs = [
-            [n["npcIndex"], n["npcId"], n["worldPoint"]["x"], n["worldPoint"]["y"], n["healthRatio"], n["healthScale"], n["dead"], n["animation"], n["sizeTiles"]]
+            [n["npcIndex"], n["npcId"], n["worldPoint"]["x"], n["worldPoint"]["y"], n["healthRatio"], n["healthScale"], n["dead"], n["animation"], n["sizeTiles"], n["orientation"]]
             for n in p["npcs"]
             if is_boss_npc(n["npcId"])
         ]
@@ -73,7 +73,8 @@ def reduce_record(rec):
         tag = {"NPC_SPAWNED_OBSERVED": "S", "NPC_DESPAWNED_OBSERVED": "D", "NPC_CHANGED_OBSERVED": "C"}[kind]
         return [tag, t, s, p["npcId"], p["npcIndex"], p["worldPoint"]["x"], p["worldPoint"]["y"], p["healthRatio"], p["healthScale"], p["dead"]]
     if kind == "GRAPHICS_OBJECT_CREATED_OBSERVED":
-        return ["G", t, s, p["graphicsId"], p["worldPoint"]["x"], p["worldPoint"]["y"]]
+        lp = p["localPoint"]
+        return ["G", t, s, p["graphicsId"], p["worldPoint"]["x"], p["worldPoint"]["y"], p["startCycle"] - rec["lastObservedClientCycle"], lp["x"] % 128, lp["y"] % 128, p["z"]]
     if kind == "OVERHEAD_TEXT_OBSERVED":
         if p["overheadText"]["text"] is None:
             return None
@@ -427,7 +428,9 @@ def build_fight(rows, local, boss, first, last, first_row, gv, rule_ids):
                     add("NPOS", lab, nid, x, y, idx=idx, nid=nid)
                 if last_npc.get(idx, (None, None))[1] != (hr, hs) and not (hr == -1 and idx not in last_npc):
                     add("NHP", lab, hr, "-", "-", a=hs, idx=idx, nid=nid)
-                last_npc[idx] = ((x, y, nid), (hr, hs))
+                if last_npc.get(idx, (None, None, None))[2] != n[9]:
+                    add("NORI", lab, nid, x, y, a=n[9], idx=idx, nid=nid)
+                last_npc[idx] = ((x, y, nid), (hr, hs), n[9])
         elif k == "A":
             x, y = rel(r[5], r[6])
             add("ANIM", npc_label(r[3], r[4]), r[7], x, y, idx=r[4], nid=r[3])
@@ -464,7 +467,7 @@ def build_fight(rows, local, boss, first, last, first_row, gv, rule_ids):
                 f.dropped_gfx[("GFX", r[3])] += 1
                 continue
             x, y = rel(r[4], r[5])
-            add("GFX", "-", r[3], x, y)
+            add("GFX", "-", r[3], x, y, a=r[6], b=f"{r[7]},{r[8]}", c=r[9])
         elif k == "O":
             if r[3][0] == "N" and 16640 <= r[3][1] <= 16690:
                 x, y = rel(r[3][3], r[3][4])
