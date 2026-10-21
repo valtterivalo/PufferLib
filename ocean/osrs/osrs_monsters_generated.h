@@ -42,7 +42,10 @@ typedef enum {
     MON_TFA_OCELLUS_P2 = 35,
     MON_TFA_OCELLUS_BLADE = 36,
     MON_TFA_VOID_SIPHON = 37,
-    NUM_MONSTERS = 38
+    MON_TFA_DAGONHAI_ELDER = 38,
+    MON_TFA_DAGONHAI_MONK = 39,
+    MON_TFA_DAGONHAI_IMP = 40,
+    NUM_MONSTERS = 41
 } MonsterIndex;
 
 typedef struct {
@@ -458,6 +461,39 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .hp = 44, .att_level = 0, .str_level = 0, .def_level = 175,
         .magic_level = 300, .range_level = 0,
         .attack_speed = 0, .size = 1, .max_hit = 0,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
+        .range_att_bonus = 0, .ranged_str_bonus = 0,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0,
+        .magic_def = 0, .ranged_def = 0, .ranged_light_def = 0, .ranged_heavy_def = 0
+    },
+    /* Dagon'hai Elder and Monks: the wiki infoboxes give combat 427 and size 2 only (cache size 2). Every level, bonus and the 100 hp they keep
+       for the finale after the fifth shield break are provisional stand-ins until a recording; they drain to 0 (no floor). */
+    [MON_TFA_DAGONHAI_ELDER] = {
+        .npc_id = 16643, .name = "Dagon'hai Elder",
+        .hp = 100, .att_level = 1, .str_level = 1, .def_level = 150,
+        .magic_level = 300, .range_level = 250,
+        .attack_speed = 5, .size = 2, .max_hit = 0,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 100, .magic_str_bonus = 0,
+        .range_att_bonus = 100, .ranged_str_bonus = 0,
+        .stab_def = 100, .slash_def = 100, .crush_def = 100,
+        .magic_def = 150, .ranged_def = 100, .ranged_light_def = 100, .ranged_heavy_def = 100
+    },
+    [MON_TFA_DAGONHAI_MONK] = {
+        .npc_id = 16645, .name = "Dagon'hai Monk",
+        .hp = 100, .att_level = 1, .str_level = 1, .def_level = 150,
+        .magic_level = 300, .range_level = 1,
+        .attack_speed = 5, .size = 2, .max_hit = 0,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 100, .magic_str_bonus = 0,
+        .range_att_bonus = 0, .ranged_str_bonus = 0,
+        .stab_def = 100, .slash_def = 100, .crush_def = 100,
+        .magic_def = 150, .ranged_def = 100, .ranged_light_def = 100, .ranged_heavy_def = 100
+    },
+    /* Imp 16650 (cache size 1, the plain imp's idle 13841): no wiki page, everything provisional. */
+    [MON_TFA_DAGONHAI_IMP] = {
+        .npc_id = 16650, .name = "Imp",
+        .hp = 20, .att_level = 80, .str_level = 80, .def_level = 20,
+        .magic_level = 1, .range_level = 1,
+        .attack_speed = 4, .size = 1, .max_hit = 8,
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,

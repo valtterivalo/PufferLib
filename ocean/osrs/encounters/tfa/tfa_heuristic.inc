@@ -239,6 +239,39 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
                 hide_y = pi->y + (dy > 0 ? 2 : dy < 0 ? -1 : 0);
             }
         }
+    } else if (s->room == TFA_ROOM_DAGONHAI) {
+        /* Provisional until a recording: barrage a channeller and the imps, shoot the Elder, pray at the soonest landing hit, and the raider
+           nearest the gust tile blocks the tome. */
+        const TfaDagonhaiState* ds = &s->boss.dagonhai;
+        want = PRAYER_PROTECT_MAGIC;
+        int soonest = 1 << 30;
+        for (int h = 0; h < tp->incoming.count; h++) {
+            const TfaIncomingHit* hit = &tp->incoming.hits[h];
+            if (hit->ticks_remaining >= soonest || hit->damage == 0) continue;
+            soonest = hit->ticks_remaining;
+            want = hit->attack_style == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED
+                : hit->attack_style == ATTACK_STYLE_MELEE ? PRAYER_PROTECT_MELEE : PRAYER_PROTECT_MAGIC;
+        }
+        for (int i = 0; i < 3 && !target; i++)
+            if (s->npcs[i].active && s->npcs[i].attackable) target = &s->npcs[i];
+        if (ds->caster_slot >= 0) target = &s->npcs[ds->caster_slot];
+        int best = 1 << 30;
+        for (int i = 0; i < TFA_NUM_TARGET_SLOTS && ds->phase == TFA_DAGONHAI_IMPS; i++) {
+            const TfaNpc* imp = &s->npcs[i];
+            if (!imp->active || imp->kind != TFA_NPC_IMP) continue;
+            int d = chebyshev_distance(imp->x, imp->y, tp->player.x, tp->player.y);
+            if (d < best) { best = d; target = imp; }
+        }
+        if (ds->gust_slot >= 0) {
+            const TfaNpc* g = &s->npcs[ds->gust_slot];
+            int nearest = -1, nd = 1 << 30;
+            for (int q = 0; q < s->team_size; q++) {
+                if (!tfa_alive(s, q)) continue;
+                int d = chebyshev_distance(g->x, g->y, s->players[q].player.x, s->players[q].player.y);
+                if (d < nd) { nd = d; nearest = q; }
+            }
+            if (nearest == p) go_x = g->x, go_y = g->y;
+        }
     }
     if (!target) return;
     if (tp->player.prayer != want)
@@ -251,7 +284,8 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
        specials six ticks apart thrown from one tile (Guardian 4/4 fights, Xarth 3/3) by one bow raider, who throws another whenever 50% energy
        is back (2727 again at +126 to +256). Bork (one fight, 7 Soulreaper swings while P0 also carried the cannon remains) stays ranged. */
     int crossbow = tp->kit == TFA_KIT_CROSSBOW;
-    int barrage = target->kind == TFA_NPC_XARTH_CORPSE || target->kind == TFA_NPC_JELLY || (crossbow && s->room == TFA_ROOM_DREADNOTH);
+    int barrage = target->kind == TFA_NPC_XARTH_CORPSE || target->kind == TFA_NPC_JELLY || target->kind == TFA_NPC_IMP ||
+        (crossbow && s->room == TFA_ROOM_DREADNOTH) || (s->room == TFA_ROOM_DAGONHAI && tfa_npc_slot(s, target) == s->boss.dagonhai.caster_slot);
     int p3_melee = crossbow && s->room == TFA_ROOM_OCELLUS && target->kind == TFA_NPC_OCELLUS && s->boss.ocellus.phase >= TFA_OCELLUS_P3;
     AttackStyle stance = barrage ? ATTACK_STYLE_MAGIC
         : s->room == TFA_ROOM_EZEKIEL || p3_melee ? ATTACK_STYLE_MELEE

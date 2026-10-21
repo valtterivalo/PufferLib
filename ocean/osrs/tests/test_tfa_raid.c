@@ -29,7 +29,7 @@ int main(void) {
     ASSERT_INT_EQ("the last room is Ocellus", tfa_raid_room(4, 1), TFA_ROOM_OCELLUS);
     ASSERT_INT_EQ("path 2 picks Moia", tfa_raid_room(2, 2), TFA_ROOM_MOIA);
     ASSERT_INT_EQ("path 4 picks the Dagon'hai", tfa_raid_room(3, 4), TFA_ROOM_DAGONHAI);
-    for (int path = 0; path < 4; path++) {
+    for (int path = 0; path < 8; path++) {
         ctx->config.path = path;
         ctx->config.room_max_ticks = 6000;
         tfa_reset_typed(s, ctx, 11u + (uint32_t)path);

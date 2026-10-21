@@ -67,6 +67,10 @@ typedef enum {
     TFA_NPC_VOID_VINE,
     TFA_NPC_OCELLUS_BLADE,
     TFA_NPC_OCELLUS_PORTAL,
+    TFA_NPC_DAGONHAI_CAULDRON,
+    TFA_NPC_DAGONHAI_GUST,
+    TFA_NPC_IMP,
+    TFA_NPC_DEMONIC_RIFT,
     TFA_NPC_KIND_COUNT
 } TfaNpcKind;
 
@@ -237,6 +241,7 @@ typedef struct {
 #include "tfa_guardian_model.inc"
 #include "tfa_bork_model.inc"
 #include "tfa_moia_model.inc"
+#include "tfa_dagonhai_model.inc"
 
 typedef struct {
     int8_t x0, y0, x1, y1;
@@ -276,6 +281,7 @@ typedef struct {
         TfaMoiaState moia;
         TfaDreadnothState dreadnoth;
         TfaEzekielState ezekiel;
+        TfaDagonhaiState dagonhai;
     } boss;
 } TfaState;
 

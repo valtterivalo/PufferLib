@@ -169,6 +169,7 @@ GROUPS = {
     "dreadnoth": frozenset({16665, 16666}),
     "moia": frozenset({16667, 16670}),
     "xarth": frozenset(range(16684, 16689)),
+    "dagonhai": frozenset(range(16643, 16652)),
     "ocellus": frozenset(range(16672, 16682)),
 }
 BOSS_TITLE = {
@@ -178,6 +179,7 @@ BOSS_TITLE = {
     "dreadnoth": "Dreadnoth the Jellied",
     "moia": "Moia",
     "xarth": "Xarth",
+    "dagonhai": "Dagon'hai Trio",
     "ocellus": "Ocellus",
 }
 START_ANIMS = {
@@ -187,9 +189,10 @@ START_ANIMS = {
     "dreadnoth": {14777, 14779, 14780, 14782},
     "moia": {14785, 14788},
     "xarth": {14983, 14984, 14985, 14989, 14992},
+    "dagonhai": {14593, 14597, 14599, 14601, 14603, 14604},
     "ocellus": {14806, 14842, 14846, 14848, 14851},
 }
-DEATH_ANIMS = {"guardian": {14749}, "bork": set(), "ezekiel": {14697}, "dreadnoth": set(), "moia": set(), "xarth": {14995}, "ocellus": set()}
+DEATH_ANIMS = {"guardian": {14749}, "bork": set(), "ezekiel": {14697}, "dreadnoth": set(), "moia": set(), "xarth": {14995}, "dagonhai": set(), "ocellus": set()}
 ATTACK_ANIMS = {
     "guardian": {14745, 14748, 14750, 14751, 14752, 14753, 14754},
     "bork": {14542, 14545, 14550, 14551, 14554, 14555},
@@ -197,6 +200,7 @@ ATTACK_ANIMS = {
     "dreadnoth": {14777, 14779, 14780, 14782},
     "moia": {14785, 14788},
     "xarth": {14983, 14984, 14985, 14989, 14992},
+    "dagonhai": {14593, 14597, 14599, 14601, 14603, 14604, 14607, 14612, 14617, 14624, 14625, 14626, 14632, 14633, 14634, 14657, 14659, 14661, 14678, 14679},
     "ocellus": {14806, 14807, 14809, 14810, 14811, 14812, 14813, 14814, 14837, 14842, 14846, 14848, 14851, 14857, 14858, 14861, 14869, 14871, 14878, 14881},
 }
 PROT_NAMES = {"PROTECT_FROM_MELEE": "PROT_MELEE", "PROTECT_FROM_MISSILES": "PROT_RANGE", "PROTECT_FROM_MAGIC": "PROT_MAGIC"}

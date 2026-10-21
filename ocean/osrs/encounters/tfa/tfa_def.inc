@@ -273,7 +273,7 @@ static void tfa_fill_render_entities(
     for (int p = 0; p < s->team_size && n < max_entities; p++)
         osrs_render_entity_from_player_entity(&s->players[p].player, &out[n++]);
     for (int i = 0; i < TFA_MAX_NPCS && n < max_entities; i++) {
-        if (!s->npcs[i].active || s->npcs[i].kind == TFA_NPC_OCELLUS_PORTAL) continue;
+        if (!s->npcs[i].active || s->npcs[i].kind == TFA_NPC_OCELLUS_PORTAL || s->npcs[i].kind == TFA_NPC_DAGONHAI_GUST) continue;
         tfa_render_npc(s, &s->npcs[i], i, &out[n++]);
     }
     for (int p = 0; p < s->team_size; p++) {

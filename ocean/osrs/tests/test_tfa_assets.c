@@ -62,9 +62,9 @@ static void live_positions_read(const char* room) {
     char path[256];
     snprintf(path, sizeof(path), "ocean/osrs/encounters/tfa/fixtures/tfa_%s_events.tsv", room);
     FILE* f = fopen(path, "r");
-    assert(f);
-    char line[1024];
     g_nlive = 0;
+    if (!f) return;
+    char line[1024];
     while (fgets(line, sizeof(line), f)) {
         char* col[10] = {0};
         char* save = NULL;
@@ -224,7 +224,7 @@ int main(void) {
     const EncounterDef* defs[TFA_ROOM_COUNT] = {
         [TFA_ROOM_GUARDIAN] = &ENCOUNTER_TFA_guardian, [TFA_ROOM_BORK] = &ENCOUNTER_TFA_bork,
         [TFA_ROOM_EZEKIEL] = &ENCOUNTER_TFA_ezekiel, [TFA_ROOM_DREADNOTH] = &ENCOUNTER_TFA_dreadnoth,
-        [TFA_ROOM_MOIA] = &ENCOUNTER_TFA_moia, [TFA_ROOM_XARTH] = &ENCOUNTER_TFA_xarth,
+        [TFA_ROOM_MOIA] = &ENCOUNTER_TFA_moia, [TFA_ROOM_XARTH] = &ENCOUNTER_TFA_xarth, [TFA_ROOM_DAGONHAI] = &ENCOUNTER_TFA_dagonhai,
         [TFA_ROOM_OCELLUS] = &ENCOUNTER_TFA_ocellus,
     };
     for (int r = 0; r < TFA_NUM_IMPLEMENTED_ROOMS; r++) check_room(defs[TFA_IMPLEMENTED_ROOMS[r]], TFA_IMPLEMENTED_ROOMS[r]);
