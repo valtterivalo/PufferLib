@@ -281,8 +281,7 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
             : want == PRAYER_PROTECT_MAGIC ? ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC : ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED;
     /* Weapons per room from the recordings: P0 meleed Ezekiel (1043 Soulreaper attacks), blowpiped the Guardian (364 of 852 attacks), and at Ocellus
        since run 6 (4 of 4 floored runs) carries no crossbow or warhammer: Soulreaper on P1 and P3 unless he blocks melee (his P1 prayer, a melee
-       deflect), the blowpipe otherwise and on the Blade (P1 65 Soulreaper / 63 blowpipe hits, P3 159 / 106, Blade 28 / 0 in runs 10 and 11), a Tonalztics special on
-       him whenever 50% energy is back (8 and 12 throws in runs 10 and 11); crossbowed every other boss and barraged corpses and jellies (577 casts); the bow raiders shot everything but Ezekiel (no
+       deflect), the blowpipe otherwise and on the Blade (P1 65 Soulreaper / 63 blowpipe hits, P3 159 / 106, Blade 28 / 0 in runs 10 and 11); crossbowed every other boss and barraged corpses and jellies (577 casts); the bow raiders shot everything but Ezekiel (no
        arrows there). Openers: the Zaryte special (75%) on the first crossbow shot, two Dragon warhammer specials on Ezekiel, two Tonalztics
        specials six ticks apart thrown from one tile (Guardian 4/4 fights, Xarth 3/3) by one bow raider, who throws another whenever 50% energy
        is back (2727 again at +126 to +256). Bork (one fight, 7 Soulreaper swings while P0 also carried the cannon remains) stays ranged. */
@@ -299,7 +298,10 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
     if (stance == ATTACK_STYLE_MELEE && crossbow && s->room != TFA_ROOM_OCELLUS && tp->player.special_energy >= 50) spec_weapon = ITEM_DRAGON_WARHAMMER;
     if (stance == ATTACK_STYLE_RANGED && crossbow && s->room != TFA_ROOM_OCELLUS && tp->player.special_energy == 100) spec_weapon = ITEM_ZARYTE_CROSSBOW;
     if (stance == ATTACK_STYLE_RANGED && p == 1 && tp->player.special_energy >= 50) spec_weapon = ITEM_TONALZTICS_OF_RALOS;
-    if (crossbow && s->room == TFA_ROOM_OCELLUS && target->kind == TFA_NPC_OCELLUS && tp->player.special_energy >= 50) spec_weapon = ITEM_TONALZTICS_OF_RALOS;
+    /* At Ocellus P0 and a second thrower open with two specials, then hold their energy for P3, where his drain from P2 on is kept (runs 10
+       and 11: openers at -3..7, then P3 +27 +29 +44 in run 10); the uncharged thrower (P1 here) specials whenever 50% is back, P2 included. */
+    int oc_spec_window = s->room == TFA_ROOM_OCELLUS && target->kind == TFA_NPC_OCELLUS && (s->room_tick < 15 || s->boss.ocellus.phase >= TFA_OCELLUS_P3);
+    if ((p == 0 || p == 2) && oc_spec_window && tp->player.special_energy >= 50) spec_weapon = ITEM_TONALZTICS_OF_RALOS;
     uint16_t wanted[NUM_GEAR_SLOTS];
     memset(wanted, ITEM_NONE, sizeof(wanted));
     if (stance == ATTACK_STYLE_RANGED) {
