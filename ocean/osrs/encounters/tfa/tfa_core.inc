@@ -280,3 +280,21 @@ static void tfa_hazard_hit_player(TfaState* s, const TfaHazard* h, int p) {
     if (h->effect == TFA_EFFECT_BURN)
         tp->burn_ticks = 10;
 }
+
+/* A projectile from NPC src to player p, launched delay ticks from now and flying duration ticks. */
+static void tfa_fx_projectile(TfaState* s, const TfaNpc* src, int p, int gfx_id, uint32_t model, int anim, int delay, int duration) {
+    if (s->fx_count >= TFA_MAX_FX) {
+        fprintf(stderr, "tfa fx capacity %d exceeded tick=%d\n", TFA_MAX_FX, s->tick);
+        abort();
+    }
+    s->fx[s->fx_count++] = (TfaFx){
+        .kind = TFA_FX_PROJECTILE,
+        .src_slot = (int8_t)tfa_npc_slot(s, src),
+        .dst_player = (int8_t)p,
+        .delay = (int16_t)delay,
+        .duration = (int16_t)duration,
+        .gfx_id = gfx_id,
+        .model = model,
+        .anim = anim,
+    };
+}

@@ -288,16 +288,39 @@ static int tfa_get_winner(EncounterState* state, EncounterContext* context) {
     return s->outcome == TFA_OUTCOME_CLEARED ? 0 : s->episode_over ? 1 : -1;
 }
 
+/* Hazard tiles, loc hazards as models on their tile, and this tick's NPC projectiles. Durations are client cycles. */
 static void tfa_render_post_tick(EncounterState* state, EncounterContext* context, EncounterOverlay* ov) {
     (void)context;
     TfaState* s = (TfaState*)state;
-    for (int i = 0; i < TFA_MAX_HAZARDS && ov->hazard_count < ENCOUNTER_MAX_OVERLAY_TILES; i++) {
+    for (int i = 0; i < TFA_MAX_HAZARDS; i++) {
         const TfaHazard* h = &s->hazards[i];
         if (h->kind == TFA_HAZ_NONE) continue;
+        if (h->loc_id > 0 && ov->floating_model_count < ENCOUNTER_MAX_OVERLAY_FLOATING_MODELS) {
+            encounter_emit_floating_model(ov, ENCOUNTER_PROJECTILE_TARGET_FIXED, -1, h->x, h->y,
+                OSRS_LOC_MODEL_BASE | (uint32_t)h->loc_id, -1, 0.0f, 0.0f, 1.0f);
+            continue;
+        }
+        if (ov->hazard_count >= ENCOUNTER_MAX_OVERLAY_TILES) continue;
         ov->hazards[ov->hazard_count].x = h->x;
         ov->hazards[ov->hazard_count].y = h->y;
         ov->hazards[ov->hazard_count].active = 1;
         ov->hazard_count++;
+    }
+    for (int i = 0; i < s->fx_count; i++) {
+        const TfaFx* fx = &s->fx[i];
+        const TfaNpc* src = &s->npcs[fx->src_slot];
+        const Player* dst = &s->players[fx->dst_player].player;
+        OsrsProjectileEventSpec spec = {
+            .src_x = src->x, .src_y = src->y, .dst_x = dst->x, .dst_y = dst->y,
+            .duration_ticks = fx->duration * 30,
+            .start_delay = fx->delay * 30,
+            .start_h = 100, .end_h = 40, .curve = 16,
+            .src_size = src->size, .dst_size = 1,
+            .model_id = fx->model,
+            .anim_id = fx->anim,
+        };
+        int idx = osrs_emit_projectile_with_spec(ov, &spec, fx->dst_player == 0);
+        encounter_set_projectile_source_npc_slot(ov, idx, fx->src_slot);
     }
 }
 
