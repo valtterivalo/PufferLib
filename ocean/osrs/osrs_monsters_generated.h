@@ -23,7 +23,19 @@ typedef enum {
     MON_ZULRAH_BLUE = 16,
     MON_ZULRAH_SNAKELING_MELEE = 17,
     MON_ZULRAH_SNAKELING_MAGIC = 18,
-    NUM_MONSTERS = 19
+    MON_TFA_ARCHIVE_GUARDIAN = 19,
+    MON_TFA_BORK = 20,
+    MON_TFA_SMORKS = 21,
+    MON_TFA_EZEKIEL = 22,
+    MON_TFA_DREADNOTH = 23,
+    MON_TFA_MOIA = 24,
+    MON_TFA_XARTH = 25,
+    MON_TFA_OCELLUS_P1 = 26,
+    MON_TFA_OCELLUS_P3 = 27,
+    MON_TFA_VOID_RIFT = 28,
+    MON_TFA_VOID_AUGMENTER = 29,
+    MON_TFA_VOID_VINE = 30,
+    NUM_MONSTERS = 31
 } MonsterIndex;
 
 typedef struct {
@@ -239,6 +251,128 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = -40, .slash_def = -40, .crush_def = -40,
         .magic_def = -40, .ranged_def = -40
+    },
+    /* The Fractured Archive, OSRS Wiki infoboxes 2026-10-20 (ocean/osrs/encounters/tfa/fixtures/tfa_wiki_stats.md).
+       ranged_def is the standard ranged defence. Blank wiki fields are 0. */
+    [MON_TFA_ARCHIVE_GUARDIAN] = {
+        .npc_id = 16659, .name = "Archive Guardian",
+        .hp = 550, .att_level = 250, .str_level = 240, .def_level = 260,
+        .magic_level = 250, .range_level = 280,
+        .attack_speed = 5, .size = 5, .max_hit = 25,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 350, .magic_str_bonus = 55,
+        .range_att_bonus = 350, .ranged_str_bonus = 55,
+        .stab_def = 120, .slash_def = 110, .crush_def = 20,
+        .magic_def = 130, .ranged_def = 120
+    },
+    [MON_TFA_BORK] = {
+        .npc_id = 16640, .name = "Bork",
+        .hp = 1500, .att_level = 200, .str_level = 200, .def_level = 300,
+        .magic_level = 90, .range_level = 200,
+        .attack_speed = 7, .size = 4, .max_hit = 0,
+        .melee_att_bonus = 100, .melee_str_bonus = 40, .magic_att_bonus = 0, .magic_str_bonus = 0,
+        .range_att_bonus = 0, .ranged_str_bonus = 0,
+        .stab_def = 140, .slash_def = 130, .crush_def = 10,
+        .magic_def = 300, .ranged_def = 50
+    },
+    [MON_TFA_SMORKS] = {
+        .npc_id = 16641, .name = "The Smorks",
+        .hp = 600, .att_level = 1, .str_level = 1, .def_level = 220,
+        .magic_level = 185, .range_level = 185,
+        .attack_speed = 7, .size = 3, .max_hit = 0,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 185, .magic_str_bonus = 35,
+        .range_att_bonus = 250, .ranged_str_bonus = 30,
+        .stab_def = 220, .slash_def = 170, .crush_def = 160,
+        .magic_def = 400, .ranged_def = 150
+    },
+    [MON_TFA_EZEKIEL] = {
+        .npc_id = 16652, .name = "Ezekiel",
+        .hp = 3000, .att_level = 250, .str_level = 150, .def_level = 130,
+        .magic_level = 200, .range_level = 80,
+        .attack_speed = 5, .size = 3, .max_hit = 0,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 250, .magic_str_bonus = 0,
+        .range_att_bonus = 0, .ranged_str_bonus = 0,
+        .stab_def = 150, .slash_def = 90, .crush_def = 35,
+        .magic_def = 200, .ranged_def = 370
+    },
+    [MON_TFA_DREADNOTH] = {
+        .npc_id = 16665, .name = "Dreadnoth the Jellied",
+        .hp = 2100, .att_level = 280, .str_level = 285, .def_level = 125,
+        .magic_level = 220, .range_level = 250,
+        .attack_speed = 4, .size = 5, .max_hit = 0,
+        .melee_att_bonus = 185, .melee_str_bonus = 35, .magic_att_bonus = 0, .magic_str_bonus = 0,
+        .range_att_bonus = 180, .ranged_str_bonus = 20,
+        .stab_def = 15, .slash_def = 20, .crush_def = 5,
+        .magic_def = 20, .ranged_def = 80
+    },
+    [MON_TFA_MOIA] = {
+        .npc_id = 16667, .name = "Moia",
+        .hp = 785, .att_level = 1, .str_level = 1, .def_level = 195,
+        .magic_level = 350, .range_level = 200,
+        .attack_speed = 5, .size = 3, .max_hit = 0,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 300, .magic_str_bonus = 0,
+        .range_att_bonus = 350, .ranged_str_bonus = 35,
+        .stab_def = 20, .slash_def = 110, .crush_def = 15,
+        .magic_def = 30, .ranged_def = 120
+    },
+    [MON_TFA_XARTH] = {
+        .npc_id = 16684, .name = "Xarth",
+        .hp = 2600, .att_level = 250, .str_level = 225, .def_level = 170,
+        .magic_level = 350, .range_level = 220,
+        .attack_speed = 4, .size = 3, .max_hit = 0,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 250, .magic_str_bonus = 0,
+        .range_att_bonus = 250, .ranged_str_bonus = 0,
+        .stab_def = 115, .slash_def = 105, .crush_def = 20,
+        .magic_def = 205, .ranged_def = 230
+    },
+    [MON_TFA_OCELLUS_P1] = {
+        .npc_id = 16674, .name = "Ocellus",
+        .hp = 2500, .att_level = 1, .str_level = 1, .def_level = 215,
+        .magic_level = 350, .range_level = 250,
+        .attack_speed = 5, .size = 3, .max_hit = 0,
+        .melee_att_bonus = 1, .melee_str_bonus = 1, .magic_att_bonus = 150, .magic_str_bonus = 0,
+        .range_att_bonus = 150, .ranged_str_bonus = 0,
+        .stab_def = 150, .slash_def = 95, .crush_def = 60,
+        .magic_def = 100, .ranged_def = 135
+    },
+    [MON_TFA_OCELLUS_P3] = {
+        .npc_id = 16677, .name = "Ocellus",
+        .hp = 5250, .att_level = 325, .str_level = 250, .def_level = 250,
+        .magic_level = 300, .range_level = 300,
+        .attack_speed = 6, .size = 3, .max_hit = 0,
+        .melee_att_bonus = 150, .melee_str_bonus = 10, .magic_att_bonus = 350, .magic_str_bonus = 10,
+        .range_att_bonus = 0, .ranged_str_bonus = 0,
+        .stab_def = 150, .slash_def = 100, .crush_def = 30,
+        .magic_def = 200, .ranged_def = 250
+    },
+    [MON_TFA_VOID_RIFT] = {
+        .npc_id = 16678, .name = "Void Rift",
+        .hp = 44, .att_level = 0, .str_level = 0, .def_level = 175,
+        .magic_level = 300, .range_level = 0,
+        .attack_speed = 0, .size = 1, .max_hit = 0,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
+        .range_att_bonus = 0, .ranged_str_bonus = 0,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0,
+        .magic_def = 0, .ranged_def = 0
+    },
+    [MON_TFA_VOID_AUGMENTER] = {
+        .npc_id = 16680, .name = "Void Augmenter",
+        .hp = 44, .att_level = 0, .str_level = 0, .def_level = 175,
+        .magic_level = 300, .range_level = 0,
+        .attack_speed = 0, .size = 1, .max_hit = 0,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
+        .range_att_bonus = 0, .ranged_str_bonus = 0,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0,
+        .magic_def = 0, .ranged_def = 0
+    },
+    [MON_TFA_VOID_VINE] = {
+        .npc_id = 16681, .name = "Void Vine",
+        .hp = 44, .att_level = 0, .str_level = 0, .def_level = 0,
+        .magic_level = 0, .range_level = 0,
+        .attack_speed = 0, .size = 1, .max_hit = 0,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
+        .range_att_bonus = 0, .ranged_str_bonus = 0,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0,
+        .magic_def = 0, .ranged_def = 0
     },
 };
 
