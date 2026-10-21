@@ -44,7 +44,7 @@
 
 #define OC_GFX_TENDRIL 4240
 #define OC_GFX_EXPLODE 4262
-#define OC_GFX_LANE 62685
+#define OC_LOC_LANE_PORTAL 62685
 #define OC_GFX_DOT 4270
 #define OC_GFX_SAFE_PORTAL 4271
 #define OC_GFX_BOMB 4299
@@ -52,7 +52,8 @@
 #define OC_GFX_INSOLENCE 4336
 #define OC_GFX_SLAM 4320
 #define OC_GFX_DEBRIS 4346
-#define OC_GFX_VOID 62702
+#define OC_GFX_SWORD_DROP 4388
+#define OC_LOC_VOID 62702
 
 typedef enum {
     OCE_NONE = 0,
@@ -591,6 +592,17 @@ static void oc_place_player(TfaState* s, int p, int q) {
     abort();
 }
 
+/* The lit portal on the cross that fires a lane's near segment: 2x1 on the y = 49 wall, turned to 1x2 on x = 31 (recorded OBJ+ rotation 512). */
+static int oc_lane_portal(const TfaHazard* h, int* x, int* y, int* turned) {
+    if (h->loc_id != OC_LOC_LANE_PORTAL) return 0;
+    if (h->w == 2) {
+        *x = h->x, *y = OC_CROSS_Y, *turned = 0;
+        return h->y + h->h == OC_CROSS_Y || h->y == OC_CROSS_Y + 1;
+    }
+    *x = OC_CROSS_X, *y = h->y, *turned = 1;
+    return h->x + h->w == OC_CROSS_X || h->x == OC_CROSS_X + 1;
+}
+
 /* Lanes of one quadrant: wall portals light all but one per wall, and fire along 2-wide lanes 4 ticks later. */
 static void oc_lanes(TfaState* s, int q, int all_lit, int start) {
     int sx = (q & 1) ? 1 : -1, sy = (q & 2) ? 1 : -1;
@@ -601,13 +613,13 @@ static void oc_lanes(TfaState* s, int q, int all_lit, int start) {
         int row = sy < 0 ? 37 + 2 * k : 50 + 2 * k;
         if (k != dark_col) {
             int y_near = sy < 0 ? OC_CROSS_Y - near : OC_CROSS_Y + 1, y_far = sy < 0 ? OC_CROSS_Y - len : OC_CROSS_Y + 1 + near;
-            oc_haz(s, col, y_near, 2, near, start, lo, hi, ATTACK_STYLE_NONE, 100, OC_GFX_LANE, -1);
-            oc_haz(s, col, y_far, 2, len - near, start + 1, lo, hi, ATTACK_STYLE_NONE, 100, OC_GFX_LANE, -1);
+            oc_haz(s, col, y_near, 2, near, start, lo, hi, ATTACK_STYLE_NONE, 100, OC_LOC_LANE_PORTAL, -1);
+            oc_haz(s, col, y_far, 2, len - near, start + 1, lo, hi, ATTACK_STYLE_NONE, 100, OC_LOC_LANE_PORTAL, -1);
         }
         if (k != dark_row) {
             int x_near = sx < 0 ? OC_CROSS_X - near : OC_CROSS_X + 1, x_far = sx < 0 ? OC_CROSS_X - len : OC_CROSS_X + 1 + near;
-            oc_haz(s, x_near, row, near, 2, start, lo, hi, ATTACK_STYLE_NONE, 100, OC_GFX_LANE, -1);
-            oc_haz(s, x_far, row, len - near, 2, start + 1, lo, hi, ATTACK_STYLE_NONE, 100, OC_GFX_LANE, -1);
+            oc_haz(s, x_near, row, near, 2, start, lo, hi, ATTACK_STYLE_NONE, 100, OC_LOC_LANE_PORTAL, -1);
+            oc_haz(s, x_far, row, len - near, 2, start + 1, lo, hi, ATTACK_STYLE_NONE, 100, OC_LOC_LANE_PORTAL, -1);
         }
     }
 }
@@ -695,7 +707,7 @@ static void oc_p2_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
                 if (s->npcs[i].active && (s->npcs[i].kind == TFA_NPC_OCELLUS_BLADE || s->npcs[i].kind == TFA_NPC_OCELLUS_PORTAL)) s->npcs[i].active = 0;
             for (int p = 0; p < s->team_size; p++)
                 if (tfa_alive(s, p) && oc_quadrant(s->players[p].player.x, s->players[p].player.y) != 1) oc_place_player(s, p, 1);
-            oc_haz(s, 36, 42, 3, 3, s->tick + TFA_OC2.drop_hit, TFA_OC2.drop_min, TFA_OC2.drop_max, ATTACK_STYLE_NONE, 100, 4388, -1);
+            oc_haz(s, 36, 42, 3, 3, s->tick + TFA_OC2.drop_hit, TFA_OC2.drop_min, TFA_OC2.drop_max, ATTACK_STYLE_NONE, 100, OC_GFX_SWORD_DROP, -1);
             oc_at(s, TFA_OC2.to_p3, OCE_P3_START, 0, 0);
             break;
         }

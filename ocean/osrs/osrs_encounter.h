@@ -184,7 +184,7 @@ static inline int encounter_pending_hit_queue_damage_sum(
 #define ENCOUNTER_MAX_OVERLAY_TILES 16
 #define ENCOUNTER_MAX_OVERLAY_ADDS 4
 #define ENCOUNTER_MAX_OVERLAY_TILE_SHADOWS 48
-#define ENCOUNTER_MAX_OVERLAY_FLOATING_MODELS 16
+#define ENCOUNTER_MAX_OVERLAY_FLOATING_MODELS 256
 #define ENCOUNTER_MAX_ACTIVE_MODIFIERS 16
 #define ENCOUNTER_OVERLAY_STATUS_TEXT_LEN 64
 
@@ -217,6 +217,8 @@ typedef struct {
     float height_offset;
     float lateral_offset;
     float scale;
+    float depth_offset;
+    float yaw;
 } EncounterFloatingModel;
 
 typedef struct {

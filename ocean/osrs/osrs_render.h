@@ -4716,11 +4716,11 @@ static void render_draw_3d_world(RenderClient* rc, OsrsEnv* env) {
             Vector3 pos = {
                 anchor_x + 0.5f + floating->lateral_offset,
                 ground + floating->height_offset,
-                -(anchor_y + 1.0f) + 0.5f
+                -(anchor_y + 1.0f) + 0.5f - floating->depth_offset
             };
             float model_scale = (floating->scale > 0.0f ? floating->scale : 1.0f) / 128.0f;
 
-            float npc_yaw = 0.0f;
+            float npc_yaw = floating->yaw;
             if (floating->anchor_kind == ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT) {
                 int npc_idx = render_find_npc_entity_idx(rc, floating->npc_slot);
                 if (npc_idx >= 0) npc_yaw = rc->yaw[npc_idx];

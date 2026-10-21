@@ -421,7 +421,7 @@ static void oc_p3_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
                 int x = s->players[p].player.x, y = s->players[p].player.y;
                 oc_haz_tile(s, x, y, s->tick + TFA_OC3.void_first, TFA_OC3.void_first_min, TFA_OC3.void_first_max, OC_GFX_DEBRIS);
                 for (int k = 1; k <= TFA_OC3.void_tick_count; k++)
-                    oc_haz_tile(s, x, y, s->tick + TFA_OC3.void_first + 2 * k, TFA_OC3.void_tick_min, TFA_OC3.void_tick_max, OC_GFX_VOID);
+                    oc_haz_tile(s, x, y, s->tick + TFA_OC3.void_first + 2 * k, TFA_OC3.void_tick_min, TFA_OC3.void_tick_max, OC_LOC_VOID);
             }
             break;
         case OCE_P3_SPIN_INJURY:
@@ -538,7 +538,7 @@ static void oc_p4_ring(TfaState* s, const TfaNpc* n, int inverse, int start, int
     if (!inverse) {
         tfa_hazard_add(s, (TfaHazard){ .kind = TFA_HAZ_FLOOR, .style = ATTACK_STYLE_NONE, .w = (uint8_t)side, .h = (uint8_t)side,
             .owner = -1, .x = (int16_t)x, .y = (int16_t)y, .start_tick = start, .end_tick = end,
-            .min_damage = (int16_t)min, .max_damage = (int16_t)max, .protected_pct = 100, .loc_id = OC_GFX_VOID });
+            .min_damage = (int16_t)min, .max_damage = (int16_t)max, .protected_pct = 100, .loc_id = OC_LOC_VOID });
         return;
     }
     int q = oc_quadrant(n->x + 1, n->y + 1);
@@ -553,7 +553,7 @@ static void oc_p4_ring(TfaState* s, const TfaNpc* n, int inverse, int start, int
         if (rects[i][2] <= 0 || rects[i][3] <= 0) continue;
         tfa_hazard_add(s, (TfaHazard){ .kind = TFA_HAZ_FLOOR, .style = ATTACK_STYLE_NONE, .w = (uint8_t)rects[i][2], .h = (uint8_t)rects[i][3],
             .owner = -1, .x = (int16_t)rects[i][0], .y = (int16_t)rects[i][1], .start_tick = start, .end_tick = end,
-            .min_damage = (int16_t)min, .max_damage = (int16_t)max, .protected_pct = 100, .loc_id = OC_GFX_VOID });
+            .min_damage = (int16_t)min, .max_damage = (int16_t)max, .protected_pct = 100, .loc_id = OC_LOC_VOID });
     }
 }
 
@@ -660,7 +660,7 @@ static void oc_p4_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
             for (int p = 0; p < s->team_size; p++) {
                 if (!tfa_alive(s, p)) continue;
                 const Player* pl = &s->players[p].player;
-                oc_haz(s, pl->x, pl->y, 1, 1, s->tick + 1, TFA_OC4.wind_min, TFA_OC4.wind_max, ATTACK_STYLE_NONE, 100, OC_GFX_VOID, p);
+                oc_haz(s, pl->x, pl->y, 1, 1, s->tick + 1, TFA_OC4.wind_min, TFA_OC4.wind_max, ATTACK_STYLE_NONE, 100, OC_LOC_VOID, p);
             }
             break;
         case OCE_P4_RIFT_BLOW: {

@@ -228,7 +228,7 @@ static void tfa_fill_render_entities(
     for (int p = 0; p < s->team_size && n < max_entities; p++)
         osrs_render_entity_from_player_entity(&s->players[p].player, &out[n++]);
     for (int i = 0; i < TFA_MAX_NPCS && n < max_entities; i++) {
-        if (!s->npcs[i].active) continue;
+        if (!s->npcs[i].active || s->npcs[i].kind == TFA_NPC_OCELLUS_PORTAL) continue;
         tfa_render_npc(s, &s->npcs[i], i, &out[n++]);
     }
     for (int p = 0; p < s->team_size; p++) {
@@ -294,23 +294,62 @@ static int tfa_get_winner(EncounterState* state, EncounterContext* context) {
     return s->outcome == TFA_OUTCOME_CLEARED ? 0 : s->episode_over ? 1 : -1;
 }
 
-/* Hazard tiles, loc hazards as models on their tile, and this tick's NPC projectiles. Durations are client cycles. */
+static const struct { int gfx; int anim; } TFA_HAZARD_SPOTANIMS[] = {
+    { XARTH_GFX_AOE, SPOTANIM_TFA_XARTH_VFX_XARTH_AOE_HITANIM_01_ANIM },
+    { EZEKIEL_GFX_STAR, SPOTANIM_TFA_EZEKIEL_VFX_EZEKIEL_STAR_EXPLOSION01_ANIM },
+    { EZEKIEL_GFX_SWORD_LINE, SPOTANIM_TFA_EZEKIEL_VFX_EZEKIEL_SWORD_IDLE01_ANIM },
+    { EZEKIEL_GFX_FINALE_IMPACT, SPOTANIM_TFA_EZEKIEL_VFX_EZEKIEL_FINALE_IMPACT_MEDIUM01_ANIM },
+    { OC_GFX_TENDRIL, SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_P1_FLOOR_CRACK_01_ANIM },
+    { OC_GFX_EXPLODE, SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_P1_EXPLODE_FLOOR_ANIM },
+    { OC_GFX_DOT, SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_P2_AOE_DODGE_ANIM },
+    { OC_GFX_BOMB, SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_QUADRANT_BOMB_IDLE_01_ANIM },
+    { OC_GFX_SLASH, SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_P3_SHADOW_SLASH_SPOTANIM01_ANIM },
+    { OC_GFX_INSOLENCE, SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_P3_SHADOW_SLASH_SUPERIOR_SPOTANIM01_ANIM },
+    { OC_GFX_SLAM, SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_UNLEASH_ARENA_270_ANIM },
+    { OC_GFX_DEBRIS, SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_FALLING_DEBRIS_ANIM },
+    { OC_GFX_SWORD_DROP, SPOTANIM_TFA_OCELLUS_TFA_ARENA_SWORD_DROP_EXPLOSION_ANIM },
+};
+
+static int tfa_hazard_spotanim_anim(int gfx) {
+    for (size_t i = 0; i < sizeof(TFA_HAZARD_SPOTANIMS) / sizeof(*TFA_HAZARD_SPOTANIMS); i++)
+        if (TFA_HAZARD_SPOTANIMS[i].gfx == gfx) return TFA_HAZARD_SPOTANIMS[i].anim;
+    fprintf(stderr, "tfa hazard gfx %d has no spotanim\n", gfx);
+    abort();
+}
+
+/* One model at the centre of a hazard's rect: the live game draws a few spotanims per area (4262 ~10 per explosion, 4320 one per slam), never one per tile. */
+static void tfa_emit_hazard_model(EncounterOverlay* ov, const TfaHazard* h, uint32_t model, int anim) {
+    int ax = h->x + (h->w - 1) / 2, ay = h->y + (h->h - 1) / 2;
+    encounter_emit_floating_model(ov, ENCOUNTER_PROJECTILE_TARGET_FIXED, -1, ax, ay, model, anim, 0.0f,
+        (float)h->x + h->w * 0.5f - (ax + 0.5f), 1.0f);
+    ov->floating_models[ov->floating_model_count - 1].depth_offset = (float)h->y + h->h * 0.5f - (ay + 0.5f);
+}
+
+/* Hazard spotanims and locs, Ocellus's lit lane portals, and this tick's NPC projectiles. Tile-only hazards draw nothing: their telegraph is an NPC (Guardian vines). Durations are client cycles. */
 static void tfa_render_post_tick(EncounterState* state, EncounterContext* context, EncounterOverlay* ov) {
     (void)context;
     TfaState* s = (TfaState*)state;
+    ov->floating_model_count = 0;
+    ov->projectile_count = 0;
+    for (int i = 0; i < TFA_MAX_NPCS; i++)
+        if (s->npcs[i].active && s->npcs[i].kind == TFA_NPC_OCELLUS_PORTAL)
+            encounter_emit_floating_model(ov, ENCOUNTER_PROJECTILE_TARGET_FIXED, -1, s->npcs[i].x, s->npcs[i].y,
+                SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_P2_SAFE_PORTAL_IDLE, SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_P2_SAFE_PORTAL_IDLE_ANIM, 0.0f, 0.0f, 1.0f);
     for (int i = 0; i < TFA_MAX_HAZARDS; i++) {
         const TfaHazard* h = &s->hazards[i];
         if (h->kind == TFA_HAZ_NONE) continue;
-        if (h->loc_id > 0 && ov->floating_model_count < ENCOUNTER_MAX_OVERLAY_FLOATING_MODELS) {
-            encounter_emit_floating_model(ov, ENCOUNTER_PROJECTILE_TARGET_FIXED, -1, h->x, h->y,
-                OSRS_LOC_MODEL_BASE | (uint32_t)h->loc_id, -1, 0.0f, 0.0f, 1.0f);
-            continue;
+        int px, py, turned;
+        if (h->loc_id == OC_LOC_LANE_PORTAL) {
+            if (!oc_lane_portal(h, &px, &py, &turned)) continue;
+            encounter_emit_floating_model(ov, ENCOUNTER_PROJECTILE_TARGET_FIXED, -1, px, py,
+                OSRS_LOC_MODEL_BASE | OC_LOC_LANE_PORTAL, -1, 0.0f, turned ? 0.0f : 0.5f, 1.0f);
+            ov->floating_models[ov->floating_model_count - 1].depth_offset = turned ? 0.5f : 0.0f;
+            ov->floating_models[ov->floating_model_count - 1].yaw = turned ? (float)(-0.5 * TFA_PI) : 0.0f;
+        } else if (h->loc_id) {
+            tfa_emit_hazard_model(ov, h, OSRS_LOC_MODEL_BASE | (uint32_t)h->loc_id, -1);
+        } else if (h->gfx_id) {
+            tfa_emit_hazard_model(ov, h, OSRS_SPOTANIM_MODEL_BASE | (uint32_t)h->gfx_id, tfa_hazard_spotanim_anim(h->gfx_id));
         }
-        if (ov->hazard_count >= ENCOUNTER_MAX_OVERLAY_TILES) continue;
-        ov->hazards[ov->hazard_count].x = h->x;
-        ov->hazards[ov->hazard_count].y = h->y;
-        ov->hazards[ov->hazard_count].active = 1;
-        ov->hazard_count++;
     }
     for (int i = 0; i < s->fx_count; i++) {
         const TfaFx* fx = &s->fx[i];
@@ -368,6 +407,7 @@ static void tfa_render_post_tick(EncounterState* state, EncounterContext* contex
 static void tfa_init_context_room(EncounterContext* context, int room) {
     tfa_init_context(context);
     ((TfaContext*)context)->config.start_room = room;
+    ((TfaContext*)context)->config.team_size = 3; /* 58 of 69 recorded fights are trios */
 }
 
 #define TFA_ROOM_DEF(ROOM, NAME, DISPLAY, SCENE, OX, OY) \
