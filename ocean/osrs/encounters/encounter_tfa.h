@@ -15,6 +15,7 @@
 #include "../osrs_poison.h"
 #include "../osrs_collision.h"
 #include "../osrs_monsters_generated.h"
+#include "../osrs_npc_models.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -26,6 +27,8 @@
 #include "tfa/tfa_obs_mask.inc"
 #include "tfa/tfa_guardian.inc"
 #include "tfa/tfa_xarth.inc"
+#include "tfa/tfa_dreadnoth.inc"
+#include "tfa/tfa_ezekiel.inc"
 #include "tfa/tfa_ocellus.inc"
 #include "tfa/tfa_ocellus_p3.inc"
 #include "tfa/tfa_bosses.inc"

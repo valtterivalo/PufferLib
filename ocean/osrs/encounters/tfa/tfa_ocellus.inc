@@ -707,7 +707,7 @@ static void oc_portals_tick(TfaState* s) {
         const TfaNpc* portal = &s->npcs[i];
         if (!portal->active || portal->kind != TFA_NPC_OCELLUS_PORTAL) continue;
         for (int p = 0; p < s->team_size; p++) {
-            if (!tfa_alive(s, p) || !tfa_player_under_npc(&s->players[p], portal)) continue;
+            if (!tfa_alive(s, p) || s->players[p].player.x != portal->x || s->players[p].player.y != portal->y) continue;
             oc_place_player(s, p, OC_NEXT_QUAD[portal->state]);
         }
     }

@@ -36,10 +36,12 @@ typedef enum {
     MON_TFA_VOID_AUGMENTER = 29,
     MON_TFA_VOID_VINE = 30,
     MON_TFA_XARTH_CORPSE = 31,
-    MON_TFA_OCELLUS_P2 = 32,
-    MON_TFA_OCELLUS_BLADE = 33,
-    MON_TFA_VOID_SIPHON = 34,
-    NUM_MONSTERS = 35
+    MON_TFA_JELLY = 32,
+    MON_TFA_EZEKIEL_SWORD = 33,
+    MON_TFA_OCELLUS_P2 = 34,
+    MON_TFA_OCELLUS_BLADE = 35,
+    MON_TFA_VOID_SIPHON = 36,
+    NUM_MONSTERS = 37
 } MonsterIndex;
 
 typedef struct {
@@ -384,6 +386,29 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .hp = 62, .att_level = 1, .str_level = 1, .def_level = 1,
         .magic_level = 1, .range_level = 1,
         .attack_speed = 0, .size = 1, .max_hit = 0,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
+        .range_att_bonus = 0, .ranged_str_bonus = 0,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0,
+        .magic_def = 0, .ranged_def = 0
+    },
+    /* HP 75 measured (every one of 308 jellies took exactly 75 over 14 fights); players land 98% of hits so defence 1 and zero bonuses stand in, offence levels are provisional, wiki has no page. */
+    [MON_TFA_JELLY] = {
+        .npc_id = 16666, .name = "Jelly",
+        .hp = 75, .att_level = 1, .str_level = 1, .def_level = 1,
+        .magic_level = 1, .range_level = 1,
+        .attack_speed = 3, .size = 1, .max_hit = 10,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
+        .range_att_bonus = 0, .ranged_str_bonus = 0,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0,
+        .magic_def = 0, .ranged_def = 0
+    },
+    /* Animated Sword: wiki has no page. Charge capacity 80 is the 50 + 30 hit pair that fills the bar (24 recorded sword hits),
+       levels 1 and bonuses 0 stand in (provisional). */
+    [MON_TFA_EZEKIEL_SWORD] = {
+        .npc_id = 16653, .name = "Animated Sword",
+        .hp = 80, .att_level = 1, .str_level = 1, .def_level = 1,
+        .magic_level = 1, .range_level = 1,
+        .attack_speed = 0, .size = 3, .max_hit = 0,
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
