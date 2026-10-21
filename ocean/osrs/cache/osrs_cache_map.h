@@ -167,6 +167,37 @@ static MapGrid map_load(OsrsCache* cache, int region_x0, int region_y0, int regi
     return g;
 }
 
+static void map_shift_planes(MapGrid* g, int plane) {
+    size_t tile = (size_t)g->width * g->height, corner = (size_t)(g->width + 1) * (g->height + 1);
+    for (int k = 0; k < MAP_PLANES; k++) {
+        int from = k + plane;
+        if (from < MAP_PLANES) {
+            memcpy(g->heights + k * corner, g->heights + from * corner, corner * sizeof(int));
+            memcpy(g->settings + k * tile, g->settings + from * tile, tile);
+            memcpy(g->underlays + k * tile, g->underlays + from * tile, tile * sizeof(uint16_t));
+            memcpy(g->overlays + k * tile, g->overlays + from * tile, tile * sizeof(uint16_t));
+            memcpy(g->shapes + k * tile, g->shapes + from * tile, tile);
+            memcpy(g->rotations + k * tile, g->rotations + from * tile, tile);
+            memcpy(g->present + k * tile, g->present + from * tile, tile);
+        } else {
+            memset(g->heights + k * corner, 0, corner * sizeof(int));
+            memset(g->settings + k * tile, 0, tile);
+            memset(g->underlays + k * tile, 0, tile * sizeof(uint16_t));
+            memset(g->overlays + k * tile, 0, tile * sizeof(uint16_t));
+            memset(g->shapes + k * tile, 0, tile);
+            memset(g->rotations + k * tile, 0, tile);
+            memset(g->present + k * tile, 0, tile);
+        }
+    }
+    int kept = 0;
+    for (int i = 0; i < g->loc_count; i++)
+        if (g->locs[i].plane >= plane) {
+            g->locs[kept] = g->locs[i];
+            g->locs[kept++].plane -= plane;
+        }
+    g->loc_count = kept;
+}
+
 static void map_free(MapGrid* g) {
     free(g->heights); free(g->settings); free(g->underlays); free(g->overlays);
     free(g->shapes); free(g->rotations); free(g->present); free(g->locs);

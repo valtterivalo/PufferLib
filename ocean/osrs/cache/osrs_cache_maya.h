@@ -5,7 +5,7 @@
 #include "osrs_cache_anim.h"
 #include "osrs_cache_model.h"
 
-enum { MAYA_GROUP_BONE_TRANSFORMS = 1, MAYA_GROUP_ALPHA = 4 };
+enum { MAYA_GROUP_BONE_TRANSFORMS = 1, MAYA_GROUP_TINT = 3, MAYA_GROUP_ALPHA = 4 };
 
 enum { ANIM_FRAME_LEGACY = 0, ANIM_FRAME_MAYA_BAKED = 1 };
 
@@ -309,7 +309,7 @@ static MayaAnimation maya_animation_decode(OsrsCache* cache, int maya_id) {
         int bone_index = cache_signed_smart(&b);
         int component_ordinal = cache_u8(&b);
         MayaCurve* curve = maya_curve_decode(&b);
-        if (group_id == MAYA_GROUP_ALPHA) {
+        if (group_id == MAYA_GROUP_ALPHA || group_id == MAYA_GROUP_TINT) {
             maya_curve_free(curve);
             continue;
         }

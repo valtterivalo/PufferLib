@@ -770,10 +770,11 @@ typedef struct {
     int count;
 } AltObjects;
 
-static void export_scene(OsrsCache* cache, const char* out_dir, const char* name, RegionRect r, const AltObjects* alt) {
+static void export_scene(OsrsCache* cache, const char* out_dir, const char* name, RegionRect r, const AltObjects* alt, int plane) {
     Defs defs = {.cache = cache};
     defs_load_floors(&defs);
     MapGrid g = map_load(cache, r.x0 - 1, r.y0 - 1, r.x1 + 1, r.y1 + 1);
+    map_shift_planes(&g, plane);
     size_t corners = (size_t)MAP_PLANES * (g.width + 1) * (g.height + 1);
     Scene s = {.defs = &defs, .g = &g, .r = r, .light = calloc(corners, sizeof(int)), .shadow = calloc(corners, 1)};
     char path[4096];
@@ -842,6 +843,8 @@ static void bind_seq(SeqBakeTable* t, int seq, const Model* model, int width_sca
     if (seq < 0) return;
     for (int i = 0; i < t->count; i++)
         if (t->binds[i].seq == seq) {
+            if (t->binds[i].model->vertex_count != model->vertex_count)
+                fprintf(stderr, "bind_seq: seq %d rebound from %d to %d vertices\n", seq, t->binds[i].model->vertex_count, model->vertex_count);
             t->binds[i] = (SeqBake){seq, model, width_scale, height_scale};
             return;
         }
@@ -899,7 +902,7 @@ static void pack_loc(Defs* d, NpcPack* p, int loc) {
     assert(loc < 0x10000);
     const LocDef* def = defs_loc(d, loc);
     Model m;
-    int built = loc_model(d, def, 10, 0, &m);
+    int built = loc_model(d, def, 10, 0, &m) || loc_model(d, def, def->model_types[0], 0, &m);
     assert(built);
     ModelShade shade = model_light(&m, def->ambient + 64, def->contrast + 768, -50, -10, -50);
     pack_shaded(p, (int)(OSRS_LOC_MODEL_BASE | (uint32_t)loc), m, shade);
@@ -1110,7 +1113,7 @@ static void write_anims(const char* path, OsrsCache* cache, NpcPack* p, const Se
 
 typedef struct {
     int npc, attack;
-    int owned[8];
+    int owned[48];
     int owned_count;
 } NpcSpec;
 
@@ -1121,7 +1124,7 @@ typedef struct {
 typedef struct {
     NpcSpec npcs[256];
     SeqModelSpec seqmodels[256];
-    int gfx[256], seqs[256], locs[64];
+    int gfx[512], seqs[512], locs[128];
     int npc_count, seqmodel_count, gfx_count, seq_count, loc_count;
 } PackSpec;
 
@@ -1929,9 +1932,10 @@ static void export_icons(OsrsCache* cache, const char* out_dir) {
     printf("sprites/items: %d icons, %d stack variants\n", icons.count, rows);
 }
 
-static void export_collision(OsrsCache* cache, const char* out_dir, const char* name, RegionRect r) {
+static void export_collision(OsrsCache* cache, const char* out_dir, const char* name, RegionRect r, int plane) {
     Defs defs = {.cache = cache};
     MapGrid g = map_load(cache, r.x0 - 1, r.y0 - 1, r.x1 + 1, r.y1 + 1);
+    map_shift_planes(&g, plane);
     int* flags = build_collision(&defs, &g);
     char path[4096];
     snprintf(path, sizeof(path), "%s/%s.cmap", out_dir, name);
@@ -1942,8 +1946,8 @@ static void export_collision(OsrsCache* cache, const char* out_dir, const char* 
 
 static void usage(void) {
     fprintf(stderr,
-        "usage: osrs_export <cache_dir> <out_dir> scene <name> <rx0,ry0> [rx1,ry1] [altobjects=NAME:ID,ID,...]\n"
-        "       osrs_export <cache_dir> <out_dir> collision <name> <rx0,ry0> [rx1,ry1]\n"
+        "usage: osrs_export <cache_dir> <out_dir> scene <name> <rx0,ry0> [rx1,ry1] [plane=N] [altobjects=NAME:ID,ID,...]\n"
+        "       osrs_export <cache_dir> <out_dir> collision <name> <rx0,ry0> [rx1,ry1] [plane=N]\n"
         "       osrs_export <cache_dir> <out_dir> npcs <name> "
         "[npc=ID[:ATTACK_SEQ[:OWNED_SEQ]...]] [gfx=ID] [loc=ID] [seq=ID] [seqmodel=SEQ_ID:MODEL_ID]...\n"
         "       osrs_export <cache_dir> <out_dir> projectiles\n"
@@ -1961,17 +1965,17 @@ int main(int argc, char** argv) {
     OsrsCache* cache = osrs_cache_open(argv[1]);
     const char* out_dir = argv[2];
     int is_scene = strcmp(argv[3], "scene") == 0, is_collision = strcmp(argv[3], "collision") == 0;
-    if ((is_scene || is_collision) && argc >= 6 && argc <= 8) {
+    if ((is_scene || is_collision) && argc >= 6) {
         RegionRect r;
         if (sscanf(argv[5], "%d,%d", &r.x0, &r.y0) != 2) usage();
         r.x1 = r.x0, r.y1 = r.y0;
-        int next = 6;
-        if (argc >= 7 && sscanf(argv[6], "%d,%d", &r.x1, &r.y1) == 2) next = 7;
-        else r.x1 = r.x0, r.y1 = r.y0;
+        int next = 6, plane = 0;
+        if (argc > next && sscanf(argv[next], "%d,%d", &r.x1, &r.y1) == 2) next++;
         AltObjects alt = {0};
         int has_alt = 0;
-        if (argc == next + 1) {
-            if (!is_scene) usage();
+        for (; next < argc; next++) {
+            if (sscanf(argv[next], "plane=%d", &plane) == 1) continue;
+            if (!is_scene || has_alt) usage();
             char alt_name[256];
             const char* spec = argv[next];
             if (sscanf(spec, "altobjects=%255[^:]:", alt_name) != 1) usage();
@@ -1987,11 +1991,9 @@ int main(int argc, char** argv) {
                 if (*ids == ',') ids++;
             }
             has_alt = 1;
-        } else if (argc != next) {
-            usage();
         }
-        if (is_scene) export_scene(cache, out_dir, argv[4], r, has_alt ? &alt : NULL);
-        else export_collision(cache, out_dir, argv[4], r);
+        if (is_scene) export_scene(cache, out_dir, argv[4], r, has_alt ? &alt : NULL, plane);
+        else export_collision(cache, out_dir, argv[4], r, plane);
         return 0;
     }
     if (strcmp(argv[3], "npcs") == 0 && argc >= 5) {
@@ -2007,7 +2009,7 @@ int main(int argc, char** argv) {
                 n->npc = atoi(tok);
                 if ((tok = strtok(NULL, ":"))) n->attack = atoi(tok);
                 while ((tok = strtok(NULL, ":"))) {
-                    assert(n->owned_count < 8);
+                    assert(n->owned_count < 48);
                     n->owned[n->owned_count++] = atoi(tok);
                 }
             } else if (sscanf(argv[i], "gfx=%d", &id) == 1) spec.gfx[spec.gfx_count++] = id;

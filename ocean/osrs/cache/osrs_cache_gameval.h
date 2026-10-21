@@ -27,9 +27,33 @@ static char* gameval_read_name(CacheBuf* b) {
     return name;
 }
 
+static GamevalTable gameval_load_tsv(const char* path, int archive) {
+    static const char* const kinds[] = {[GAMEVAL_ITEMS] = "ItemID", [GAMEVAL_NPCS] = "NpcID",
+        [GAMEVAL_OBJECTS] = "ObjectID", [GAMEVAL_ANIMATIONS] = "AnimationID", [GAMEVAL_SPOTANIMS] = "SpotanimID"};
+    FILE* f = fopen(path, "r");
+    assert(f);
+    GamevalTable t = {calloc(1 << 17, sizeof(char*)), 1 << 17};
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        char* kind = strtok(line, "\t");
+        char* id = strtok(NULL, "\t");
+        char* constant = strtok(NULL, "\t\n");
+        assert(kind && id && constant);
+        if (strncmp(kind, kinds[archive], strlen(kinds[archive])) != 0) continue;
+        int n = atoi(id);
+        assert(n >= 0 && n < t.limit);
+        t.names[n] = strdup(constant);
+    }
+    fclose(f);
+    return t;
+}
+
+/* OSRS_GAMEVAL_TSV replaces index 24 for caches that lack it: rows kind, id, constant, name */
 static GamevalTable gameval_load(OsrsCache* cache, int archive) {
     assert(archive == GAMEVAL_ITEMS || archive == GAMEVAL_NPCS || archive == GAMEVAL_OBJECTS ||
         archive == GAMEVAL_ANIMATIONS || archive == GAMEVAL_SPOTANIMS);
+    const char* tsv = getenv("OSRS_GAMEVAL_TSV");
+    if (tsv) return gameval_load_tsv(tsv, archive);
     CacheGroup g = cache_read_group(cache, CACHE_INDEX_GAMEVAL, archive);
     int limit = 0;
     for (int i = 0; i < g.file_count; i++)
@@ -44,7 +68,10 @@ static GamevalTable gameval_load(OsrsCache* cache, int archive) {
 }
 
 static const char* gameval_name(const GamevalTable* t, int id) {
-    assert(id >= 0 && id < t->limit && t->names[id]);
+    if (id < 0 || id >= t->limit || !t->names[id]) {
+        fprintf(stderr, "gameval_name: no name for id %d\n", id);
+        abort();
+    }
     return t->names[id];
 }
 

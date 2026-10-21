@@ -8,6 +8,17 @@
 #include "osrs_types.h"
 #include "osrs_items.h"
 
+/** The melee style a weapon attacks with: its highest attack bonus, stab on ties. */
+static inline MeleeStyle osrs_item_melee_style(uint8_t weapon_item) {
+    const Item* weapon = get_item(weapon_item);
+    if (!weapon) return MELEE_STYLE_STAB;
+    MeleeStyle style = MELEE_STYLE_STAB;
+    int best = weapon->attack_stab;
+    if (weapon->attack_slash > best) { best = weapon->attack_slash; style = MELEE_STYLE_SLASH; }
+    if (weapon->attack_crush > best) { style = MELEE_STYLE_CRUSH; }
+    return style;
+}
+
 /** Standard OSRS accuracy formula over pre-computed rolls
     (eff_level * (bonus + 64)); returns hit probability in [0, 1]. */
 static inline float osrs_hit_chance(int att_roll, int def_roll) {

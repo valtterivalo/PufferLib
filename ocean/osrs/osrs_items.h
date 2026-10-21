@@ -282,15 +282,4 @@ static inline uint8_t osrs_suppress_shield_for_two_handed_weapon(
 #define STAT_NORM_SPEED 10.0f
 #define STAT_NORM_RANGE 15.0f
 
-/** The melee style a weapon attacks with: its highest attack bonus, stab on ties. */
-static inline MeleeStyle osrs_item_melee_style(uint8_t weapon_item) {
-    const Item* weapon = get_item(weapon_item);
-    if (!weapon) return MELEE_STYLE_STAB;
-    MeleeStyle style = MELEE_STYLE_STAB;
-    int best = weapon->attack_stab;
-    if (weapon->attack_slash > best) { best = weapon->attack_slash; style = MELEE_STYLE_SLASH; }
-    if (weapon->attack_crush > best) { style = MELEE_STYLE_CRUSH; }
-    return style;
-}
-
 #endif
