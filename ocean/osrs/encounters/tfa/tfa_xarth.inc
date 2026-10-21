@@ -33,7 +33,7 @@ typedef struct {
     int magic_hit;               /* 4034 at anim +1, flight 2: hit +3 */
     int ranged_max_hit;          /* unprotected 7..32 on teammates; Protect from Missiles blocks 107/107 */
     int magic_max_hit;           /* one unprotected 34 */
-    int magic_protected_pct;     /* Protect from Magic leaves 0..9 (n=19) */
+    int magic_protected_pct;     /* Protect from Magic leaves 0..9 (n=19), applied to the landing-tick prayer */
     int magic_two_targets_pct;   /* 126 of 212 magics fire two projectiles */
     int double_magic_pct;        /* a second magic 2 ticks after a P2 magic slot: 12 of about 60 slots, trigger unknown */
     int melee_max_hit;           /* 27, 15, 9 through Protect from Missiles */
@@ -109,9 +109,8 @@ static void tfa_xarth_magic(TfaState* s, TfaNpc* x) {
     for (int k = 0; k < 2; k++) {
         int p = targets[k];
         if (p < 0) continue;
-        int prayed = encounter_prayer_correct_for_style(s->players[p].player.prayer, ATTACK_STYLE_MAGIC);
-        int max_hit = prayed ? (TFA_XARTH.magic_max_hit * TFA_XARTH.magic_protected_pct + 99) / 100 : TFA_XARTH.magic_max_hit;
-        tfa_queue_npc_hit(s, p, tfa_npc_roll(s, x, p, ATTACK_STYLE_MAGIC, max_hit), ATTACK_STYLE_MAGIC, TFA_XARTH.magic_hit, 100, x);
+        tfa_queue_npc_hit_land(s, p, tfa_npc_roll(s, x, p, ATTACK_STYLE_MAGIC, TFA_XARTH.magic_max_hit),
+            ATTACK_STYLE_MAGIC, TFA_XARTH.magic_hit, TFA_XARTH.magic_protected_pct, x);
     }
 }
 
@@ -132,7 +131,7 @@ static void tfa_xarth_ranged(TfaState* s, TfaNpc* x) {
     x->act = TFA_ACT_RANGED;
     x->target = (int8_t)p;
     tfa_npc_anim(s, x, XARTH_ANIM_RANGED);
-    tfa_queue_npc_hit(s, p, tfa_npc_roll(s, x, p, ATTACK_STYLE_RANGED, TFA_XARTH.ranged_max_hit), ATTACK_STYLE_RANGED, TFA_XARTH.ranged_hit, 0, x);
+    tfa_queue_npc_hit_land(s, p, tfa_npc_roll(s, x, p, ATTACK_STYLE_RANGED, TFA_XARTH.ranged_max_hit), ATTACK_STYLE_RANGED, TFA_XARTH.ranged_hit, 0, x);
 }
 
 /* AOE tiles: each player's tile and, half the time, one neighbour (4-6 tiles for 3 players, 12/12 casts). */

@@ -26,7 +26,7 @@ static void tfa_kill_player(TfaState* s, int p) {
     tp->player.prayer = PRAYER_NONE;
     tp->player.offensive_prayer = OFFENSIVE_PRAYER_NONE;
     osrs_interaction_clear(&tp->player.interaction);
-    encounter_pending_hit_queue_clear(&tp->incoming);
+    tp->incoming.count = 0;
 }
 
 static void tfa_hazards_tick(TfaState* s) {

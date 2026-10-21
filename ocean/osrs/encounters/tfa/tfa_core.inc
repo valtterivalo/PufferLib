@@ -131,7 +131,17 @@ static void tfa_damage_player_now(TfaState* s, int p, int damage, AttackStyle st
     tp->damage_taken_total += (float)applied;
 }
 
-/* NPC attack on player p computed this tick (the throw), landing after delay ticks. */
+static void tfa_incoming_push(TfaState* s, int p, TfaIncomingHit hit) {
+    TfaIncomingQueue* q = &s->players[p].incoming;
+    if (q->count >= ENCOUNTER_MAX_PENDING_HITS) {
+        fprintf(stderr, "tfa incoming hit queue full tick=%d player=%d\n", s->tick, p);
+        abort();
+    }
+    q->hits[q->count++] = hit;
+}
+
+/* NPC attack on player p computed this tick (the throw), landing after delay ticks: the prayer
+   active now decides it (Guardian ranged: a flick effective one tick after the anim does not count). */
 static void tfa_queue_npc_hit(
     TfaState* s, int p, int raw, AttackStyle style, int delay, int protected_pct, const TfaNpc* src
 ) {
@@ -143,17 +153,31 @@ static void tfa_queue_npc_hit(
         tfa_damage_player_now(s, p, dmg, style);
         return;
     }
-    EncounterPendingHit hit = {
-        .active = 1,
+    tfa_incoming_push(s, p, (TfaIncomingHit){
         .ticks_remaining = (int8_t)delay,
         .attack_style = (int8_t)style,
-        .spell_type = ENCOUNTER_SPELL_NONE,
-        .source_npc_type = (int8_t)(src ? src->kind : -1),
-        .source_npc_slot = (int8_t)(src ? tfa_npc_slot(s, src) : -1),
-        .hit_success = (int8_t)(dmg > 0),
+        .source_slot = (int8_t)(src ? tfa_npc_slot(s, src) : -1),
         .damage = (int16_t)dmg,
-    };
-    encounter_pending_hit_queue_push(&tp->incoming, hit, "tfa-player", s->tick, p, style);
+    });
+}
+
+/* As tfa_queue_npc_hit, but the protection prayer active on the landing tick decides it
+   (Xarth: a prayer effective on the landing tick blocked 3 of 3 recorded ranged hits). */
+static void tfa_queue_npc_hit_land(
+    TfaState* s, int p, int raw, AttackStyle style, int delay, int protected_pct, const TfaNpc* src
+) {
+    TfaPlayer* tp = &s->players[p];
+    if (tp->life != TFA_LIFE_ALIVE) return;
+    assert(delay > 0);
+    int capped = raw > tp->player.current_hitpoints ? tp->player.current_hitpoints : raw;
+    tfa_incoming_push(s, p, (TfaIncomingHit){
+        .ticks_remaining = (int8_t)delay,
+        .attack_style = (int8_t)style,
+        .check_at_land = 1,
+        .protected_pct = (int8_t)protected_pct,
+        .source_slot = (int8_t)(src ? tfa_npc_slot(s, src) : -1),
+        .damage = (int16_t)capped,
+    });
 }
 
 /* Accuracy-rolled NPC attack against player p using the NPC's database stats. */
@@ -175,14 +199,20 @@ static int tfa_npc_roll(TfaState* s, const TfaNpc* n, int p, AttackStyle style, 
 
 static void tfa_resolve_player_hits(TfaState* s, int p) {
     TfaPlayer* tp = &s->players[p];
-    EncounterPendingHitQueue* q = &tp->incoming;
+    TfaIncomingQueue* q = &tp->incoming;
+    int kept = 0;
     for (int i = 0; i < q->count; i++) {
-        EncounterPendingHit* h = &q->hits[i];
-        if (--h->ticks_remaining > 0) continue;
-        tfa_damage_player_now(s, p, h->damage, (AttackStyle)h->attack_style);
-        encounter_pending_hit_queue_remove(q, i, "tfa-player");
-        i--;
+        TfaIncomingHit h = q->hits[i];
+        if (--h.ticks_remaining > 0) {
+            q->hits[kept++] = h;
+            continue;
+        }
+        int dmg = h.check_at_land
+            ? tfa_protected_damage(h.damage, tp->player.prayer, (AttackStyle)h.attack_style, h.protected_pct)
+            : h.damage;
+        tfa_damage_player_now(s, p, dmg, (AttackStyle)h.attack_style);
     }
+    q->count = kept;
 }
 
 static int tfa_npc_take_damage(TfaState* s, TfaNpc* n, int damage, int attacker, AttackStyle style);
