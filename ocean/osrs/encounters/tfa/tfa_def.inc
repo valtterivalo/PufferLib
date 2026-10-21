@@ -1,8 +1,8 @@
-/* P0's supplies at the first room: Saradomin brews 12, super restores 6 (21 of 24 Guardian starts), one anglerfish. One brew fewer here keeps
-   a cell free for the shield a two-handed switch unequips. */
+/* P0's supplies at the first room: Saradomin brews 12, super restores 6 items (21 of 24 Guardian starts) holding 16-20 doses (median 20), so
+   5 full ones here, one anglerfish. One brew fewer keeps a cell free for the shield a two-handed switch unequips. */
 static const struct { uint16_t raw_osrs_id; int count; } TFA_SUPPLIES[] = {
     { 6685, 11 },
-    { 3024, 6 },
+    { 3024, 5 },
     { 13441, 1 },
 };
 
@@ -20,8 +20,9 @@ static const struct { int16_t melee, ranged; } TFA_ROOM_BOOSTS[TFA_ROOM_COUNT] =
     [TFA_ROOM_OCELLUS] = { 99, 110 },     /* 7 */
 };
 
-/* Supplies fill the inventory from cell `from` on: the raid start, and the Quartermaster's restock in the atrium after the third boss
-   (wiki Strategies rev 15377725). */
+/* Supplies fill the inventory from cell `from` on: the raid start and a restock before the last two rooms. P0 started rooms with 20 restore
+   doses at the Guardian (16-20), 13-15 into the second and third rooms, then 16-24 again at Xarth and 16-23 at Ocellus (80 fights): the
+   Quartermaster's shop after the third boss (wiki Strategies rev 15377725) and again before the last. */
 static void tfa_fill_supplies(Player* pl, int from) {
     int cell = from;
     for (size_t k = 0; k < sizeof(TFA_SUPPLIES) / sizeof(*TFA_SUPPLIES); k++) {
@@ -88,7 +89,12 @@ static void tfa_room_enter(TfaState* s, int room) {
         tp->player.current_defence = TFA_BOOSTED_DEFENCE;
         tp->stat_clock = 0;
         tfa_mark_stats_dirty(tp);
-        if (s->episode_mode == TFA_EPISODE_RAID && s->raid_index == 3) tfa_fill_supplies(&tp->player, tfa_kit_cells(tp->kit));
+        if (s->episode_mode == TFA_EPISODE_RAID && s->raid_index >= 3) tfa_fill_supplies(&tp->player, tfa_kit_cells(tp->kit));
+        /* Every recorded room starts with P0 at full prayer and hit points (medians 90 and 99, 80 fights): raiders restore between rooms. */
+        if (tp->life == TFA_LIFE_ALIVE) {
+            tp->player.current_prayer = tp->player.base_prayer;
+            if (tp->player.current_hitpoints < tp->player.base_hitpoints) tp->player.current_hitpoints = tp->player.base_hitpoints;
+        }
     }
     tfa_boss_enter(s);
 }

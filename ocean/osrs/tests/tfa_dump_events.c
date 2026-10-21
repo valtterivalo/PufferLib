@@ -9,6 +9,7 @@ typedef struct {
     uint32_t instance;
     int anim_tick;
     int overhead;
+    int hp;
 } DumpNpc;
 
 typedef struct {
@@ -72,6 +73,9 @@ int main(int argc, char** argv) {
                 DumpNpc* d = &npcs[i];
                 if (d->active && (!n->active || n->instance_id != d->instance))
                     printf("%s\t%d\tNPC-\t%d#%d\t%d\t-\t-\t-\t-\t-\n", fid, t, d->npc_id, i, d->npc_id);
+                /* A rise in hit points shows as a heal splat (type 6), as the recordings do. */
+                if (n->active && d->active && n->instance_id == d->instance && n->hp > d->hp)
+                    printf("%s\t%d\tHIT\t%d#%d\t%d\t%d\t%d\t6\t-\t-\n", fid, t, n->npc_id, i, n->hp - d->hp, n->x, n->y);
                 if (n->active && (!d->active || n->instance_id != d->instance)) {
                     printf("%s\t%d\tNPC+\t%d#%d\t%d\t%d\t%d\t-1\t-1\t-\n", fid, t, n->npc_id, i, n->npc_id, n->x, n->y);
                     d->anim_tick = -1;
@@ -106,6 +110,7 @@ int main(int argc, char** argv) {
                     else printf("%s\t%d\tOVH\t%d#%d\t%d\t-\t-\t-\t-\t-\n", fid, t, n->npc_id, i, sprite);
                 }
                 d->overhead = sprite;
+                d->hp = n->hp;
                 d->active = n->active;
                 d->npc_id = n->npc_id;
                 d->instance = n->instance_id;

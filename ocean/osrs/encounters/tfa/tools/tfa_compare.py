@@ -1726,6 +1726,18 @@ def ocellus_quad_tells(fights, max_quads=None):
     return out
 
 
+def ocellus_split_heals(fights):
+    """Per quadrant attack 14844: (a heal splat lands on Ocellus 1..5 after it, a raider took an unprotected quadrant hit: over 15 at +5).
+    Soul Split heals by his own unprotected damage, so a heal without a seen unprotected hit only happens with a raider out of view."""
+    out = collections.Counter()
+    for ev in fights.values():
+        for q in sorted(e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14844"):
+            heal = any(e["kind"] == "HIT" and base(e["actor"]) == "16677" and e["a"] == "6" and 1 <= e["t"] - q <= 5 for e in ev)
+            hit = any(e["kind"] == "HIT" and e["actor"].startswith("P") and e["t"] - q == 5 and int(e["id"]) > 15 for e in ev)
+            out[(int(heal), int(hit))] += 1
+    return out
+
+
 def ocellus_void_drops(fights, horizon=40):
     """Void drop gfx 4339 as ticks since the latest rise; ocellus_11's P0 died 40 into the cycle."""
     out = collections.Counter()
@@ -1749,6 +1761,7 @@ def ocellus_p4_laws(real, sim):
     support("phase 4", ocellus_p4(real), ocellus_p4(sim, rises), failures)
     support("P4 overheads", ocellus_p4_overheads(real), ocellus_p4_overheads(sim), failures)
     support("P4 void drops", ocellus_void_drops(real), ocellus_void_drops(sim), failures)
+    support("P4 soul split heals", ocellus_split_heals(real), ocellus_split_heals(sim), failures)
     quads = max(len([e for e in ev if e["kind"] == "ANIM" and e["id"] == "14844"]) for ev in real.values())
     support("P4 quadrant tells", ocellus_quad_tells(real), ocellus_quad_tells(sim, quads), failures)
     return failures

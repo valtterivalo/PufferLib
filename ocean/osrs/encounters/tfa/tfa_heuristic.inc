@@ -389,7 +389,10 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
             }
         }
     }
-    /* Restores also bring Ranged back from the brews: P0's boosted Ranged sat at 99 (p10 78-99) through every recorded fight. */
+    /* P0 drank a restore at prayer 47 (median of 549, quartiles 29 and 64), 1.1-1.4 doses per 100 ticks in every room, and kept boosted Ranged
+       at 99 (p10 78); brews at hit points 55 (median), 1.2-3.1 per 100 ticks. Brewing under 70 lands at a median 54-63 here. Scripted raiders take
+       more damage and brew about 6 per 100, so the restores that keep Ranged and Attack at 78 run about 2 per 100; prayer alone (1.2-1.4) left
+       P3 misses at 0.83 against 0.50. */
     for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++) {
         OsrsInventoryClickResolution r =
             osrs_inventory_cell_click_interpret(&tp->player.inventory_cells[cell], OSRS_CLICK_TICK_FIRST);
@@ -397,8 +400,8 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
                 osrs_can_eat_consumable_kind(&tp->player, r.consumable_kind))
             acts[OSRS_HEAD_EAT] = cell + 1;
         if (r.click_action == OSRS_CLICK_DRINK && tp->player.potion_timer == 0 && !acts[OSRS_HEAD_DRINK] &&
-                ((r.consumable_kind == OSRS_CONSUMABLE_SUPER_RESTORE && (tp->player.current_prayer < 30 || tp->player.current_ranged < 90)) ||
-                 (r.consumable_kind == OSRS_CONSUMABLE_BREW && tp->player.current_hitpoints < 70)))
+                ((r.consumable_kind == OSRS_CONSUMABLE_SUPER_RESTORE && (tp->player.current_prayer <= TFA_RESTORE_AT_PRAYER || tp->player.current_ranged < TFA_RESTORE_AT_STAT || tp->player.current_attack < TFA_RESTORE_AT_STAT)) ||
+                 (r.consumable_kind == OSRS_CONSUMABLE_BREW && tp->player.current_hitpoints < TFA_BREW_AT_HP)))
             acts[OSRS_HEAD_DRINK] = cell + 1;
     }
 }

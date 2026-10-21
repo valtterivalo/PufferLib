@@ -7,6 +7,9 @@
 #define TFA_ARENA_MAX ENCOUNTER_ARENA_TOPOLOGY_MAX_DIMENSION
 /* Prayer level of the recorded raider (real level 90 on 18980 of 18980 menu actions). */
 #define TFA_PLAYER_PRAYER 90
+#define TFA_RESTORE_AT_PRAYER 47
+#define TFA_RESTORE_AT_STAT 78
+#define TFA_BREW_AT_HP 70
 #define TFA_ROOM_MAX_TICKS 3000
 
 typedef enum {
