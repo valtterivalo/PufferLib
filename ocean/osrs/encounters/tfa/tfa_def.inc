@@ -63,7 +63,7 @@ static void tfa_room_enter(TfaState* s, int room) {
         tp->dest_y = -1;
         osrs_interaction_clear(&tp->player.interaction);
         osrs_actor_route_cache_clear(&tp->route_cache);
-        encounter_pending_hit_queue_clear(&tp->incoming);
+        tp->incoming.count = 0;
     }
     tfa_boss_enter(s);
 }
