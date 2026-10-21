@@ -1,7 +1,7 @@
 #define TFA_OBS_RAID 20
 #define TFA_OBS_TEAMMATE 10
 #define TFA_OBS_TEAM (TFA_OBS_TEAMMATE * (TFA_MAX_PLAYERS - 1))
-#define TFA_OBS_NPC_FEATURES 18
+#define TFA_OBS_NPC_FEATURES 21
 #define TFA_OBS_NPCS (TFA_OBS_NPC_FEATURES * TFA_NUM_TARGET_SLOTS)
 #define TFA_DANGER_RADIUS 5
 #define TFA_DANGER_SIDE (2 * TFA_DANGER_RADIUS + 1)
@@ -110,6 +110,9 @@ static void tfa_write_obs_for(TfaState* s, TfaContext* ctx, int p, float* obs) {
         for (int a = TFA_ACT_MELEE; a < TFA_ACT_COUNT; a++) obs[i++] = n->act == a ? 1.0f : 0.0f;
         obs[i++] = tfa_npc_targets(s, n, p) ? 1.0f : 0.0f;
         obs[i++] = tfa_ratio(n->state, 8);
+        obs[i++] = n->overhead == PRAYER_PROTECT_MELEE ? 1.0f : 0.0f;
+        obs[i++] = n->overhead == PRAYER_PROTECT_RANGED ? 1.0f : 0.0f;
+        obs[i++] = n->overhead == PRAYER_PROTECT_MAGIC ? 1.0f : 0.0f;
         obs[i++] = tfa_ratio(tfa_player_npc_distance(tp, n), 32);
         obs[i++] = osrs_interaction_active(&tp->player.interaction) && tp->player.interaction.target_slot == k ? 1.0f : 0.0f;
     }
