@@ -77,6 +77,7 @@ static void tfa_step_team(TfaState* s, TfaContext* ctx, const int* actions) {
     s->room_tick++;
     s->team_damage_dealt_tick = 0.0f;
     s->room_cleared_this_tick = 0;
+    s->projectile_count = 0;
     for (int p = 0; p < s->team_size; p++) {
         TfaPlayer* tp = &s->players[p];
         tp->reward = 0.0f;

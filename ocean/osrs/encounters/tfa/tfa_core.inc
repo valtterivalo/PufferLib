@@ -258,3 +258,17 @@ static void tfa_hazard_hit_player(TfaState* s, const TfaHazard* h, int p) {
     if (h->effect == TFA_EFFECT_BURN)
         tp->burn_ticks = 10;
 }
+
+static void tfa_log_projectile(
+    TfaState* s, const TfaNpc* src, int id, int target, int target_x, int target_y, int flight_halves
+) {
+    assert(s->projectile_count < TFA_MAX_PROJECTILES);
+    s->projectiles[s->projectile_count++] = (TfaProjectile){
+        .id = (int16_t)id,
+        .source_slot = (int8_t)tfa_npc_slot(s, src),
+        .target = (int8_t)target,
+        .source_x = src->x, .source_y = src->y,
+        .target_x = (int16_t)target_x, .target_y = (int16_t)target_y,
+        .flight_halves = (int8_t)flight_halves,
+    };
+}
