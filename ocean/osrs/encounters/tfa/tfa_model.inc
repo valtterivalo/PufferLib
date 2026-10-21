@@ -204,7 +204,7 @@ typedef struct {
     int32_t anim;
 } TfaFx;
 
-#define TFA_MAX_FX 256
+#define TFA_MAX_FX 512
 
 typedef struct {
     float room_clear;

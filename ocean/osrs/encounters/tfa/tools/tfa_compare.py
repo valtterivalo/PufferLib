@@ -501,6 +501,90 @@ def gong_hits_in_shadow(fights):
     return inside, total
 
 
+BORK_STOMP_TEMPLATE = set()
+BORK_COUNTS = {"napalm": (7, 10), "bomb": (3, 5)}
+
+
+def bork_ground(fights, walk):
+    """Bork ground gfx per event: dust delay residuals from 1 + Manhattan to the start-of-tick centre, wave tiles breaking the
+    footprint, Smorks and walkable rules, ring tiles against the footprint ring one tick after the gong, stomp pulse sources,
+    scorch tiles per landing with their fire and splat ids, scorch orientation against the splat, and the clear tick."""
+    out = collections.defaultdict(collections.Counter)
+    for ev in fights.values():
+        npos = sorted((e["t"], (int(e["x"]), int(e["y"]))) for e in ev if e["kind"] == "NPOS" and base(e["actor"]) == "16640")
+
+        def pos(t):
+            return [xy for tt, xy in npos if tt <= t][-1]
+
+        dust = collections.defaultdict(dict)
+        fire = collections.defaultdict(list)
+        splat = collections.defaultdict(dict)
+        for e in ev:
+            if e["kind"] != "GFX":
+                continue
+            tile, gid, delay = (int(e["x"]), int(e["y"])), int(e["id"]), int(e["a"])
+            if gid == 4395:
+                dust[e["t"]][tile] = delay
+            elif gid == 4046:
+                fire[e["t"]].append((tile, delay))
+            elif 4047 <= gid <= 4050:
+                splat[e["t"]][tile] = (gid - 4047, delay)
+        anims = lambda a: sorted(e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == a and base(e["actor"]) == "16640")
+        gongs, stomps, stuns = anims("14542"), anims("14550"), anims("14545")
+        for g in gongs:
+            if g not in dust:
+                continue
+            b = pos(g - 1)
+            out["wave delay residual"].update(d - (1 + abs(x - b[0] - 2) + abs(y - b[1] - 2)) for (x, y), d in dust[g].items())
+            out["wave tiles breaking the rule"][sum(
+                (x, y) not in walk or (b[0] <= x < b[0] + 4 and b[1] <= y < b[1] + 4) or (30 <= x < 33 and 30 <= y < 33)
+                for x, y in dust[g])] += 1
+            ring_pos = pos(g + 1)
+            ring = {(x, y) for x in range(ring_pos[0] - 1, ring_pos[0] + 5) for y in range(ring_pos[1] - 1, ring_pos[1] + 5)
+                    if (x, y) in walk and not (ring_pos[0] <= x < ring_pos[0] + 4 and ring_pos[1] <= y < ring_pos[1] + 4)
+                    and not (30 <= x < 33 and 30 <= y < 33)}
+            got = dust[g + 2]
+            out["ring (extra, missing) tiles"][(len(set(got) - ring), len(ring - set(got)))] += 1
+            out["ring delay residual"].update(d - (1 + abs(x - ring_pos[0] - 2) + abs(y - ring_pos[1] - 2)) for (x, y), d in got.items())
+        for st in stomps:
+            for k in range(4):
+                got = dust[st + 1 + 3 * k]
+                if not got:
+                    continue
+                b = pos(st)
+                if b == (33, 30):
+                    out["stomp tiles within 3 of the recorded template"][len(set(got) ^ BORK_STOMP_TEMPLATE) <= 3] += 1
+                fits = [(dx, dy) for dx in range(-2, 6) for dy in range(-2, 6)
+                        if all(d == 1 + abs(x - b[0] - dx) + abs(y - b[1] - dy) for (x, y), d in got.items())]
+                out["stomp source offset"][fits[0] if fits else None] += 1
+        objs = {(e["t"], int(e["x"]), int(e["y"])): int(e["b"]) for e in ev if e["kind"] == "OBJ+" and e["id"] == "62544"}
+        for t, tiles in splat.items():
+            kind = "bomb" if max(d for _, d in tiles.values()) == 1 else "napalm"
+            out["landing tile count in the recorded range"][(kind, BORK_COUNTS[kind][0] <= len(tiles) <= BORK_COUNTS[kind][1])] += 1
+            for tile, (variant, delay) in tiles.items():
+                n_fire = sum(1 for ft, _ in fire[t] if ft == tile)
+                out["tile (kind, delay, 4046 count)"][(kind, delay, n_fire)] += 1
+                out["scorch orientation = splat rotation"][objs.get((t + 1, *tile)) == 512 * variant] += 1
+                out["scorch orientation"][512 * variant] += 1
+        removed = [e for e in ev if e["kind"] == "OBJ-" and e["id"] == "62544"]
+        for t in sorted({e["t"] for e in removed}):
+            out["scorch removal offset from the last stun"][max((t - st for st in stuns if st <= t), default=None)] += 1
+        for e in removed:
+            out["scorch removed with its placed orientation"][objs.get(
+                max((o for o in objs if o[1:] == (int(e["x"]), int(e["y"])) and o[0] < e["t"]), default=None)) == int(e["b"])] += 1
+    return out
+
+
+def bork_ground_laws(real, sim, failures):
+    """Wave, ring, stomp and scorch ground gfx must match the recorded rules in both directions, with provisional single-sample
+    choices (stomp source, scorch tile counts) compared as 'every common sim value was recorded'."""
+    walk = {(int(e["x"]), int(e["y"])) for ev in real.values() for e in ev if e["kind"] == "GFX" and e["id"] == "4395"}
+    BORK_STOMP_TEMPLATE.update((int(e["x"]), int(e["y"])) for ev in real.values() for e in ev if e["kind"] == "GFX" and e["id"] == "4395" and e["t"] == 46)
+    real_g, sim_g = bork_ground(real, walk), bork_ground(sim, walk)
+    for name in real_g:
+        shapes_law(name, real_g[name], sim_g[name], failures)
+
+
 def bork(real, sim):
     failures = []
     compare("14542 next attack", next_attack(real, "bork", "14542"), next_attack(sim, "bork", "14542"), failures)
@@ -519,6 +603,7 @@ def bork(real, sim):
     if not ok:
         failures.append("gong hits in shadow")
     print(f"{('ok ' if st else '-- ') if ok else 'BAD'} {'gong hits in shadow':28s} real {ri}/{rt:<38} sim {si}/{st}")
+    bork_ground_laws(real, sim, failures)
     return failures
 
 

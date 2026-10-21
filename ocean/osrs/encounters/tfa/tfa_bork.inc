@@ -16,6 +16,10 @@
 #define BORK_PROJ_MAGIC 4057
 #define BORK_PROJ_BOMB 4440
 #define BORK_OBJ_SCORCH 62544
+#define BORK_GFX_DUST 4395
+#define BORK_GFX_FIRE 4046
+#define BORK_GFX_SPLAT 4047
+#define BORK_SPLAT_VARIANTS 4
 
 typedef struct {
     int first_gong;              /* first gong 8 after "Challenge started" (spawn +32), 1/1 */
@@ -29,11 +33,8 @@ typedef struct {
     int stomp_pulse_gap;
     int stomp_pulses;
     int stomp_min_damage, stomp_max_damage; /* unprotected 50 17 on P0, 50 43 on P1, 4 hits */
-    int wide_reach_x2;           /* gong dust reaches 6.5 tiles from the centre in 8 of 17 gongs */
-    int far_reach_x2;            /* the rest reach 8.5 to 10.5 around a shadow-clipped box: provisional, [wiki] stronger beats when the target is out of melee range */
-    int far_target_distance;     /* provisional */
     int wide_min_damage, wide_max_damage; /* P1 hits at the gong tick 16..25 (n=11), P0 23 */
-    int ring_delay;              /* 17 dust tiles at gong +2 around the footprint, P0 hit 35 at +2, n=1 */
+    int ring_delay;              /* ring dust at gong +2 around the footprint, 18/18, P0 hit 35 at +2, n=1 */
     int ring_min_damage, ring_max_damage; /* provisional around the single 35 */
     int protected_pct;           /* [wiki] Protect from Melee reduces the damage: provisional */
     int flat_armour;             /* [wiki edit 15:46] 12, 0 while stunned */
@@ -58,6 +59,9 @@ typedef struct {
     int blast_min_damage, blast_max_damage; /* direct hit near the landing tile: no sample, provisional */
     int scorch_min, scorch_max;  /* oil 6, 6 on P0 (n=2), [wiki] 6-7 */
     int napalm_tiles_min, napalm_tiles_max; /* 7, 10, 8 scorched tiles */
+    int napalm_delay_step;       /* fire delay 1 + 3 per tile from the impact, 2/2 */
+    int stomp_sources[8][2];     /* stomp dust source offset from Bork's SW tile per pulse, 8/8, cause not recorded: drawn uniformly, provisional */
+    int scorch_clear_delay;      /* all scorch removed 2 after the stun anim, 1/1 */
     int bomb_tiles_min, bomb_tiles_max;     /* 3, 5 */
     int burn_min, burn_max;      /* P1 burn splats every 4 ticks: 2 x5, 1 x8, 3 x4 */
     int enraged_smork_pct;       /* [wiki] Bork dead: Smorks attack faster, hit everyone harder: provisional */
@@ -76,9 +80,6 @@ static const TfaBorkTuning TFA_BORK = {
     .stomp_pulses = 4,
     .stomp_min_damage = 17,
     .stomp_max_damage = 50,
-    .wide_reach_x2 = 13,
-    .far_reach_x2 = 19,
-    .far_target_distance = 5,
     .wide_min_damage = 16,
     .wide_max_damage = 25,
     .ring_delay = 2,
@@ -108,6 +109,9 @@ static const TfaBorkTuning TFA_BORK = {
     .blast_max_damage = 30,
     .scorch_min = 6, .scorch_max = 7,
     .napalm_tiles_min = 7, .napalm_tiles_max = 10,
+    .napalm_delay_step = 3,
+    .stomp_sources = { {1, 3}, {0, 2}, {0, 2}, {0, 1}, {0, 2}, {0, 1}, {0, 2}, {0, 1} },
+    .scorch_clear_delay = 2,
     .bomb_tiles_min = 3, .bomb_tiles_max = 5,
     .burn_min = 1, .burn_max = 3,
     .enraged_smork_pct = 150,
@@ -132,17 +136,17 @@ static void tfa_bork_enter(TfaState* s) {
     };
 }
 
-static void tfa_bork_pend(TfaBorkState* bs, int tick, int kind, int x, int y) {
+static void tfa_bork_pend(TfaBorkState* bs, int tick, int kind, int x, int y, int arg) {
     assert(bs->pending_count < TFA_BORK_MAX_PENDING);
-    bs->pending[bs->pending_count++] = (TfaBorkPending){ tick, kind, x, y };
+    bs->pending[bs->pending_count++] = (TfaBorkPending){ tick, kind, x, y, arg };
 }
 
-/* Tiles hidden from Bork's centre by the Smorks footprint: the plugin's BorkShadow, which the
-   recorded gong dust avoids (dust tiles inside it: 0..10 of 62..176 per gong). */
-static int tfa_bork_shadowed(const TfaNpc* b, const TfaNpc* m, int x, int y) {
-    double px = b->x + 2.0, py = b->y + 2.0;
+/* Tiles hidden from the wave source at Bork's centre by the Smorks footprint (dust inside it: 0 of 2400 present tiles
+   against 30 of ~2400 tile calls disagreeing over 19 gongs). */
+static int tfa_bork_shadowed(int sx, int sy, const TfaNpc* m, int x, int y) {
+    double px = sx + 2.0, py = sy + 2.0;
     double dx = x + 0.5 - px, dy = y + 0.5 - py;
-    double lo[4] = { m->x + 0.5, m->y + 0.5 }, hi[4] = { m->x + m->size - 0.5, m->y + m->size - 0.5 };
+    double lo[2] = { m->x + 0.5, m->y + 0.5 }, hi[2] = { m->x + m->size - 0.5, m->y + m->size - 0.5 };
     double enter = 0.0, exit = 1.0;
     double d[2] = { dx, dy }, p[2] = { px, py };
     for (int axis = 0; axis < 2; axis++) {
@@ -166,6 +170,10 @@ static int tfa_bork_in_arena(int x, int y) {
     return x >= TFA_BORK.arena_x0 && x <= TFA_BORK.arena_x1 && y >= TFA_BORK.arena_y0 && y <= TFA_BORK.arena_y1;
 }
 
+static int tfa_bork_walkable(int x, int y) {
+    return tfa_bork_in_arena(x, y) && !tfa_layout_blocked(tfa_room_layout(TFA_ROOM_BORK), x, y);
+}
+
 static int tfa_bork_first_alive(const TfaState* s) {
     for (int p = 0; p < s->team_size; p++) if (tfa_alive(s, p)) return p;
     return -1;
@@ -178,49 +186,79 @@ static int tfa_bork_hit_player(TfaState* s, int p, int min, int max, int protect
     return dmg;
 }
 
-/* Wide wave around Bork's centre minus his footprint and the Smorks shadow. */
+/* Dust 1 + Manhattan distance cycles from the source tile (sx + 2, sy + 2) over every wave, ring and stomp tile (19 gongs, 18 rings, 8 pulses, exact). */
+static void tfa_bork_dust(TfaState* s, int sx, int sy, int x, int y) {
+    tfa_fx_ground(s, x, y, BORK_GFX_DUST, 1 + abs(x - sx - 2) + abs(y - sy - 2));
+}
+
+static int tfa_bork_unshadowed(const TfaNpc* m, int smorks_dead, int sx, int sy, int x, int y) {
+    return smorks_dead || (!tfa_bork_covers(m, x, y) && !tfa_bork_shadowed(sx, sy, m, x, y));
+}
+
+/* Gong wave tiles: the arena within the Chebyshev reach of the target from Bork's centre (target on the rim in 11/11 hit
+   gongs, which makes the target the second player, inferred), minus the footprint and the Smorks and its shadow. */
+static int tfa_bork_wave_covers(const TfaNpc* m, int smorks_dead, int sx, int sy, int reach2, int x, int y) {
+    int ox2 = 2 * x + 1 - (2 * sx + 4), oy2 = 2 * y + 1 - (2 * sy + 4);
+    if (!tfa_bork_walkable(x, y) || abs(ox2) > reach2 || abs(oy2) > reach2) return 0;
+    if (x >= sx && x < sx + 4 && y >= sy && y < sy + 4) return 0;
+    return tfa_bork_unshadowed(m, smorks_dead, sx, sy, x, y);
+}
+
+/* Wide wave around Bork's start-of-tick centre. */
 static void tfa_bork_gong(TfaState* s, TfaNpc* b, TfaNpc* m) {
     TfaBorkState* bs = &s->boss.bork;
     b->act = TFA_ACT_MELEE;
     tfa_npc_anim(s, b, BORK_ANIM_GONG);
-    int far = bs->target >= 0 && tfa_player_npc_distance(&s->players[bs->target], b) > TFA_BORK.far_target_distance;
-    int reach2 = far ? TFA_BORK.far_reach_x2 : TFA_BORK.wide_reach_x2;
+    int sx = bs->start_x, sy = bs->start_y;
+    const Player* tp = &s->players[bs->target].player;
+    int rx2 = abs(2 * tp->x + 1 - (2 * sx + 4)), ry2 = abs(2 * tp->y + 1 - (2 * sy + 4));
+    int reach2 = rx2 > ry2 ? rx2 : ry2;
+    for (int x = TFA_BORK.arena_x0; x <= TFA_BORK.arena_x1; x++)
+        for (int y = TFA_BORK.arena_y0; y <= TFA_BORK.arena_y1; y++)
+            if (tfa_bork_wave_covers(m, bs->smorks_dead, sx, sy, reach2, x, y)) tfa_bork_dust(s, sx, sy, x, y);
     for (int p = 0; p < s->team_size; p++) {
         if (!tfa_alive(s, p)) continue;
-        int x = s->players[p].player.x, y = s->players[p].player.y;
-        if (!tfa_bork_in_arena(x, y) || tfa_bork_covers(b, x, y) || tfa_bork_shadowed(b, m, x, y)) continue;
-        int ox2 = 2 * x + 1 - (2 * b->x + 4), oy2 = 2 * y + 1 - (2 * b->y + 4);
-        if (abs(ox2) > reach2 || abs(oy2) > reach2) continue;
-        tfa_bork_hit_player(s, p, TFA_BORK.wide_min_damage, TFA_BORK.wide_max_damage, TFA_BORK.protected_pct);
+        if (tfa_bork_wave_covers(m, bs->smorks_dead, sx, sy, reach2, s->players[p].player.x, s->players[p].player.y))
+            tfa_bork_hit_player(s, p, TFA_BORK.wide_min_damage, TFA_BORK.wide_max_damage, TFA_BORK.protected_pct);
     }
-    tfa_bork_pend(bs, s->tick + TFA_BORK.ring_delay, TFA_BORK_PEND_RING, b->x, b->y);
+    tfa_bork_pend(bs, s->tick + TFA_BORK.ring_delay, TFA_BORK_PEND_RING, 0, 0, 0);
 }
 
-static void tfa_bork_ring(TfaState* s, int bx, int by, const TfaNpc* b, const TfaNpc* m) {
+/* Ring around the footprint at the start of the gong +2 tick: every walkable tile but the Smorks footprint, shadow ignored (18/18 exact
+   against the position one tick after the gong). */
+static int tfa_bork_ring_covers(const TfaNpc* m, int smorks_dead, int sx, int sy, int x, int y) {
+    return tfa_bork_walkable(x, y) && x >= sx - 1 && x <= sx + 4 && y >= sy - 1 && y <= sy + 4 &&
+        (x < sx || x >= sx + 4 || y < sy || y >= sy + 4) && (smorks_dead || !tfa_bork_covers(m, x, y));
+}
+
+static void tfa_bork_ring(TfaState* s, const TfaNpc* b, const TfaNpc* m) {
+    int sx = b->x, sy = b->y, dead = s->boss.bork.smorks_dead;
+    for (int x = sx - 1; x <= sx + 4; x++)
+        for (int y = sy - 1; y <= sy + 4; y++)
+            if (tfa_bork_ring_covers(m, dead, sx, sy, x, y)) tfa_bork_dust(s, sx, sy, x, y);
     for (int p = 0; p < s->team_size; p++) {
-        if (!tfa_alive(s, p)) continue;
-        int x = s->players[p].player.x, y = s->players[p].player.y;
-        int d = encounter_rect_distance(x, y, 1, bx, by, 4);
-        if (d != 1 || tfa_bork_shadowed(b, m, x, y)) continue;
-        tfa_bork_hit_player(s, p, TFA_BORK.ring_min_damage, TFA_BORK.ring_max_damage, TFA_BORK.protected_pct);
+        if (tfa_alive(s, p) && tfa_bork_ring_covers(m, dead, sx, sy, s->players[p].player.x, s->players[p].player.y))
+            tfa_bork_hit_player(s, p, TFA_BORK.ring_min_damage, TFA_BORK.ring_max_damage, TFA_BORK.protected_pct);
     }
 }
 
+/* Stomp pulse over the whole walkable arena but the Smorks and its shadow (199 tiles, 8/8, Bork at one spot only). */
 static void tfa_bork_stomp_pulse(TfaState* s, const TfaNpc* b, const TfaNpc* m) {
-    const TfaBorkState* bs = &s->boss.bork;
+    int dead = s->boss.bork.smorks_dead;
+    const int* src = TFA_BORK.stomp_sources[tfa_rand(s, 8)];
+    for (int x = TFA_BORK.arena_x0; x <= TFA_BORK.arena_x1; x++)
+        for (int y = TFA_BORK.arena_y0; y <= TFA_BORK.arena_y1; y++)
+            if (tfa_bork_walkable(x, y) && tfa_bork_unshadowed(m, dead, b->x, b->y, x, y))
+                tfa_fx_ground(s, x, y, BORK_GFX_DUST, 1 + abs(x - b->x - src[0]) + abs(y - b->y - src[1]));
     for (int p = 0; p < s->team_size; p++) {
         if (!tfa_alive(s, p)) continue;
         int x = s->players[p].player.x, y = s->players[p].player.y;
-        if (!tfa_bork_in_arena(x, y) || (!bs->smorks_dead && tfa_bork_shadowed(b, m, x, y))) continue;
-        tfa_bork_hit_player(s, p, TFA_BORK.stomp_min_damage, TFA_BORK.stomp_max_damage, TFA_BORK.protected_pct);
+        if (tfa_bork_walkable(x, y) && tfa_bork_unshadowed(m, dead, b->x, b->y, x, y))
+            tfa_bork_hit_player(s, p, TFA_BORK.stomp_min_damage, TFA_BORK.stomp_max_damage, TFA_BORK.protected_pct);
     }
 }
 
-static void tfa_bork_scorch(TfaState* s, int x, int y) {
-    const TfaRoomLayout* l = tfa_room_layout(TFA_ROOM_BORK);
-    if (!tfa_bork_in_arena(x, y) || tfa_layout_blocked(l, x, y)) return;
-    for (int i = 0; i < TFA_MAX_HAZARDS; i++)
-        if (s->hazards[i].kind == TFA_HAZ_FLOOR && s->hazards[i].x == x && s->hazards[i].y == y) return;
+static void tfa_bork_scorch(TfaState* s, int x, int y, int orientation) {
     tfa_hazard_add(s, (TfaHazard){
         .kind = TFA_HAZ_FLOOR,
         .style = ATTACK_STYLE_NONE,
@@ -234,25 +272,53 @@ static void tfa_bork_scorch(TfaState* s, int x, int y) {
         .max_damage = (int16_t)TFA_BORK.scorch_max,
         .protected_pct = 100,
         .loc_id = BORK_OBJ_SCORCH,
+        .orientation = (int16_t)orientation,
     });
 }
 
-/* A blob of scorch tiles: the landing tile plus distinct random neighbours, offsets seen in 5 clusters
-   (napalm dx -3..1, dy -2..3, bomb dx -1..1, dy -1..1). */
-static void tfa_bork_scorch_cluster(TfaState* s, int tx, int ty, int count, int dx0, int dx1, int dy0, int dy1) {
-    tfa_bork_scorch(s, tx, ty);
-    int offsets[64][2], n = 0;
+static int tfa_bork_scorched(const TfaState* s, int x, int y) {
+    for (int i = 0; i < TFA_MAX_HAZARDS; i++)
+        if (s->hazards[i].kind == TFA_HAZ_FLOOR && s->hazards[i].loc_id == BORK_OBJ_SCORCH && s->hazards[i].x == x && s->hazards[i].y == y) return 1;
+    return 0;
+}
+
+/* Fire and a splat variant per scorch tile at the landing (4046 plus 4047 + k, 33/33), the scorch object one tick later turned
+   by the splat's rotation 512 * k (33/33). The tiles are the impact tile plus distinct random ones from the window
+   (napalm dx -3..1, dy -2..3 over 3 clusters, bomb dx -1..1, dy -1..1 over 2), filtered to free walkable floor. The bomb impact
+   tile carries a second 4046 (2/2). Fire delay 1 + step per Chebyshev tile from the impact (napalm 3, 2/2, bomb 0). */
+static void tfa_bork_scorch_cluster(TfaState* s, int tx, int ty, int count, int dx0, int dx1, int dy0, int dy1, int delay_step) {
+    int tiles[64][2], n = 0;
+    if (tfa_bork_walkable(tx, ty) && !tfa_bork_scorched(s, tx, ty)) {
+        tiles[n][0] = tx;
+        tiles[n][1] = ty;
+        n++;
+    }
+    int first = n;
     for (int dx = dx0; dx <= dx1; dx++)
         for (int dy = dy0; dy <= dy1; dy++)
-            if (dx != 0 || dy != 0) { offsets[n][0] = dx; offsets[n][1] = dy; n++; }
-    for (int k = 1; k < count; k++) {
-        int pick = k - 1 + tfa_rand(s, n - (k - 1));
-        int sx = offsets[pick][0], sy = offsets[pick][1];
-        offsets[pick][0] = offsets[k - 1][0];
-        offsets[pick][1] = offsets[k - 1][1];
-        offsets[k - 1][0] = sx;
-        offsets[k - 1][1] = sy;
-        tfa_bork_scorch(s, tx + sx, ty + sy);
+            if ((dx != 0 || dy != 0) && tfa_bork_walkable(tx + dx, ty + dy) && !tfa_bork_scorched(s, tx + dx, ty + dy)) {
+                tiles[n][0] = tx + dx;
+                tiles[n][1] = ty + dy;
+                n++;
+            }
+    int total = count < n ? count : n;
+    for (int k = first; k < total; k++) {
+        int j = k + tfa_rand(s, n - k);
+        int x = tiles[j][0], y = tiles[j][1];
+        tiles[j][0] = tiles[k][0];
+        tiles[j][1] = tiles[k][1];
+        tiles[k][0] = x;
+        tiles[k][1] = y;
+    }
+    for (int k = 0; k < total; k++) {
+        int x = tiles[k][0], y = tiles[k][1];
+        int cheb = abs(x - tx) > abs(y - ty) ? abs(x - tx) : abs(y - ty);
+        int delay = 1 + delay_step * cheb;
+        int variant = tfa_rand(s, BORK_SPLAT_VARIANTS);
+        tfa_fx_ground(s, x, y, BORK_GFX_FIRE, delay);
+        if (delay_step == 0 && cheb == 0) tfa_fx_ground(s, x, y, BORK_GFX_FIRE, delay);
+        tfa_fx_ground(s, x, y, BORK_GFX_SPLAT + variant, delay);
+        tfa_bork_pend(&s->boss.bork, s->tick + TFA_BORK.napalm_scorch_delay, TFA_BORK_PEND_SCORCH, x, y, 512 * variant);
     }
 }
 
@@ -264,11 +330,10 @@ static void tfa_bork_blast(TfaState* s, int tx, int ty) {
     }
 }
 
-static void tfa_bork_landing(TfaState* s, TfaNpc* b, int tx, int ty, int bork_damage, int scorch_kind) {
+static void tfa_bork_landing(TfaState* s, TfaNpc* b, int tx, int ty, int bork_damage) {
     TfaBorkState* bs = &s->boss.bork;
     tfa_bork_blast(s, tx, ty);
     if (!bs->bork_dead && tfa_bork_covers(b, tx, ty)) tfa_npc_take_damage(s, b, bork_damage, -1, ATTACK_STYLE_NONE);
-    tfa_bork_pend(bs, s->tick + TFA_BORK.napalm_scorch_delay, scorch_kind, tx, ty);
 }
 
 static void tfa_bork_cannon(TfaState* s, TfaNpc* m) {
@@ -287,14 +352,14 @@ static void tfa_bork_cannon(TfaState* s, TfaNpc* m) {
         tfa_npc_anim(s, m, BORK_ANIM_BIG_CANNON);
         tfa_fx_projectile(s, m, bs->target, BORK_PROJ_BOMB, SPOTANIM_TFA_BORK_CANNONBALL_TRAVEL_BIG,
             SPOTANIM_TFA_BORK_CANNONBALL_TRAVEL_BIG_ANIM, TFA_BORK.bomb_proj_delay, TFA_BORK.bomb_flight);
-        tfa_bork_pend(bs, s->tick + TFA_BORK.bomb_proj_delay + TFA_BORK.bomb_flight, TFA_BORK_PEND_BOMB_LAND, tp->x, tp->y);
+        tfa_bork_pend(bs, s->tick + TFA_BORK.bomb_proj_delay + TFA_BORK.bomb_flight, TFA_BORK_PEND_BOMB_LAND, tp->x, tp->y, 0);
         return;
     }
     tfa_npc_anim(s, m, BORK_ANIM_CANNON);
     if (pick < TFA_BORK.napalm_weight) {
         tfa_fx_projectile(s, m, bs->target, BORK_PROJ_NAPALM, SPOTANIM_TFA_BORK_VFX_SMORK_NAPALM_FIRE_PROJANIM01,
             SPOTANIM_TFA_BORK_VFX_SMORK_NAPALM_FIRE_PROJANIM01_ANIM, 0, TFA_BORK.napalm_flight);
-        tfa_bork_pend(bs, s->tick + TFA_BORK.napalm_flight, TFA_BORK_PEND_NAPALM_LAND, tp->x, tp->y);
+        tfa_bork_pend(bs, s->tick + TFA_BORK.napalm_flight, TFA_BORK_PEND_NAPALM_LAND, tp->x, tp->y, 0);
         return;
     }
     int magic = pick < TFA_BORK.napalm_weight + TFA_BORK.magic_weight;
@@ -324,24 +389,28 @@ static void tfa_bork_pending_tick(TfaState* s, TfaNpc* b, TfaNpc* m) {
         bs->pending[i--] = bs->pending[--bs->pending_count];
         switch ((TfaBorkPendKind)e.kind) {
             case TFA_BORK_PEND_NAPALM_LAND:
-                tfa_bork_landing(s, b, e.x, e.y, TFA_BORK.napalm_bork_damage, TFA_BORK_PEND_SCORCH_NAPALM);
+                tfa_bork_landing(s, b, e.x, e.y, TFA_BORK.napalm_bork_damage);
+                tfa_bork_scorch_cluster(s, e.x, e.y, tfa_rand_range(s, TFA_BORK.napalm_tiles_min, TFA_BORK.napalm_tiles_max), -3, 1, -2, 3, TFA_BORK.napalm_delay_step);
                 break;
             case TFA_BORK_PEND_BOMB_LAND:
-                tfa_bork_landing(s, b, e.x, e.y, TFA_BORK.bomb_bork_damage, TFA_BORK_PEND_SCORCH_BOMB);
+                tfa_bork_landing(s, b, e.x, e.y, TFA_BORK.bomb_bork_damage);
+                tfa_bork_scorch_cluster(s, e.x, e.y, tfa_rand_range(s, TFA_BORK.bomb_tiles_min, TFA_BORK.bomb_tiles_max), -1, 1, -1, 1, 0);
                 if (tfa_bork_covers(b, e.x, e.y)) {
                     bs->stunned = 1;
                     b->act = TFA_ACT_STUNNED;
                     if (b->anim_tick != s->tick) tfa_npc_anim(s, b, BORK_ANIM_STUN);
+                    tfa_bork_pend(bs, s->tick + TFA_BORK.scorch_clear_delay, TFA_BORK_PEND_SCORCH_CLEAR, 0, 0, 0);
                 }
                 break;
-            case TFA_BORK_PEND_SCORCH_NAPALM:
-                tfa_bork_scorch_cluster(s, e.x, e.y, tfa_rand_range(s, TFA_BORK.napalm_tiles_min, TFA_BORK.napalm_tiles_max), -3, 1, -2, 3);
+            case TFA_BORK_PEND_SCORCH:
+                tfa_bork_scorch(s, e.x, e.y, e.arg);
                 break;
-            case TFA_BORK_PEND_SCORCH_BOMB:
-                tfa_bork_scorch_cluster(s, e.x, e.y, tfa_rand_range(s, TFA_BORK.bomb_tiles_min, TFA_BORK.bomb_tiles_max), -1, 1, -1, 1);
+            case TFA_BORK_PEND_SCORCH_CLEAR:
+                for (int h = 0; h < TFA_MAX_HAZARDS; h++)
+                    if (s->hazards[h].kind == TFA_HAZ_FLOOR && s->hazards[h].loc_id == BORK_OBJ_SCORCH) s->hazards[h].end_tick = s->tick;
                 break;
             case TFA_BORK_PEND_RING:
-                tfa_bork_ring(s, e.x, e.y, b, m);
+                tfa_bork_ring(s, b, m);
                 break;
             case TFA_BORK_PEND_PULSE:
                 tfa_bork_stomp_pulse(s, b, m);
@@ -406,6 +475,8 @@ static void tfa_bork_tick(TfaState* s, TfaContext* ctx) {
     b->act = TFA_ACT_IDLE;
     m->act = TFA_ACT_IDLE;
     bs->clock++;
+    bs->start_x = b->x;
+    bs->start_y = b->y;
     int first = tfa_bork_first_alive(s);
     if (bs->target < 0 || !tfa_alive(s, bs->target)) bs->target = first;
     tfa_bork_pending_tick(s, b, m);
@@ -424,7 +495,7 @@ static void tfa_bork_tick(TfaState* s, TfaContext* ctx) {
             b->act = TFA_ACT_SPECIAL;
             tfa_npc_anim(s, b, BORK_ANIM_STOMP);
             for (int k = 0; k < TFA_BORK.stomp_pulses; k++)
-                tfa_bork_pend(bs, s->tick + TFA_BORK.stomp_pulse_first + k * TFA_BORK.stomp_pulse_gap, TFA_BORK_PEND_PULSE, 0, 0);
+                tfa_bork_pend(bs, s->tick + TFA_BORK.stomp_pulse_first + k * TFA_BORK.stomp_pulse_gap, TFA_BORK_PEND_PULSE, 0, 0, 0);
             bs->stunned = 0;
             bs->next_gong = s->tick + TFA_BORK.stomp_to_gong;
         }
@@ -437,7 +508,7 @@ static void tfa_bork_tick(TfaState* s, TfaContext* ctx) {
         if (s->tick == bs->next_gong) {
             int skipped = bs->stomp_tick >= 0 &&
                 s->tick >= bs->stomp_tick - TFA_BORK.stomp_freeze_before && s->tick < bs->stomp_tick + TFA_BORK.stomp_to_gong;
-            if (!skipped && first >= 0) tfa_bork_gong(s, b, m);
+            if (!skipped && first >= 0 && b->act != TFA_ACT_STUNNED) tfa_bork_gong(s, b, m);
             if (!(bs->stomp_tick >= 0 && s->tick >= bs->stomp_tick)) bs->next_gong += TFA_BORK.gong_interval;
         }
         b->attack_timer = (int16_t)(bs->next_gong > s->tick ? bs->next_gong - s->tick : 0);
