@@ -8,8 +8,17 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
     int hide_x = -1, hide_y = -1, flee_x = -1, flee_y = -1, go_x = -1, go_y = -1;
     int flee = 0;
     if (s->room == TFA_ROOM_GUARDIAN) {
+        const TfaGuardianState* gs = &s->boss.guardian;
         target = tfa_npc_first(s, TFA_NPC_GUARDIAN);
-        want = s->boss.guardian.phase == TFA_GUARDIAN_GROUNDED ? PRAYER_PROTECT_MELEE : PRAYER_PROTECT_RANGED;
+        want = gs->phase == TFA_GUARDIAN_GROUNDED ? PRAYER_PROTECT_MELEE : PRAYER_PROTECT_RANGED;
+        /* Alone, P0 flicks under the flying Guardian for the slam it can dodge: in on the tick before a ranged slot, out on the slot itself (the recorded recipe,
+           4/4 in the solo fight; team fights show one flick each). */
+        int slot_is_ranged = gs->phase == TFA_GUARDIAN_FLYING && !gs->enraged && gs->shield_broke_tick == 0 &&
+            gs->special_timer > TFA_GUARDIAN.ranged_interval;
+        if (s->team_size == 1 && target && slot_is_ranged && (gs->ranged_timer == 2 || gs->ranged_timer == 1)) {
+            go_x = target->x + 2;
+            go_y = gs->ranged_timer == 2 ? target->y : target->y - 1;
+        }
     } else if (s->room == TFA_ROOM_DREADNOTH) {
         target = tfa_npc_first(s, TFA_NPC_DREADNOTH);
         want = PRAYER_PROTECT_MELEE;
@@ -148,8 +157,9 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
             : want == PRAYER_PROTECT_MAGIC ? ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC : ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED;
     /* Weapons per room from the recordings: P0 meleed Ezekiel (1043 Soulreaper attacks), blowpiped the Guardian (364 of 852
        attacks), crossbowed every other boss and barraged corpses and jellies (577 casts); the bow raiders shot everything but Ezekiel (no
-       arrows there). Openers: the Zaryte special (75%) on the first crossbow shot, two Dragon warhammer specials on Ezekiel, a Tonalztics
-       special from each bow raider. Bork (one fight, 7 Soulreaper swings while P0 also carried the cannon remains) stays ranged. */
+       arrows there). Openers: the Zaryte special (75%) on the first crossbow shot, two Dragon warhammer specials on Ezekiel, two Tonalztics
+       specials six ticks apart thrown from one tile (Guardian 4/4 fights, Xarth 3/3) by one bow raider, who throws another whenever 50% energy
+       is back (2727 again at +126 to +256). Bork (one fight, 7 Soulreaper swings while P0 also carried the cannon remains) stays ranged. */
     int crossbow = tp->kit == TFA_KIT_CROSSBOW;
     int barrage = target->kind == TFA_NPC_XARTH_CORPSE || target->kind == TFA_NPC_JELLY || (crossbow && s->room == TFA_ROOM_DREADNOTH);
     AttackStyle stance = barrage ? ATTACK_STYLE_MAGIC
@@ -158,7 +168,7 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
     uint16_t spec_weapon = ITEM_NONE;
     if (stance == ATTACK_STYLE_MELEE && crossbow && tp->player.special_energy >= 50) spec_weapon = ITEM_DRAGON_WARHAMMER;
     if (stance == ATTACK_STYLE_RANGED && crossbow && tp->player.special_energy == 100) spec_weapon = ITEM_ZARYTE_CROSSBOW;
-    if (stance == ATTACK_STYLE_RANGED && !crossbow && tp->player.special_energy == 100) spec_weapon = ITEM_TONALZTICS_OF_RALOS;
+    if (stance == ATTACK_STYLE_RANGED && p == 1 && tp->player.special_energy >= 50) spec_weapon = ITEM_TONALZTICS_OF_RALOS;
     uint16_t wanted[NUM_GEAR_SLOTS];
     memset(wanted, ITEM_NONE, sizeof(wanted));
     if (stance == ATTACK_STYLE_RANGED) {
@@ -190,7 +200,9 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
     if (spec_weapon != ITEM_NONE && tp->player.equipped[GEAR_SLOT_WEAPON] == spec_weapon && !tp->player.spec_armed)
         acts[OSRS_HEAD_SPECIAL] = 1;
     if (barrage) acts[OSRS_HEAD_SPELL] = OSRS_SPELL_ICE_BARRAGE;
-    acts[OSRS_HEAD_PRIMARY] = TFA_PRIMARY_ATTACK_BASE + tfa_npc_slot(s, target);
+    /* A special opens the fight: no attack until the special weapon is worn (equipping disarms the bar). */
+    if (spec_weapon == ITEM_NONE || tp->player.equipped[GEAR_SLOT_WEAPON] == spec_weapon)
+        acts[OSRS_HEAD_PRIMARY] = TFA_PRIMARY_ATTACK_BASE + tfa_npc_slot(s, target);
     if (hide_x >= 0 && (tp->player.x != hide_x || tp->player.y != hide_y) && tp->player.attack_timer > 0) {
         int best = 1 << 30;
         for (int a = 1; a < OSRS_PRIMARY_MOVE_ACTIONS; a++) {
@@ -227,7 +239,8 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
         for (int dx = -8; dx <= 8; dx++)
             for (int dy = -8; dy <= 8; dy++) {
                 int tx = tp->player.x + dx, ty = tp->player.y + dy;
-                if (!tfa_layout_blocked(layout, tx, ty) && tfa_tile_danger(s, p, tx, ty) < 0) {
+                if (!tfa_layout_blocked(layout, tx, ty) && tfa_tile_danger(s, p, tx, ty) < 0 &&
+                        !(s->room == TFA_ROOM_GUARDIAN && target->kind == TFA_NPC_GUARDIAN && tfa_guardian_covers(target, tx, ty))) {
                     safe[safe_count][0] = tx;
                     safe[safe_count++][1] = ty;
                 }

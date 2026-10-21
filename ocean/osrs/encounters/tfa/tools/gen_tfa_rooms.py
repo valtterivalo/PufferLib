@@ -43,6 +43,8 @@ def section(text, name):
 
 
 def parse_room(name):
+    """Movement flags from the recorded majority collision. The recorded scene loads see the inert Guardian 16657 blocking its 5x5, which P0
+    stood under once it flew (20 of its 25 tiles, centre included, 233 POS rows): the footprint is walkable."""
     text = (FIXTURES / f"tfa_{name.lower()}_room.txt").read_text()
     flags = [[0] * SIZE for _ in range(SIZE)]
     for line in section(text, "MAP").splitlines():
@@ -61,6 +63,10 @@ def parse_room(name):
     npc_id = BOSS_IDS[name]
     spawns = re.findall(rf"^{npc_id} (\d+) (\d+) : (\d+)/", section(text, "BOSS SPAWN"), re.M)
     bx, by, _ = max(((int(x), int(y), int(n)) for x, y, n in spawns), key=lambda t: t[2])
+    if name == "GUARDIAN":
+        for y in range(by, by + 5):
+            for x in range(bx, bx + 5):
+                flags[y][x] = 0
     starts = collections.Counter()
     for m in re.finditer(r"P0@start=\((\d+), (\d+)\)", text):
         starts[(int(m.group(1)), int(m.group(2)))] += 1

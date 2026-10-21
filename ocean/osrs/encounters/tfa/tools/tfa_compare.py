@@ -274,6 +274,70 @@ def guardian_ground_laws(real, sim, failures):
     shapes_law("4389 per 14747 (count, tile, delay)", rland, sland, failures)
 
 
+def guardian_slam(fights):
+    """Per ranged (14751) or slam (14752) anim of the flying Guardian 16659: (P0 under its 5x5 at t-2, t-1, t, anim), and for each slam whether
+    a P0 hitsplat landed at t+1 while P0 was out of the footprint at t."""
+    patterns, dodged = hist([]), hist([])
+    for ev in fights.values():
+        pos = {e["t"]: (int(e["x"]), int(e["y"])) for e in ev if e["kind"] == "POS" and e["actor"] == "P0" and e["x"] != "-"}
+        boss = sorted((e["t"], int(e["x"]), int(e["y"])) for e in ev if e["kind"] == "NPOS" and base(e["actor"]) == "16659")
+        hits = {e["t"] for e in ev if e["kind"] == "HIT" and e["actor"] == "P0" and e["a"] in ("16", "12")}
+
+        def under(t):
+            sw = [(x, y) for tt, x, y in boss if tt <= t]
+            if t not in pos or not sw:
+                return None
+            return sw[-1][0] <= pos[t][0] < sw[-1][0] + 5 and sw[-1][1] <= pos[t][1] < sw[-1][1] + 5
+
+        for e in ev:
+            if e["kind"] != "ANIM" or base(e["actor"]) != "16659" or e["id"] not in ("14751", "14752"):
+                continue
+            pattern = tuple(under(e["t"] - d) for d in (2, 1, 0))
+            if None in pattern:
+                continue
+            patterns[(pattern, e["id"])] += 1
+            if e["id"] == "14752" and pattern[2] is False:
+                dodged[(e["t"] + 1) not in hits] += 1
+    return patterns, dodged
+
+
+def guardian_slam_laws(real, sim):
+    """Run on a solo dump against every recorded fight (P0 under the footprint at t-1 is the slam's target in both). Each pattern seen 3 times or
+    more on both sides must pick the same anim, and a P0 who stepped out on the anim tick takes no hit the tick after (2% slack for the vines,
+    mushrooms and projectiles that land on that tick anyway; the recordings: 5 of 5 clean)."""
+    failures = []
+    real = load(FIXTURES / "tfa_guardian_events.tsv")
+    rp, rd = guardian_slam(real)
+    sp, sd = guardian_slam(sim)
+    for pattern in sorted({p for p, _ in rp} | {p for p, _ in sp}):
+        r = hist({anim: n for (p, anim), n in rp.items() if p == pattern})
+        m = hist({anim: n for (p, anim), n in sp.items() if p == pattern})
+        name = f"slam pattern {''.join('I' if u else 'o' for u in pattern)}"
+        if sum(r.values()) < 3 or sum(m.values()) < 3:
+            print(f"--  {name:28s} real {fmt(r):42s} sim {fmt(m)}")
+            continue
+        compare(name, r, m, failures)
+    ok = bool(sd) and sd[False] <= 0.02 * sum(sd.values())
+    if not ok:
+        failures.append("slam dodged by stepping out")
+    print(f"{'ok ' if ok else 'BAD'} {'slam dodged by stepping out':28s} real {fmt(rd):42s} sim {fmt(sd)}")
+    return failures
+
+
+def guardian_intro(fights):
+    """Ticks from the inert Guardian's 14755 to its first attack, and from the 16657 -> 16659 change to it."""
+    spawn, change = hist([]), hist([])
+    for ev in fights.values():
+        attacks = sorted(e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] in ("14751", "14752", "14753"))
+        for e in ev:
+            later = [a for a in attacks if a > e["t"]]
+            if e["kind"] == "ANIM" and e["id"] == "14755" and later:
+                spawn[later[0] - e["t"]] += 1
+            if e["kind"] == "NPCID" and e["id"] == "16659" and e["a"] == "16657" and later:
+                change[later[0] - e["t"]] += 1
+    return spawn, change
+
+
 def guardian(real, sim):
     failures = []
     for anim in ("14751", "14753", "14754", "14748"):
@@ -298,6 +362,8 @@ def guardian(real, sim):
     compare("shield per flying phase", shields(real), shields(sim), failures)
     guardian_ground_laws(real, sim, failures)
     damage_laws(real, sim, {"16659", "16660"}, failures, rate=False)
+    for name, r, m in zip(("14755 -> first attack", "16659 change -> first attack"), guardian_intro(real), guardian_intro(sim)):
+        compare(name, r, m, failures)
     return failures
 
 
@@ -847,11 +913,21 @@ def jelly_hp(fights):
     return hist(out)
 
 
+DREAD_ARENA = (24, 38)
+
+
 def blood_after_slam(fights):
+    """New blood tiles the tick after each slam whose blood ring (the 7x7 around the 5x5) lies inside the arena: at the edge the ring is clipped
+    wherever the boss walked after the raiders."""
     out = []
     for ev in fights.values():
         objs = collections.Counter(e["t"] for e in ev if e["kind"] == "OBJ+" and e["id"] == "62609")
-        out += [objs[t + 1] for g in slam_groups(ev) for t in g]
+        track = sorted((e["t"], int(e["x"]), int(e["y"])) for e in ev if e["kind"] == "NPOS" and base(e["actor"]) == "16665")
+        for g in slam_groups(ev):
+            for t in g:
+                at = [(x, y) for tt, x, y in track if tt <= t]
+                if at and DREAD_ARENA[0] <= at[-1][0] - 1 and at[-1][0] + 5 <= DREAD_ARENA[1] and DREAD_ARENA[0] <= at[-1][1] - 1 and at[-1][1] + 5 <= DREAD_ARENA[1]:
+                    out.append(objs[t + 1])
     return hist(out)
 
 
@@ -1354,12 +1430,12 @@ def ocellus(real, sim):
 def main():
     boss, sim_path = sys.argv[1], sys.argv[2]
     party = sys.argv[3] if len(sys.argv) > 3 else None
-    real = load(FIXTURES / f"tfa_{boss}_events.tsv")
+    real = load(FIXTURES / f"tfa_{boss.split('_')[0]}_events.tsv")
     if party:
         meta = {r["fight_id"]: r for r in csv.DictReader(open(FIXTURES / "tfa_fights.tsv"), delimiter="\t")}
         real = {k: v for k, v in real.items() if meta[k]["party_size"] == party}
     sim = load(sim_path)
-    failures = {"guardian": guardian, "xarth": xarth, "dreadnoth": dreadnoth, "ezekiel": ezekiel, "bork": bork, "moia": moia, "ocellus": ocellus}[boss](real, sim)
+    failures = {"guardian_slam": guardian_slam_laws, "guardian": guardian, "xarth": xarth, "dreadnoth": dreadnoth, "ezekiel": ezekiel, "bork": bork, "moia": moia, "ocellus": ocellus}[boss](real, sim)
     print(f"{len(failures)} laws differ: {failures}" if failures else "all laws agree")
     sys.exit(1 if failures else 0)
 

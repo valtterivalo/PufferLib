@@ -37,7 +37,7 @@ nice -n 19 cc -std=c11 -O2 -Wno-unused-function -I. -o $out/human ocean/osrs/tes
 echo "== human walk and attack clicks"
 nice -n 19 $out/human | tail -1 || exit 1
 fail=0
-for spec in "guardian 0 2" "guardian 0 3" "xarth 5 3" "bork 1 2" "moia 4 3" "dreadnoth 3 3" "ezekiel 2 3" "ocellus 7 3"; do
+for spec in "guardian_slam 0 1" "guardian 0 2" "guardian 0 3" "xarth 5 3" "bork 1 2" "moia 4 3" "dreadnoth 3 3" "ezekiel 2 3" "ocellus 7 3"; do
     set -- ${=spec}
     nice -n 19 $out/dump $2 $3 60 1 > $out/$1_$3.tsv 2>/dev/null || exit 1
     echo "== $1 team $3"

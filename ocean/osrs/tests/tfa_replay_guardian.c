@@ -87,6 +87,7 @@ static int replay(const Fight* f, int* matched, int* total, int* off_by[3]) {
     for (int i = 0; i < TFA_MAX_NPCS; i++)
         if (s->npcs[i].kind == TFA_NPC_GUARDIAN_PYLON) s->npcs[i].active = 0;
     int acts[TFA_MAX_PLAYERS * TFA_NUM_ACTION_HEADS] = {0};
+    for (int t = 1; t < TFA_GUARDIAN.spawn_to_attack; t++) tfa_step_team(s, ctx, acts); /* recorded t 0 is the first attack */
     int last_t = f->anims[f->nanims - 1].t + 2;
     int sim_t[3][64], nsim[3] = {0};
     int h = 0;

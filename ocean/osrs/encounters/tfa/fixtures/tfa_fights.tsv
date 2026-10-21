@@ -57,6 +57,7 @@ guardian_21	guardian	session_20261020T180501.242Z	41087	41100	attack_anim	41091	
 guardian_22	guardian	session_20261020T182203.561Z	42791	42794	attack_anim	-	43016	challenge_complete_chat	kill	3	0	0	43043	recording_joined_mid_fight;Challenge complete: Archive Guardian. Duration: 2:37. Total: 2:37 (new personal best)
 guardian_23	guardian	session_20261020T190740.535Z	47351	47367	attack_anim	47358	47701	challenge_complete_chat	kill	3	1	1	47740	recording_joined_mid_fight;Challenge complete: Archive Guardian. Duration: 3:26. Total: 3:26. Personal best: 2:37;ticks_start_to_complete=343
 guardian_24	guardian	session_20261020T192913.215Z	50982	51021	attack_anim	51012	51478	challenge_complete_chat	kill	3	1	1	51549	Challenge complete: Archive Guardian. Duration: 4:40. Total: 4:40. Personal best: 2:23;ticks_start_to_complete=466
+guardian_25	guardian	session_20261021T091642.758Z	7168	7201	attack_anim	7192	7253	failed_to_survive_chat	wipe	1	1	0	7255	-
 moia_01	moia	session_20261020T132314.483Z	13010	13015	attack_anim	13007	13069	failed_to_survive_chat	wipe	3	1	2	13071	-
 ocellus_01	ocellus	session_20261020T170127.721Z	34733	34853	attack_anim	34849	35050	failed_to_survive_chat	wipe	3	1	2	35052	recording_joined_mid_fight
 ocellus_02	ocellus	session_20261020T182203.561Z	45471	45654	attack_anim	45650	46436	failed_to_survive_chat	wipe	3	1	2	46438	-

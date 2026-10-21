@@ -20,6 +20,8 @@ typedef struct {
     int shield_broke_tick;
     int swoosh_tick;
     int cross_tick;
+    int melee_tick;
+    int melee_target;
 } TfaGuardianState;
 
 typedef struct {

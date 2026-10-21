@@ -4,11 +4,11 @@ claimed = the note's count of attack-to-attack gaps equal to the stated value. c
 
 | claim | source | claimed gap count (n) | computed merged (n) | computed by id (n) | verdict |
 |---|---|---|---|---|---|
-| Guardian 14751 next 5 | cycles-b | 780 (854) | 780 (854) | 780 (854) | match |
-| Guardian 14753 next 5 | cycles-b | 220 (241) | 218 (239) | 218 (239) | DIFFERS |
+| Guardian 14751 next 5 | cycles-b | 780 (854) | 784 (859) | 784 (859) | DIFFERS |
+| Guardian 14753 next 5 | cycles-b | 220 (241) | 219 (240) | 219 (240) | DIFFERS |
 | Guardian 14754 next 15 | cycles-b | 72 (73) | 92 (93) | 72 (73) | match |
 | Guardian 14748 next 5 | cycles-b | 64 (65) | 64 (65) | 64 (65) | match |
-| Guardian 14745 next 4 | cycles-b | 18 (18) | 18 (18) | 18 (18) | match |
+| Guardian 14745 next 4 | cycles-b | 18 (18) | 19 (19) | 19 (19) | DIFFERS |
 | Xarth 14985 next 4 | cycles-b | 302 (302) | 302 (302) | 302 (302) | match |
 | Xarth 14983 next 4 | cycles-b | 4 (4) | 4 (4) | 4 (4) | match |
 | Xarth 14992 next 3 | cycles-b | 12 (12) | 12 (12) | 12 (12) | match |
@@ -30,8 +30,8 @@ claimed = the note's count of attack-to-attack gaps equal to the stated value. c
 
 | claim | computed | verdict |
 |---|---|---|
-| projectile 4201 flight ~2t | 2.5:1038 | match |
-| anim 14751 hit +4 (388 of 856 anims) | delay hist 0:18 1:12 2:6 3:11 4:388 5:9 6:6 7:2 8:5; anims 856 | match |
+| projectile 4201 flight ~2t | 2.5:1043 | match |
+| anim 14751 hit +4 (388 of 856 anims) | delay hist 0:18 1:13 2:6 3:11 4:392 5:9 6:6 7:2 8:5; anims 861 | DIFFERS |
 | projectile 4056 5t flight | 5.0:6 | match |
 | projectile 4057 5t flight | 5.0:3 | match |
 | projectile 4045 4t flight | 4.0:3 | match |

@@ -203,11 +203,27 @@ static int tfa_dread_adjacent(const TfaNpc* b, const Player* pl) {
     return encounter_rect_distance(pl->x, pl->y, 1, b->x, b->y, b->size) <= 1;
 }
 
+static int tfa_dread_footprint_free(const TfaNpc* b, int x, int y) {
+    const TfaRoomLayout* l = tfa_room_layout(TFA_ROOM_DREADNOTH);
+    for (int dx = 0; dx < b->size; dx++)
+        for (int dy = 0; dy < b->size; dy++)
+            if (tfa_layout_blocked(l, x + dx, y + dy)) return 0;
+    return 1;
+}
+
+/* One step toward the player, diagonal first, then along either axis, never onto a footprint the arena blocks (its corners are cut). */
 static void tfa_dread_step_toward(TfaNpc* b, int px, int py) {
-    int nx = b->x + tfa_dread_sign(px - (b->x + 2));
-    int ny = b->y + tfa_dread_sign(py - (b->y + 2));
-    b->x = (int16_t)(nx < DREAD_ARENA_LO ? DREAD_ARENA_LO : nx > DREAD_ANCHOR_HI ? DREAD_ANCHOR_HI : nx);
-    b->y = (int16_t)(ny < DREAD_ARENA_LO ? DREAD_ARENA_LO : ny > DREAD_ANCHOR_HI ? DREAD_ANCHOR_HI : ny);
+    int dx = tfa_dread_sign(px - (b->x + 2)), dy = tfa_dread_sign(py - (b->y + 2));
+    const int steps[3][2] = { {dx, dy}, {dx, 0}, {0, dy} };
+    for (int k = 0; k < 3; k++) {
+        int nx = b->x + steps[k][0], ny = b->y + steps[k][1];
+        if ((steps[k][0] || steps[k][1]) && nx >= DREAD_ARENA_LO && nx <= DREAD_ANCHOR_HI && ny >= DREAD_ARENA_LO && ny <= DREAD_ANCHOR_HI &&
+                tfa_dread_footprint_free(b, nx, ny)) {
+            b->x = (int16_t)nx;
+            b->y = (int16_t)ny;
+            return;
+        }
+    }
 }
 
 static TfaNpc* tfa_dread_jelly_spawn(TfaState* s, int x, int y) {
@@ -358,7 +374,7 @@ static void tfa_dread_jump(TfaState* s, TfaNpc* b) {
     for (int dist = 5; dist >= 3 && best_n == 0; dist--) {
         for (int ax = DREAD_ARENA_LO; ax <= DREAD_ANCHOR_HI; ax++) {
             for (int ay = DREAD_ARENA_LO; ay <= DREAD_ANCHOR_HI; ay++) {
-                if (chebyshev_distance(ax, ay, b->x, b->y) != dist) continue;
+                if (chebyshev_distance(ax, ay, b->x, b->y) != dist || !tfa_dread_footprint_free(b, ax, ay)) continue;
                 int score = encounter_rect_distance(tp->x, tp->y, 1, ax, ay, b->size);
                 if (score > best_score) continue;
                 if (score < best_score) { best_score = score; best_n = 0; }

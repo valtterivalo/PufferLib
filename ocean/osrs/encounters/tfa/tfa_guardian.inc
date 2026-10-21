@@ -12,6 +12,8 @@
 #define GUARDIAN_ANIM_RANGED 14751
 #define GUARDIAN_ANIM_SWOOSH 14750
 #define GUARDIAN_ANIM_SPECIAL 14753
+#define GUARDIAN_ANIM_MELEE 14752
+#define GUARDIAN_ANIM_SPAWN 14755
 #define GUARDIAN_ANIM_BREATH 14754
 #define GUARDIAN_ANIM_LAND 14747
 #define GUARDIAN_ANIM_RISE 14748
@@ -26,6 +28,8 @@
 #define GUARDIAN_LOC_MUSHROOM_BURST 62580
 
 typedef struct {
+    int spawn_to_flying;          /* inert 16657 plays 14755 at the challenge start and turns 16659 five ticks later: 19/19 */
+    int spawn_to_attack;          /* first attack nine ticks after 14755: 19/19 */
     int ranged_interval;          /* 14751 -> next attack: 5 in 780/854 */
     int ranged_launch_ticks;      /* 4201 first seen at anim +2: 1034/1034 */
     int ranged_hit_ticks;         /* P0 hit at anim +4: 388/856 */
@@ -33,6 +37,8 @@ typedef struct {
     int ranged_protected_pct;     /* protected hits uniform 0..10 (n=380), 33 * 30% rounds up to 10 */
     int ranged_splash;            /* other players within this distance of the primary also get a projectile: 55/75 of those within 4 did, 53/447 beyond; provisional */
     int ranged_keep_target_of_170;
+    int enraged_swoosh, enraged_swoosh_of; /* an enraged special is followed by the swoosh 14750 three ticks later in 20 of 109, the rule unknown (provisional draw) */
+    int melee_hit_ticks;          /* step-under slam 14752 hits at anim +1 a target still under the 5x5: 1 hit (20 unprayed), 4/4 dodged by stepping out on the anim tick */
     int special_intervals[2];     /* flying-phase special gaps 25 (38) or 30 (21) */
     int first_special;            /* first special of a flying phase, from fight start or rise */
     int land_delay;               /* shield 0 -> 14747 three ticks later, 24/24 */
@@ -60,6 +66,8 @@ typedef struct {
 } TfaGuardianTuning;
 
 static const TfaGuardianTuning TFA_GUARDIAN = {
+    .spawn_to_flying = 5,
+    .spawn_to_attack = 9,
     .ranged_interval = 5,
     .ranged_launch_ticks = 2,
     .ranged_hit_ticks = 4,
@@ -67,6 +75,9 @@ static const TfaGuardianTuning TFA_GUARDIAN = {
     .ranged_protected_pct = 30,
     .ranged_splash = 4,
     .ranged_keep_target_of_170 = 127,
+    .melee_hit_ticks = 1,
+    .enraged_swoosh = 20,
+    .enraged_swoosh_of = 109,
     .special_intervals = { 25, 30 },
     .first_special = 20,
     .land_delay = 3,
@@ -125,7 +136,9 @@ static TfaNpc* tfa_guardian_boss(TfaState* s) {
 
 static void tfa_guardian_enter(TfaState* s) {
     const TfaRoomLayout* l = tfa_room_layout(TFA_ROOM_GUARDIAN);
-    TfaNpc* g = tfa_npc_spawn(s, TFA_NPC_GUARDIAN, MON_TFA_ARCHIVE_GUARDIAN, GUARDIAN_NPC_FLYING, l->boss_x, l->boss_y);
+    TfaNpc* g = tfa_npc_spawn(s, TFA_NPC_GUARDIAN, MON_TFA_ARCHIVE_GUARDIAN, GUARDIAN_NPC_INERT, l->boss_x, l->boss_y);
+    g->attackable = 0;
+    tfa_npc_anim(s, g, GUARDIAN_ANIM_SPAWN);
     g->max_hp = g->hp = tfa_guardian_hp(s);
     g->max_shield = g->shield = tfa_guardian_shield(s);
     for (int i = 0; i < 4; i++)
@@ -133,7 +146,7 @@ static void tfa_guardian_enter(TfaState* s) {
             TFA_GUARDIAN_PYLON_TILES[i][0], TFA_GUARDIAN_PYLON_TILES[i][1]);
     TfaGuardianState* gs = &s->boss.guardian;
     gs->phase = TFA_GUARDIAN_FLYING;
-    gs->ranged_timer = 1;
+    gs->ranged_timer = TFA_GUARDIAN.spawn_to_attack;
     gs->special_timer = TFA_GUARDIAN.first_special;
     gs->target = 0;
 }
@@ -152,10 +165,8 @@ static int tfa_guardian_pick_target(TfaState* s, int current) {
     return n ? c[tfa_rand(s, n)] : -1;
 }
 
-static void tfa_guardian_ranged(TfaState* s, TfaNpc* g) {
+static void tfa_guardian_ranged(TfaState* s, TfaNpc* g, int primary) {
     TfaGuardianState* gs = &s->boss.guardian;
-    int primary = tfa_guardian_pick_target(s, gs->target);
-    if (primary < 0) return;
     gs->target = primary;
     g->target = (int8_t)primary;
     g->act = TFA_ACT_RANGED;
@@ -175,6 +186,34 @@ static void tfa_guardian_ranged(TfaState* s, TfaNpc* g) {
             SPOTANIM_TFA_GUARDIAN_VFX_GUARDIAN_RANGED_PROJANIM01_ANIM, TFA_GUARDIAN.ranged_launch_ticks,
             TFA_GUARDIAN.ranged_hit_ticks - TFA_GUARDIAN.ranged_launch_ticks);
     }
+}
+
+static int tfa_guardian_covers(const TfaNpc* g, int x, int y) {
+    return x >= g->x && x < g->x + g->size && y >= g->y && y < g->y + g->size;
+}
+
+/* A target under the flying 5x5 on the tick before the attack gets the slam 14752 in place of the ranged attack (5/6: arrived under at t-1 4/4,
+   stood under from t-2 1/2, under only at t-2 or only at t 0/10, adjacent never). Same 5-tick slot. The hit is the Guardian's melee max (wiki 25);
+   whether Protect from Melee blocks it is unrecorded (provisional: fully). */
+static void tfa_guardian_slam(TfaState* s, TfaNpc* g, int target) {
+    TfaGuardianState* gs = &s->boss.guardian;
+    gs->target = target;
+    g->target = (int8_t)target;
+    g->act = TFA_ACT_MELEE;
+    tfa_npc_anim(s, g, GUARDIAN_ANIM_MELEE);
+    gs->melee_tick = s->tick + TFA_GUARDIAN.melee_hit_ticks;
+    gs->melee_target = target;
+}
+
+static void tfa_guardian_slam_land(TfaState* s, TfaNpc* g) {
+    TfaGuardianState* gs = &s->boss.guardian;
+    int p = gs->melee_target;
+    gs->melee_tick = 0;
+    const Player* pl = &s->players[p].player;
+    if (!tfa_alive(s, p) || !tfa_guardian_covers(g, pl->x, pl->y)) return;
+    const MonsterStats* m = &MONSTER_DATABASE[g->monster];
+    int dmg = tfa_npc_roll(s, g, p, ATTACK_STYLE_MELEE, osrs_npc_melee_max_hit(m->str_level, m->melee_str_bonus));
+    tfa_queue_npc_hit(s, p, dmg, ATTACK_STYLE_MELEE, 0, 0, g);
 }
 
 static int tfa_guardian_tile_walkable(const TfaState* s, int x, int y) {
@@ -386,6 +425,11 @@ static void tfa_guardian_tick(TfaState* s, TfaContext* ctx) {
     gs->phase_ticks++;
     switch ((TfaGuardianPhase)gs->phase) {
         case TFA_GUARDIAN_FLYING:
+            if (g->npc_id == GUARDIAN_NPC_INERT && s->room_tick >= TFA_GUARDIAN.spawn_to_flying) {
+                g->npc_id = GUARDIAN_NPC_FLYING;
+                g->attackable = 1;
+            }
+            if (gs->melee_tick == s->tick) tfa_guardian_slam_land(s, g);
             if (gs->shield_broke_tick > 0 && !gs->enraged) {
                 if (s->tick - gs->shield_broke_tick < TFA_GUARDIAN.land_delay) break;
                 gs->shield_broke_tick = 0;
@@ -405,7 +449,7 @@ static void tfa_guardian_tick(TfaState* s, TfaContext* ctx) {
                 }
                 if (--gs->special_timer == 0) {
                     tfa_guardian_special(s, g);
-                    gs->swoosh_tick = s->tick + 3;
+                    gs->swoosh_tick = tfa_rand(s, TFA_GUARDIAN.enraged_swoosh_of) < TFA_GUARDIAN.enraged_swoosh ? s->tick + 3 : 0;
                     gs->breath_tick = s->tick + 5;
                     gs->special_timer = 20;
                 }
@@ -435,7 +479,9 @@ static void tfa_guardian_tick(TfaState* s, TfaContext* ctx) {
                 tfa_guardian_special(s, g);
                 gs->special_timer = TFA_GUARDIAN.special_intervals[tfa_rand(s, 2)];
             } else {
-                tfa_guardian_ranged(s, g);
+                int t = tfa_guardian_pick_target(s, gs->target);
+                if (t >= 0 && tfa_guardian_covers(g, s->players[t].player.x, s->players[t].player.y)) tfa_guardian_slam(s, g, t);
+                else if (t >= 0) tfa_guardian_ranged(s, g, t);
             }
             break;
         case TFA_GUARDIAN_GROUNDED: {

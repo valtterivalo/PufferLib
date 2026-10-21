@@ -204,7 +204,7 @@ def load_rule_ids():
 
 
 def recordings():
-    return sorted(REC_DIR.glob("session_20261020T*.jsonl.zst"))
+    return sorted(p for day in ("20261020", "20261021") for p in REC_DIR.glob(f"session_{day}T*.jsonl.zst"))
 
 
 def cached_rows(src):
