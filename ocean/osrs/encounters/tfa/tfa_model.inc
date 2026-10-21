@@ -166,6 +166,7 @@ typedef struct {
     Player player;
     uint8_t life;
     uint8_t stats_dirty;
+    int16_t stat_clock;          /* ticks into the 100-tick stat cycle */
     int16_t death_tick;
     int dest_x, dest_y;
     int dest_explicit;

@@ -502,8 +502,42 @@ def xarth_phase_split(fights):
     return p1, p2
 
 
+def drained_misses(fights, boss_ids, sim):
+    """Zero share of P0's and the others' splats (1-3 left out: thralls) on the boss from 15 ticks after the first Tonalztics throw
+    (projectile 2727; the sim dump has no player projectiles and every sim raid opens with them, so its window starts at tick 15)."""
+    out = {"P0": [0, 0], "others": [0, 0]}
+    for ev in fights.values():
+        throws = [e["t"] for e in ev if e["kind"] == "PROJ" and e["id"] == "2727"]
+        if not sim and not throws:
+            continue
+        start = (0 if sim else min(throws)) + 15
+        for e in ev:
+            if e["kind"] != "HIT" or base(e["actor"]) not in boss_ids or e["t"] < start or 1 <= int(e["id"]) <= 3:
+                continue
+            who = "P0" if e["a"] in P0_SPLATS | {"18", "44"} else "others" if e["a"] in ("13", "17", "19", "43") else None
+            if who:
+                out[who][0] += 1
+                out[who][1] += e["id"] == "0"
+    return out
+
+
+def drained_miss_law(name, boss_ids, real, sim, failures, tol=0.15):
+    """A defence floor moves the drained misses by about 0.25 (Xarth: 0.03 with the drain to 0, 0.30 at the wiki's floor of 102), so a gap over 0.15
+    means one side has a floor the other lacks. The sim sits about 0.10 above live: its Division throws land 0.75 against roughly 0.9 live, open."""
+    r, s = drained_misses(real, boss_ids, False), drained_misses(sim, boss_ids, True)
+    for who in ("P0", "others"):
+        if r[who][0] < 20:
+            continue
+        rv, sv = r[who][1] / r[who][0], s[who][1] / max(s[who][0], 1)
+        ok = abs(rv - sv) <= tol
+        if not ok:
+            failures.append(f"{name} {who}")
+        print(f"{'ok ' if ok else 'BAD'} {name + ' ' + who:28s} real {rv:.2f} (n={r[who][0]}){'':22s} sim {sv:.2f} (n={s[who][0]})")
+
+
 def xarth(real, sim):
     failures = []
+    drained_miss_law("miss after the drain", {"16684"}, real, sim, failures)
     for phase, r, s in zip(("P1", "P2"), xarth_phase_split(real), xarth_phase_split(sim)):
         compare(f"14984 next attack {phase}", next_attack(r, "xarth", "14984"), next_attack(s, "xarth", "14984"), failures)
     for anim in ("14985", "14992", "14989"):
@@ -580,7 +614,7 @@ def bork_gong_hit_offsets(fights):
             (live.add if e["kind"] == "OBJ+" else live.discard)((int(e["x"]), int(e["y"])))
             scorch[e["t"]] = set(live)
         def burning(t, x, y):
-            return (x, y) in scorch[max((k for k in scorch if k < t), default=None)] if any(k < t for k in scorch) else False
+            return any(k <= t for k in scorch) and (x, y) in scorch[max(k for k in scorch if k <= t)]
         hits = collections.defaultdict(list)
         for e in ev:
             if e["kind"] == "HIT" and e["actor"].startswith("P") and e["a"] in ("16", "17") and int(e["id"]) >= 5 and (e["t"], e["actor"]) not in lands \

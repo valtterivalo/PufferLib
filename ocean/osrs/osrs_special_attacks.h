@@ -48,7 +48,7 @@ typedef struct {
     int spec_cost;
     int attack_speed_override;  /* 0 = use weapon speed */
     int landed;                 /* the accuracy roll passed (set by the specials whose follow-up needs it: Zaryte crossbow) */
-    int def_drain_magic_pct;    /* the caller lowers Defence by this percent of the target's Magic level (Tonalztics of ralos) */
+    int def_drain_magic_hits;   /* the caller lowers Defence by an eighth of the target's Magic level this many times (Tonalztics of Ralos) */
 } SpecResult;
 
 /** Spec energy cost by weapon item index; 0 = the weapon has no special (the Soulreaper axe has one that costs stacks, not energy: osrs_spec_is_stack_special). */
@@ -86,6 +86,28 @@ static inline int osrs_spec_cost(int weapon_item_idx) {
         default:                        return 0;
     }
 }
+/** Division (wiki, since 22 July 2026): 50% more accuracy, two throws of 0..75% of the max hit, each throw that deals damage lowers Defence by an
+    eighth of the target's Magic level. With magic_level > 0 the second roll goes against the lowered Defence (NPCs); def_level and def_bonus
+    are the target's Defence level and the ranged defence bonus the throw rolls against. */
+static inline SpecResult osrs_tonalztics_division(int att_roll, int max_hit, int def_roll, int def_level, int magic_level, int def_bonus, uint32_t* rng_state) {
+    SpecResult r = {0};
+    r.spec_cost = 50;
+    r.num_hits = 2;
+    int spec_att = att_roll * 3 / 2;
+    for (int i = 0; i < 2; i++) {
+        if (!encounter_roll_hit_chance(rng_state, spec_att, def_roll)) continue;
+        r.damage[i] = encounter_rand_int(rng_state, max_hit * 3 / 4 + 1);
+        if (r.damage[i] == 0) continue;
+        r.def_drain_magic_hits++;
+        if (magic_level > 0) {
+            def_level = def_level > magic_level / 8 ? def_level - magic_level / 8 : 0;
+            def_roll = osrs_npc_def_roll(def_level, def_bonus);
+        }
+    }
+    r.total_damage = r.damage[0] + r.damage[1];
+    return r;
+}
+
 /** Resolve a special attack by weapon item index. */
 static inline SpecResult osrs_resolve_spec(
     int weapon_item_idx, int att_roll, int max_hit,
@@ -337,18 +359,10 @@ static inline SpecResult osrs_resolve_spec(
     }
 
     /* Division (wiki Tonalztics_of_Ralos): two throws at 50% more accuracy, each landed throw lowers Defence by 10% of the target's Magic level. */
-    case ITEM_TONALZTICS_OF_RALOS: {
-        int spec_att = att_roll * 3 / 2;
-        r.spec_cost = 50;
-        r.num_hits = 2;
-        for (int i = 0; i < 2; i++) {
-            if (!encounter_roll_hit_chance(rng_state, spec_att, def_roll)) continue;
-            r.damage[i] = encounter_rand_int(rng_state, max_hit + 1);
-            r.def_drain_magic_pct += 10;
-        }
-        r.total_damage = r.damage[0] + r.damage[1];
+    case ITEM_TONALZTICS_OF_RALOS:
+        /* Against a player the second roll keeps the first roll's Defence (Mod Ash); NPCs use osrs_resolve_spec_npc. */
+        r = osrs_tonalztics_division(att_roll, max_hit, def_roll, 0, 0, 0, rng_state);
         break;
-    }
 
     case ITEM_TOXIC_BLOWPIPE: {
         int spec_att = att_roll * 2;
@@ -473,6 +487,14 @@ static inline SpecResult osrs_resolve_spec(
     return r;
 }
 
+/** osrs_resolve_spec against an NPC: Division rolls its second throw against the Defence its first throw lowered (Mod Ash). */
+static inline SpecResult osrs_resolve_spec_npc(int weapon_item_idx, int att_roll, int max_hit, int def_roll, int target_def_level,
+        int target_magic_level, int target_def_bonus, uint32_t* rng_state) {
+    if (weapon_item_idx == ITEM_TONALZTICS_OF_RALOS)
+        return osrs_tonalztics_division(att_roll, max_hit, def_roll, target_def_level, target_magic_level, target_def_bonus, rng_state);
+    return osrs_resolve_spec(weapon_item_idx, att_roll, max_hit, def_roll, target_def_level, rng_state);
+}
+
 /** Rewrite an already-resolved special attack to the weapon's deterministic
     best outcome (guaranteed-max path). */
 static inline void osrs_spec_result_force_max(
@@ -512,9 +534,9 @@ static inline void osrs_spec_result_force_max(
 
     case ITEM_TONALZTICS_OF_RALOS:
         forced.num_hits = 2;
-        forced.damage[0] = max_hit;
-        forced.damage[1] = max_hit;
-        forced.def_drain_magic_pct = 20;
+        forced.damage[0] = max_hit * 3 / 4;
+        forced.damage[1] = max_hit * 3 / 4;
+        forced.def_drain_magic_hits = 2;
         break;
 
     case ITEM_BGS:

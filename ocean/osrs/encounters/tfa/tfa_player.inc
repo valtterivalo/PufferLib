@@ -59,8 +59,7 @@ static void tfa_player_apply_inventory(TfaState* s, int p, const int* acts) {
         OsrsInventoryUseResult r = osrs_player_use_inventory(
             &tp->player, &tp->use, NULL, step.cell_idx, s->tick);
         assert(r != OSRS_INVENTORY_USE_ESCAPED);
-        if (r == OSRS_INVENTORY_USE_CONSUMED && step.kind == OSRS_INVENTORY_APPLY_EQUIP)
-            tfa_mark_stats_dirty(tp);
+        if (r == OSRS_INVENTORY_USE_CONSUMED) tfa_mark_stats_dirty(tp);
     }
 }
 
@@ -154,7 +153,8 @@ static void tfa_player_attack(TfaState* s, int p, TfaNpc* n) {
     if (tp->player.spec_armed && osrs_spec_cost(weapon) > 0 &&
             tp->player.special_energy >= osrs_spec_cost(weapon)) {
         int att_roll = osrs_player_att_roll(ls->eff_level, ls->attack_bonus);
-        SpecResult sr = osrs_resolve_spec(weapon, att_roll, ls->max_hit, def_roll, tfa_npc_def_level(n), &s->rng_state);
+        SpecResult sr = osrs_resolve_spec_npc(weapon, att_roll, ls->max_hit, def_roll, tfa_npc_def_level(n), m->magic_level,
+            osrs_ranged_def_bonus_for_weapon(weapon, m->ranged_light_def, m->ranged_def, m->ranged_heavy_def), &s->rng_state);
         if (weapon == ITEM_ZARYTE_CROSSBOW) {
             BoltProcResult bp = osrs_resolve_bolt_proc(ammo, sr.damage[0], sr.landed, ls->max_hit, tp->player.current_ranged,
                 n->hp, tp->player.current_hitpoints, 1, 1, 1, &s->rng_state);
@@ -265,6 +265,11 @@ static void tfa_player_tick_timers(TfaState* s, int p) {
     if (pl->food_timer > 0) pl->food_timer--;
     if (pl->karambwan_timer > 0) pl->karambwan_timer--;
     if (pl->potion_timer > 0) pl->potion_timer--;
+    if (++tp->stat_clock == 100) {
+        tp->stat_clock = 0;
+        encounter_stat_decay_step(pl);
+        tfa_mark_stats_dirty(tp);
+    }
     if (tp->weary_ticks > 0) tp->weary_ticks--;
     if (tp->rooted_ticks > 0) tp->rooted_ticks--;
     if (tp->stunned_ticks > 0) tp->stunned_ticks--;

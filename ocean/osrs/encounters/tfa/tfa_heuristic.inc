@@ -348,6 +348,7 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
             }
         }
     }
+    /* Restores also bring Ranged back from the brews: P0's boosted Ranged sat at 99 (p10 78-99) through every recorded fight. */
     for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++) {
         OsrsInventoryClickResolution r =
             osrs_inventory_cell_click_interpret(&tp->player.inventory_cells[cell], OSRS_CLICK_TICK_FIRST);
@@ -355,7 +356,7 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
                 osrs_can_eat_consumable_kind(&tp->player, r.consumable_kind))
             acts[OSRS_HEAD_EAT] = cell + 1;
         if (r.click_action == OSRS_CLICK_DRINK && tp->player.potion_timer == 0 && !acts[OSRS_HEAD_DRINK] &&
-                ((r.consumable_kind == OSRS_CONSUMABLE_SUPER_RESTORE && tp->player.current_prayer < 30) ||
+                ((r.consumable_kind == OSRS_CONSUMABLE_SUPER_RESTORE && (tp->player.current_prayer < 30 || tp->player.current_ranged < 90)) ||
                  (r.consumable_kind == OSRS_CONSUMABLE_BREW && tp->player.current_hitpoints < 70)))
             acts[OSRS_HEAD_DRINK] = cell + 1;
     }

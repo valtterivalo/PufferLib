@@ -271,9 +271,11 @@ static int tfa_npc_def_level(const TfaNpc* n) {
 }
 
 /* Special attack drains floor Defence at 0. */
+/* No defence floor: after two Tonalztics specials (an eighth of Magic per damaging throw, 4 x 43 on Xarth) the recorded misses on Xarth fall from
+   0.38 to 0.00-0.07, defence 0; the wiki's floor of 102 would leave about 0.30. */
 static void tfa_npc_drain_defence(TfaNpc* n, const SpecResult* sr) {
     const MonsterStats* m = &MONSTER_DATABASE[n->monster];
-    n->def_drain += sr->def_drain + m->magic_level * sr->def_drain_magic_pct / 100;
+    n->def_drain += sr->def_drain + m->magic_level / 8 * sr->def_drain_magic_hits;
     if (n->def_drain > m->def_level) n->def_drain = m->def_level;
 }
 

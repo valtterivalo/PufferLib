@@ -6,11 +6,19 @@ static const struct { uint16_t raw_osrs_id; int count; } TFA_SUPPLIES[] = {
     { 13441, 1 },
 };
 
-/* Boosted levels on the recorded menu actions: Defence 120 and 119 most often, Attack and Strength 118 (super combat), Ranged 112 (divine
-   ranging), Magic unboosted (14054 of 18980). */
-#define TFA_BOOSTED_MELEE 118
+/* Raiders re-boost on each room's way in: P0's boosted levels at the room's first tick (median over the recorded fights, n in brackets).
+   Defence 117-120 everywhere, Magic unboosted. Dagon'hai is unrecorded and takes the Guardian's. */
 #define TFA_BOOSTED_DEFENCE 120
-#define TFA_BOOSTED_RANGED 112
+static const struct { int16_t melee, ranged; } TFA_ROOM_BOOSTS[TFA_ROOM_COUNT] = {
+    [TFA_ROOM_GUARDIAN] = { 118, 112 },   /* 25 */
+    [TFA_ROOM_BORK] = { 118, 99 },        /* 2: 118 and 99 melee */
+    [TFA_ROOM_EZEKIEL] = { 118, 99 },     /* 19 */
+    [TFA_ROOM_DREADNOTH] = { 115, 99 },   /* 15 */
+    [TFA_ROOM_MOIA] = { 108, 99 },        /* 1 */
+    [TFA_ROOM_XARTH] = { 99, 112 },       /* 5 */
+    [TFA_ROOM_DAGONHAI] = { 118, 112 },
+    [TFA_ROOM_OCELLUS] = { 99, 110 },     /* 7 */
+};
 
 static void tfa_player_reset(TfaState* s, int p) {
     TfaPlayer* tp = &s->players[p];
@@ -23,9 +31,6 @@ static void tfa_player_reset(TfaState* s, int p) {
     osrs_item_effect_state_init(&pl->item_effect_state);
     osrs_interaction_init(&pl->interaction);
     tp->kit = p == 0 ? TFA_KIT_CROSSBOW : TFA_KIT_BOW;
-    pl->current_attack = pl->current_strength = TFA_BOOSTED_MELEE;
-    pl->current_defence = TFA_BOOSTED_DEFENCE;
-    pl->current_ranged = TFA_BOOSTED_RANGED;
     encounter_apply_loadout(pl, TFA_KIT_WORN[tp->kit], GEAR_RANGED);
     int cell = 0;
     for (size_t k = 0; k < sizeof(TFA_KIT_MELEE) / sizeof(*TFA_KIT_MELEE); k++) pl->inventory_cells[cell++] = osrs_inventory_cell_from_item(TFA_KIT_MELEE[k]);
@@ -65,6 +70,11 @@ static void tfa_room_enter(TfaState* s, int room) {
         osrs_interaction_clear(&tp->player.interaction);
         osrs_actor_route_cache_clear(&tp->route_cache);
         tp->incoming.count = 0;
+        tp->player.current_attack = tp->player.current_strength = TFA_ROOM_BOOSTS[room].melee;
+        tp->player.current_ranged = TFA_ROOM_BOOSTS[room].ranged;
+        tp->player.current_defence = TFA_BOOSTED_DEFENCE;
+        tp->stat_clock = 0;
+        tfa_mark_stats_dirty(tp);
     }
     tfa_boss_enter(s);
 }

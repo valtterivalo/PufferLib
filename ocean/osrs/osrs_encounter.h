@@ -1759,6 +1759,13 @@ static inline void encounter_apply_stat_restore(Player* p, int (*amount)(int)) {
     }
 }
 
+/** One step of the 100-tick stat cycle: each boosted combat stat (not Hitpoints or Prayer) falls by one toward its base, each drained one rises by one. */
+static inline void encounter_stat_decay_step(Player* p) {
+    int* cur[5] = { &p->current_attack, &p->current_strength, &p->current_defence, &p->current_ranged, &p->current_magic };
+    const int base[5] = { p->base_attack, p->base_strength, p->base_defence, p->base_ranged, p->base_magic };
+    for (int k = 0; k < 5; k++) *cur[k] += (*cur[k] < base[k]) - (*cur[k] > base[k]);
+}
+
 static inline void encounter_restore_stats(Player* p) {
     encounter_apply_stat_restore(p, osrs_super_restore_amount);
 }

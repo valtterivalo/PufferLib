@@ -764,6 +764,7 @@ static void oc_p2_enter(TfaState* s, TfaNpc* n) {
     os->phase_start = s->tick;
     n->npc_id = OC_NPC_P2;
     n->monster = MON_TFA_OCELLUS_P2;
+    n->def_drain = 0;
     n->attackable = 0;
     n->act = TFA_ACT_IDLE;
     n->hp = n->max_hp = tfa_party_hp(s->team_size, TFA_OC1.hp_base_p3, TFA_OC1.hp_base_p3 * TFA_TRIO_SCALE_PCT / 100);
