@@ -89,10 +89,10 @@ static void tfa_mark_stats_dirty(TfaPlayer* tp) {
     tp->stats_dirty = 1;
 }
 
+/* An empty weapon slot punches: melee. */
 static AttackStyle tfa_player_weapon_style(const TfaPlayer* tp) {
     AttackStyle style = (AttackStyle)get_item_attack_style(tp->player.equipped[GEAR_SLOT_WEAPON]);
-    assert(style != ATTACK_STYLE_NONE);
-    return style;
+    return style == ATTACK_STYLE_NONE ? ATTACK_STYLE_MELEE : style;
 }
 
 static FightStyle tfa_default_fight_style(AttackStyle style) {
