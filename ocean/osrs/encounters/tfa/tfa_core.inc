@@ -77,14 +77,6 @@ static int tfa_player_npc_distance(const TfaPlayer* tp, const TfaNpc* n) {
     return encounter_rect_distance(tp->player.x, tp->player.y, 1, n->x, n->y, n->size);
 }
 
-static int tfa_player_in_rect(const TfaPlayer* tp, int x, int y, int w, int h) {
-    return tp->player.x >= x && tp->player.x < x + w && tp->player.y >= y && tp->player.y < y + h;
-}
-
-static int tfa_player_under_npc(const TfaPlayer* tp, const TfaNpc* n) {
-    return tfa_player_in_rect(tp, n->x, n->y, n->size, n->size);
-}
-
 static void tfa_mark_stats_dirty(TfaPlayer* tp) {
     tp->stats_dirty = 1;
 }
@@ -287,4 +279,22 @@ static void tfa_hazard_hit_player(TfaState* s, const TfaHazard* h, int p) {
         osrs_poison_apply(&tp->poison, 6, OSRS_POISON_PERIOD);
     if (h->effect == TFA_EFFECT_BURN)
         tp->burn_ticks = 10;
+}
+
+/* A projectile from NPC src to player p, launched delay ticks from now and flying duration ticks. */
+static void tfa_fx_projectile(TfaState* s, const TfaNpc* src, int p, int gfx_id, uint32_t model, int anim, int delay, int duration) {
+    if (s->fx_count >= TFA_MAX_FX) {
+        fprintf(stderr, "tfa fx capacity %d exceeded tick=%d\n", TFA_MAX_FX, s->tick);
+        abort();
+    }
+    s->fx[s->fx_count++] = (TfaFx){
+        .kind = TFA_FX_PROJECTILE,
+        .src_slot = (int8_t)tfa_npc_slot(s, src),
+        .dst_player = (int8_t)p,
+        .delay = (int16_t)delay,
+        .duration = (int16_t)duration,
+        .gfx_id = gfx_id,
+        .model = model,
+        .anim = anim,
+    };
 }

@@ -1,8 +1,6 @@
 typedef enum {
     TFA_GUARDIAN_FLYING = 0,
-    TFA_GUARDIAN_LANDING,
     TFA_GUARDIAN_GROUNDED,
-    TFA_GUARDIAN_RISING,
     TFA_GUARDIAN_DYING,
 } TfaGuardianPhase;
 

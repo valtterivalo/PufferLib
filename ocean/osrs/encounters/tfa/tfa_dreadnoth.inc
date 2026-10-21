@@ -10,7 +10,10 @@
 #define DREAD_ANIM_DEATH 14782
 #define DREAD_ANIM_JELLY_SPAWN 15162
 #define DREAD_ANIM_JELLY_DEATH 1587
-#define DREAD_GFX_BLOOD_TILE 62609
+#define DREAD_LOC_BLOOD_TILE 62609
+#define DREAD_PROJ_VOLLEY 4211
+#define DREAD_PROJ_GLOB 4212
+#define DREAD_PROJ_LAUNCH 2
 
 #define DREAD_ARENA_LO 24
 #define DREAD_ARENA_HI 38
@@ -135,7 +138,7 @@ static void tfa_dread_schedule(TfaState* s, int tick, TfaDreadEventKind kind, in
 static int tfa_dread_blood_at(const TfaState* s, int x, int y) {
     for (int i = 0; i < TFA_MAX_HAZARDS; i++) {
         const TfaHazard* h = &s->hazards[i];
-        if (h->kind == TFA_HAZ_FLOOR && h->gfx_id == DREAD_GFX_BLOOD_TILE && h->x == x && h->y == y) return 1;
+        if (h->kind == TFA_HAZ_FLOOR && h->loc_id == DREAD_LOC_BLOOD_TILE && h->x == x && h->y == y) return 1;
     }
     return 0;
 }
@@ -158,7 +161,7 @@ static void tfa_dread_blood(TfaState* s, int x, int y) {
         .min_damage = (int16_t)TFA_DREAD.blood_min,
         .max_damage = (int16_t)TFA_DREAD.blood_max,
         .protected_pct = 100,
-        .gfx_id = DREAD_GFX_BLOOD_TILE,
+        .loc_id = DREAD_LOC_BLOOD_TILE,
     });
 }
 
@@ -306,9 +309,12 @@ static void tfa_dread_slam(TfaState* s, TfaNpc* b) {
         if (!tfa_alive(s, p)) continue;
         tfa_queue_npc_hit_land(s, p, tfa_npc_roll(s, b, p, ATTACK_STYLE_MELEE, TFA_DREAD.slam_melee_max),
             ATTACK_STYLE_MELEE, TFA_DREAD.slam_melee_delay, 0, b);
-        for (int k = 0; k < 3; k++)
+        for (int k = 0; k < 3; k++) {
             tfa_queue_npc_hit_land(s, p, tfa_npc_roll(s, b, p, ATTACK_STYLE_RANGED, TFA_DREAD.volley_max),
                 ATTACK_STYLE_RANGED, TFA_DREAD.volley_delay[k], 0, b);
+            tfa_fx_projectile(s, b, p, DREAD_PROJ_VOLLEY, SPOTANIM_TFA_DREADNOTH_TFA_UNNAMED_4211,
+                SPOTANIM_TFA_DREADNOTH_TFA_UNNAMED_4211_ANIM, DREAD_PROJ_LAUNCH, TFA_DREAD.volley_delay[k] - DREAD_PROJ_LAUNCH);
+        }
     }
     tfa_dread_pick_spawn_tiles(s, TFA_DREAD.spawn_tiles[d->phase_slams - 1]);
     for (int k = 0; k < TFA_DREAD.blood_per_slam; k++)
@@ -373,6 +379,10 @@ static void tfa_dread_fire_event(TfaState* s, TfaNpc* b, const TfaDreadEvent* ev
             if (!tfa_alive(s, p)) return;
             tfa_queue_npc_hit_land(s, p, tfa_npc_roll(s, b, p, ATTACK_STYLE_RANGED, TFA_DREAD.volley_max),
                 ATTACK_STYLE_RANGED, TFA_DREAD.jump_volley_delay, 0, b);
+            tfa_fx_projectile(s, b, p, DREAD_PROJ_VOLLEY, SPOTANIM_TFA_DREADNOTH_TFA_UNNAMED_4211,
+                SPOTANIM_TFA_DREADNOTH_TFA_UNNAMED_4211_ANIM, 0, TFA_DREAD.jump_volley_delay);
+            tfa_fx_projectile(s, b, p, DREAD_PROJ_GLOB, SPOTANIM_TFA_DREADNOTH_TFA_UNNAMED_4212,
+                SPOTANIM_TFA_DREADNOTH_TFA_UNNAMED_4212_ANIM, 0, TFA_DREAD.glob_delay);
             tfa_dread_schedule(s, s->tick + TFA_DREAD.glob_delay, TFA_DREAD_EV_GLOB, p, s->players[p].player.x, s->players[p].player.y);
             return;
         }

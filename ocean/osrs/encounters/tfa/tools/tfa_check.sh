@@ -19,7 +19,7 @@ nice -n 19 $out/wrapper || exit 1
 fail=0
 for spec in "guardian 0 2" "guardian 0 3" "xarth 5 3" "dreadnoth 3 3"; do
     set -- ${=spec}
-    nice -n 19 $out/dump $2 $3 30 1 > $out/$1_$3.tsv 2>/dev/null || exit 1
+    nice -n 19 $out/dump $2 $3 60 1 > $out/$1_$3.tsv 2>/dev/null || exit 1
     echo "== $1 team $3"
     nice -n 19 python3 ocean/osrs/encounters/tfa/tools/tfa_compare.py $1 $out/$1_$3.tsv $3 | tail -1
     [ ${pipestatus[1]} -eq 0 ] || fail=1
