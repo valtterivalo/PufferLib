@@ -15,17 +15,17 @@
 #define EZEKIEL_ANIM_FINALE 14694
 #define EZEKIEL_ANIM_DEATH 14697
 #define EZEKIEL_PROJ_MAGIC 4167
-#define EZEKIEL_GFX_STAR 4172
-#define EZEKIEL_GFX_SWORD_LINE 4181
+#define EZEKIEL_GFX_STAR_SPAWN 4170
+#define EZEKIEL_GFX_STAR_MARKER 4171
+#define EZEKIEL_GFX_STAR_EXPLOSION 4172
+#define EZEKIEL_GFX_CLEAVE_DUST 4394
 #define EZEKIEL_GFX_FINALE_IMPACT 4197
 
 #define EZEKIEL_ARENA_LO 24
 #define EZEKIEL_ARENA_HI 36
 #define EZEKIEL_ARENA_SPAN 15
-#define EZEKIEL_STAR_TABLE_SIZE 41
-#define EZEKIEL_STAR_ORIGIN 4
-#define EZEKIEL_STAR_ROWS 11
-#define EZEKIEL_STAR_COLS 11
+#define EZEKIEL_STAR_LO 27
+#define EZEKIEL_STAR_HI 35
 #define EZEKIEL_FINALE_CELL 30
 
 typedef struct {
@@ -68,7 +68,11 @@ typedef struct {
     int finale_roll_to_cast;     /* 14684 -> 14694 +3: 13/13 */
     int finale_first_wave;       /* first wave 9 ticks after 14694, then every 11: 133 waves */
     int finale_wave_interval;
-    int finale_land_min, finale_land_span; /* impacts land 4, 5 or 6 ticks after creation (57, 82, 68) */
+    int finale_land_min;         /* layer 0 lands 4 ticks after the wave, each later layer one tick on (125/155/185 cycle delays, 172/172) */
+    int star_fx_delay[3];        /* spawn, marker, explosion base delay in cycles, plus 2 per arm level (162/162) */
+    int cleave_delay_min, cleave_delay_span; /* dust delay 6, 7 or 8 cycles in equal thirds (2756/2700/2708 of 8164 tiles) */
+    int finale_layer_delay;      /* layer 0 delay 125 cycles, then 30 per layer (172/172) */
+    int finale_column_delay;     /* plus 2 cycles per tile away from the boss side (172/172) */
     int finale_min_damage, finale_max_damage; /* 5..22 typeless (n=131) */
     int death_to_clear;          /* 14697 -> challenge complete 10 ticks later: 14/14 */
 } TfaEzekielTuning;
@@ -118,56 +122,14 @@ static const TfaEzekielTuning TFA_EZEKIEL = {
     .finale_first_wave = 9,
     .finale_wave_interval = 11,
     .finale_land_min = 4,
-    .finale_land_span = 3,
+    .star_fx_delay = { 35, 65, 95 },
+    .cleave_delay_min = 6,
+    .cleave_delay_span = 3,
+    .finale_layer_delay = 125,
+    .finale_column_delay = 2,
     .finale_min_damage = 5,
     .finale_max_damage = 22,
     .death_to_clear = 10,
-};
-
-/* Star tiles relative to Ezekiel's SW tile as row bitmasks (row = y + 4, bit = x + 4), one row per recorded distinct
-   pattern with its count in 162 specials: a ring around him plus arms of random length on each side. */
-static const struct { int weight; uint16_t rows[EZEKIEL_STAR_ROWS]; } TFA_EZEKIEL_STARS[EZEKIEL_STAR_TABLE_SIZE] = {
-    { 11, { 0x000, 0x020, 0x070, 0x0f8, 0x08c, 0x08f, 0x08c, 0x0f8, 0x070, 0x020, 0x000 }, },
-    { 9, { 0x000, 0x020, 0x070, 0x0f8, 0x188, 0x788, 0x188, 0x0f8, 0x070, 0x020, 0x000 }, },
-    { 9, { 0x000, 0x000, 0x000, 0x0f8, 0x18c, 0x38e, 0x18c, 0x0f8, 0x070, 0x020, 0x020 }, },
-    { 7, { 0x020, 0x020, 0x070, 0x0f8, 0x18c, 0x18f, 0x18c, 0x000, 0x000, 0x000, 0x000 }, },
-    { 7, { 0x000, 0x000, 0x070, 0x0f8, 0x18c, 0x78c, 0x18c, 0x0f8, 0x070, 0x020, 0x020 }, },
-    { 6, { 0x020, 0x020, 0x070, 0x0f8, 0x18c, 0x38e, 0x18c, 0x000, 0x000, 0x000, 0x000 }, },
-    { 6, { 0x020, 0x020, 0x070, 0x0f8, 0x18c, 0x78c, 0x18c, 0x000, 0x000, 0x000, 0x000 }, },
-    { 6, { 0x000, 0x000, 0x070, 0x0f8, 0x18c, 0x38e, 0x18c, 0x0f8, 0x070, 0x020, 0x020 }, },
-    { 6, { 0x020, 0x020, 0x070, 0x0f8, 0x08c, 0x08f, 0x08c, 0x0f8, 0x070, 0x000, 0x000 }, },
-    { 5, { 0x020, 0x020, 0x070, 0x078, 0x00c, 0x00f, 0x00c, 0x078, 0x000, 0x000, 0x000 }, },
-    { 5, { 0x020, 0x020, 0x070, 0x0f8, 0x08c, 0x08f, 0x08c, 0x0f8, 0x000, 0x000, 0x000 }, },
-    { 5, { 0x020, 0x020, 0x070, 0x0f8, 0x18c, 0x38e, 0x18c, 0x0f8, 0x000, 0x000, 0x000 }, },
-    { 5, { 0x000, 0x020, 0x070, 0x0f8, 0x18c, 0x18f, 0x18c, 0x0f8, 0x070, 0x020, 0x000 }, },
-    { 5, { 0x000, 0x020, 0x070, 0x0f8, 0x18c, 0x78c, 0x18c, 0x0f8, 0x070, 0x020, 0x000 }, },
-    { 5, { 0x020, 0x020, 0x070, 0x0f8, 0x18c, 0x38e, 0x18c, 0x0f8, 0x070, 0x000, 0x000 }, },
-    { 5, { 0x000, 0x020, 0x070, 0x078, 0x00c, 0x00f, 0x00c, 0x078, 0x070, 0x020, 0x000 }, },
-    { 4, { 0x020, 0x020, 0x070, 0x0f8, 0x18c, 0x18f, 0x18c, 0x0f8, 0x000, 0x000, 0x000 }, },
-    { 4, { 0x020, 0x020, 0x070, 0x0f8, 0x18c, 0x18f, 0x18c, 0x0f8, 0x070, 0x000, 0x000 }, },
-    { 4, { 0x000, 0x020, 0x070, 0x0f0, 0x180, 0x780, 0x180, 0x0f0, 0x070, 0x020, 0x000 }, },
-    { 4, { 0x000, 0x000, 0x070, 0x078, 0x00c, 0x00f, 0x00c, 0x078, 0x070, 0x020, 0x020 }, },
-    { 3, { 0x000, 0x000, 0x070, 0x0f0, 0x180, 0x780, 0x180, 0x0f0, 0x070, 0x020, 0x020 }, },
-    { 3, { 0x000, 0x000, 0x000, 0x0f8, 0x18c, 0x18f, 0x18c, 0x0f8, 0x070, 0x020, 0x020 }, },
-    { 3, { 0x020, 0x020, 0x070, 0x0f8, 0x18c, 0x78c, 0x18c, 0x0f8, 0x000, 0x000, 0x000 }, },
-    { 3, { 0x000, 0x020, 0x070, 0x0f8, 0x18c, 0x38e, 0x18c, 0x0f8, 0x070, 0x020, 0x000 }, },
-    { 3, { 0x000, 0x000, 0x000, 0x0f8, 0x18c, 0x78c, 0x18c, 0x0f8, 0x070, 0x020, 0x020 }, },
-    { 3, { 0x000, 0x000, 0x070, 0x0f8, 0x18c, 0x18f, 0x18c, 0x0f8, 0x070, 0x020, 0x020 }, },
-    { 3, { 0x020, 0x020, 0x070, 0x0f8, 0x188, 0x788, 0x188, 0x0f8, 0x070, 0x000, 0x000 }, },
-    { 3, { 0x000, 0x000, 0x000, 0x0f8, 0x08c, 0x08f, 0x08c, 0x0f8, 0x070, 0x020, 0x020 }, },
-    { 2, { 0x020, 0x020, 0x070, 0x0f8, 0x18c, 0x78c, 0x18c, 0x0f8, 0x070, 0x000, 0x000 }, },
-    { 2, { 0x000, 0x000, 0x070, 0x0f8, 0x188, 0x788, 0x188, 0x0f8, 0x070, 0x020, 0x020 }, },
-    { 2, { 0x020, 0x020, 0x070, 0x0f8, 0x08c, 0x08f, 0x08c, 0x000, 0x000, 0x000, 0x000 }, },
-    { 2, { 0x020, 0x020, 0x070, 0x0f8, 0x188, 0x788, 0x188, 0x0f8, 0x000, 0x000, 0x000 }, },
-    { 2, { 0x000, 0x000, 0x000, 0x0f0, 0x180, 0x780, 0x180, 0x0f0, 0x070, 0x020, 0x020 }, },
-    { 2, { 0x020, 0x020, 0x070, 0x078, 0x00c, 0x00f, 0x00c, 0x078, 0x070, 0x000, 0x000 }, },
-    { 2, { 0x020, 0x020, 0x070, 0x0f0, 0x180, 0x780, 0x180, 0x0f0, 0x070, 0x000, 0x000 }, },
-    { 1, { 0x000, 0x000, 0x000, 0x000, 0x08c, 0x08f, 0x08c, 0x0f8, 0x070, 0x020, 0x020 }, },
-    { 1, { 0x020, 0x020, 0x070, 0x0f8, 0x188, 0x788, 0x188, 0x000, 0x000, 0x000, 0x000 }, },
-    { 1, { 0x000, 0x000, 0x000, 0x000, 0x18c, 0x18f, 0x18c, 0x0f8, 0x070, 0x020, 0x020 }, },
-    { 1, { 0x000, 0x000, 0x000, 0x0f8, 0x188, 0x788, 0x188, 0x0f8, 0x070, 0x020, 0x020 }, },
-    { 1, { 0x000, 0x000, 0x000, 0x000, 0x18c, 0x78c, 0x18c, 0x0f8, 0x070, 0x020, 0x020 }, },
-    { 1, { 0x000, 0x000, 0x000, 0x078, 0x00c, 0x00f, 0x00c, 0x078, 0x070, 0x020, 0x020 }, },
 };
 
 /* Four-sword volleys: two lines, each swept by a sword from either wall. Counts in 105 recorded volleys. */
@@ -182,13 +144,6 @@ static const struct { int weight; int8_t row[2]; int8_t coord[2]; } TFA_EZEKIEL_
     { 5, { 0, 1 }, { 33, 27 } },
     { 3, { 0, 1 }, { 27, 33 } },
     { 3, { 1, 1 }, { 28, 33 } },
-};
-
-/* Finale impacts per tile of the central 3x3, indexed [y - 30][x - 30]: 20 per wave, identical in every recorded wave. */
-static const int8_t TFA_EZEKIEL_WAVE_IMPACTS[3][3] = {
-    { 3, 2, 1 },
-    { 3, 3, 2 },
-    { 3, 2, 1 },
 };
 
 static const int8_t TFA_EZEKIEL_RING[16][2] = {
@@ -260,13 +215,19 @@ static void tfa_ezekiel_walk(TfaState* s, TfaNpc* x, int tank) {
     }
 }
 
-/* The dust ring leaves 3 tiles open, centred on the ring tile opposite the tank: 125 of 125 exact
-   for a tank on the ring, with the recording player either opposite the gap or in it. */
-static int tfa_ezekiel_gap_centre(const TfaNpc* x, const TfaPlayer* tank) {
+/* The dust ring leaves 3 tiles open, centred on the ring tile opposite the tank: 125 of 125 exact for a tank on the ring.
+   No corner-centred run is ever recorded (620/620 clean casts, 12 run centres), so a corner moves to the edge tile
+   nearer the true direction, a diagonal tie flipping a coin (provisional, the recordings carry no tank). */
+static int tfa_ezekiel_gap_centre(TfaState* s, const TfaNpc* x, const TfaPlayer* tank) {
     int ux = -(tank->player.x - (x->x + 1)), uy = -(tank->player.y - (x->y + 1));
     int m = abs(ux) > abs(uy) ? abs(ux) : abs(uy);
     if (m == 0) { ux = 0; uy = -1; m = 1; }
     int rx = (int)lround(ux * 2.0 / m), ry = (int)lround(uy * 2.0 / m);
+    if (abs(rx) == 2 && abs(ry) == 2) {
+        int along_x = abs(ux) == abs(uy) ? tfa_rand(s, 2) : abs(ux) > abs(uy);
+        if (along_x) ry /= 2;
+        else rx /= 2;
+    }
     for (int i = 0; i < 16; i++)
         if (TFA_EZEKIEL_RING[i][0] == rx && TFA_EZEKIEL_RING[i][1] == ry) return i;
     abort();
@@ -276,11 +237,12 @@ static void tfa_ezekiel_melee(TfaState* s, TfaNpc* x, int tank) {
     x->act = TFA_ACT_MELEE;
     x->target = (int8_t)tank;
     tfa_npc_anim(s, x, EZEKIEL_ANIM_MELEE);
-    int gap = tfa_ezekiel_gap_centre(x, &s->players[tank]);
+    int gap = tfa_ezekiel_gap_centre(s, x, &s->players[tank]);
     for (int i = 0; i < TFA_EZEKIEL.cleave_ring; i++) {
         int off = (i - gap + 16) % 16;
         if (off <= 1 || off == 15) continue;
         int tx = x->x + 1 + TFA_EZEKIEL_RING[i][0], ty = x->y + 1 + TFA_EZEKIEL_RING[i][1];
+        tfa_fx_ground(s, tx, ty, EZEKIEL_GFX_CLEAVE_DUST, TFA_EZEKIEL.cleave_delay_min + tfa_rand(s, TFA_EZEKIEL.cleave_delay_span));
         for (int p = 0; p < s->team_size; p++) {
             if (!tfa_alive(s, p) || s->players[p].player.x != tx || s->players[p].player.y != ty) continue;
             tfa_queue_npc_hit(s, p, tfa_npc_roll(s, x, p, ATTACK_STYLE_MELEE, TFA_EZEKIEL.melee_max_hit),
@@ -299,7 +261,7 @@ static void tfa_ezekiel_magic(TfaState* s, TfaNpc* x, int tank) {
         SPOTANIM_TFA_EZEKIEL_EZEKIEL_MAGIC_ATTACK_VFX01_ANIM, TFA_EZEKIEL.magic_launch, TFA_EZEKIEL.magic_hit - TFA_EZEKIEL.magic_launch);
 }
 
-static void tfa_ezekiel_strike(TfaState* s, int x, int y, int w, int h, int land, int min_damage, int max_damage, int gfx) {
+static void tfa_ezekiel_strike(TfaState* s, int x, int y, int w, int h, int land, int min_damage, int max_damage) {
     tfa_hazard_add(s, (TfaHazard){
         .kind = TFA_HAZ_STRIKE,
         .style = ATTACK_STYLE_NONE,
@@ -311,24 +273,35 @@ static void tfa_ezekiel_strike(TfaState* s, int x, int y, int w, int h, int land
         .min_damage = (int16_t)min_damage,
         .max_damage = (int16_t)max_damage,
         .protected_pct = 100,
-        .gfx_id = gfx,
     });
 }
 
+/* Arm level of the star tile (dx, dy) from the SW tile: 0 on the 5x5 ring around the 3x3 body, 1 to 3 along four arms
+   (3 wide, then 1, then 1 tile), -1 elsewhere. 162/162 recorded stars exact once clipped to the arena. */
+static int tfa_ezekiel_star_level(int dx, int dy) {
+    int ex = dx < 0 ? -dx : dx > 2 ? dx - 2 : 0;
+    int ey = dy < 0 ? -dy : dy > 2 ? dy - 2 : 0;
+    if (!ex && !ey) return -1;
+    if (ex <= 1 && ey <= 1) return 0;
+    if ((ex && ey) || ex + ey > 4) return -1;
+    int along = ex ? dy : dx;
+    return ex + ey == 2 || along == 1 ? ex + ey - 1 : -1;
+}
+
 static void tfa_ezekiel_stars(TfaState* s, const TfaNpc* x) {
-    int total = 0;
-    for (int i = 0; i < EZEKIEL_STAR_TABLE_SIZE; i++) total += TFA_EZEKIEL_STARS[i].weight;
-    int roll = tfa_rand(s, total), pick = 0;
-    while (roll >= TFA_EZEKIEL_STARS[pick].weight) roll -= TFA_EZEKIEL_STARS[pick++].weight;
-    for (int row = 0; row < EZEKIEL_STAR_ROWS; row++) {
-        uint16_t bits = TFA_EZEKIEL_STARS[pick].rows[row];
-        for (int col = 0; col < EZEKIEL_STAR_COLS; col++) {
-            if (!(bits >> col & 1)) continue;
-            int run = 1;
-            while (col + run < EZEKIEL_STAR_COLS && (bits >> (col + run) & 1)) run++;
-            tfa_ezekiel_strike(s, x->x + col - EZEKIEL_STAR_ORIGIN, x->y + row - EZEKIEL_STAR_ORIGIN, run, 1,
-                s->tick + TFA_EZEKIEL.star_land, TFA_EZEKIEL.star_min_damage, TFA_EZEKIEL.star_max_damage, EZEKIEL_GFX_STAR);
-            col += run - 1;
+    static const int GFX[3] = { EZEKIEL_GFX_STAR_SPAWN, EZEKIEL_GFX_STAR_MARKER, EZEKIEL_GFX_STAR_EXPLOSION };
+    for (int ty = EZEKIEL_STAR_LO; ty <= EZEKIEL_STAR_HI; ty++) {
+        int run_x = 0, run = 0;
+        for (int tx = EZEKIEL_STAR_LO; tx <= EZEKIEL_STAR_HI + 1; tx++) {
+            int level = tx <= EZEKIEL_STAR_HI ? tfa_ezekiel_star_level(tx - x->x, ty - x->y) : -1;
+            if (level < 0) {
+                if (run) tfa_ezekiel_strike(s, run_x, ty, run, 1, s->tick + TFA_EZEKIEL.star_land, TFA_EZEKIEL.star_min_damage, TFA_EZEKIEL.star_max_damage);
+                run = 0;
+                continue;
+            }
+            if (!run) run_x = tx;
+            run++;
+            for (int k = 0; k < 3; k++) tfa_fx_ground(s, tx, ty, GFX[k], TFA_EZEKIEL.star_fx_delay[k] + 2 * level);
         }
     }
 }
@@ -350,7 +323,7 @@ static void tfa_ezekiel_line(TfaState* s, int row, int coord, int swords, int fi
     tfa_ezekiel_strike(s, row ? EZEKIEL_ARENA_LO : coord, row ? coord : EZEKIEL_ARENA_LO,
         row ? EZEKIEL_ARENA_SPAN : 3, row ? 3 : EZEKIEL_ARENA_SPAN, s->tick + jump_in,
         four ? TFA_EZEKIEL.sword4_min : TFA_EZEKIEL.sword3_min,
-        four ? TFA_EZEKIEL.sword4_max : TFA_EZEKIEL.sword3_max, EZEKIEL_GFX_SWORD_LINE);
+        four ? TFA_EZEKIEL.sword4_max : TFA_EZEKIEL.sword3_max);
 }
 
 static void tfa_ezekiel_volley(TfaState* s, const TfaNpc* x) {
@@ -454,13 +427,30 @@ static void tfa_ezekiel_delayed(TfaState* s, TfaNpc* x) {
     }
 }
 
-static void tfa_ezekiel_wave(TfaState* s) {
-    for (int dx = 0; dx < 3; dx++)
-        for (int dy = 0; dy < 3; dy++)
-            for (int k = 0; k < TFA_EZEKIEL_WAVE_IMPACTS[dy][dx]; k++)
-                tfa_ezekiel_strike(s, EZEKIEL_FINALE_CELL + dx, EZEKIEL_FINALE_CELL + dy,
-                    1, 1, s->tick + TFA_EZEKIEL.finale_land_min + tfa_rand(s, TFA_EZEKIEL.finale_land_span),
-                    TFA_EZEKIEL.finale_min_damage, TFA_EZEKIEL.finale_max_damage, EZEKIEL_GFX_FINALE_IMPACT);
+/* One wave is three layers over the 3x3 block, each a shape in (u, v) with u the tiles away from the boss side:
+   shape 1 is u <= 1, shape 2 is v <= 1 or u = 0, shape 3 is v >= 1 or u = 0 (172/172, 20 impacts). Shape 1 is layer 0
+   in 115 and layer 1 in 57 of 172, never layer 2, and shapes 2 and 3 fill the rest in either order. Each tile is one
+   4197 or 4198 (1714/1726) at delay layer base + 2 per u and one impact landing with the layer. */
+static void tfa_ezekiel_wave(TfaState* s, const TfaNpc* x) {
+    int shape1_layer = tfa_rand(s, 3) == 2;
+    int second = 2 + tfa_rand(s, 2);
+    int shape[3];
+    shape[shape1_layer] = 1;
+    shape[shape1_layer ? 0 : 1] = second;
+    shape[2] = 5 - second;
+    for (int layer = 0; layer < 3; layer++)
+        for (int dx = 0; dx < 3; dx++)
+            for (int dy = 0; dy < 3; dy++) {
+                int u = x->x == EZEKIEL_FINALE_CELL - 3 ? dx : x->x == EZEKIEL_FINALE_CELL + 3 ? 2 - dx : x->y == EZEKIEL_FINALE_CELL - 3 ? dy : 2 - dy;
+                int v = x->y == EZEKIEL_FINALE_CELL - 3 || x->y == EZEKIEL_FINALE_CELL + 3 ? dx : dy;
+                int in = shape[layer] == 1 ? u <= 1 : shape[layer] == 2 ? v <= 1 || u == 0 : v >= 1 || u == 0;
+                if (!in) continue;
+                int tx = EZEKIEL_FINALE_CELL + dx, ty = EZEKIEL_FINALE_CELL + dy;
+                tfa_fx_ground(s, tx, ty, EZEKIEL_GFX_FINALE_IMPACT + tfa_rand(s, 2),
+                    TFA_EZEKIEL.finale_layer_delay + 30 * layer + TFA_EZEKIEL.finale_column_delay * u);
+                tfa_ezekiel_strike(s, tx, ty, 1, 1, s->tick + TFA_EZEKIEL.finale_land_min + layer,
+                    TFA_EZEKIEL.finale_min_damage, TFA_EZEKIEL.finale_max_damage);
+            }
 }
 
 static void tfa_ezekiel_finale_tick(TfaState* s, TfaNpc* x) {
@@ -478,7 +468,7 @@ static void tfa_ezekiel_finale_tick(TfaState* s, TfaNpc* x) {
         es->next_wave_clock = es->clock + TFA_EZEKIEL.finale_first_wave;
     }
     if (es->clock == es->next_wave_clock) {
-        tfa_ezekiel_wave(s);
+        tfa_ezekiel_wave(s, x);
         es->next_wave_clock += TFA_EZEKIEL.finale_wave_interval;
     }
 }
