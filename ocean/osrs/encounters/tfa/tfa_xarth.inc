@@ -18,6 +18,7 @@
 #define XARTH_PROJ_MAGIC 4034
 
 typedef struct {
+    int hp_trio;                 /* 3 players: net damage 3770 in the healless kill xarth_04 and in xarth_02 */
     int first_attack;            /* first magic 6 ticks after "Challenge started", 4/4 */
     int magic_interval;          /* P1 magic every 4: 44/44 */
     int p1_cycle;                /* AOE at 20, 51, 82: 31-tick cycles, 4/4 fights */
@@ -47,6 +48,7 @@ typedef struct {
 } TfaXarthTuning;
 
 static const TfaXarthTuning TFA_XARTH = {
+    .hp_trio = 3770,
     .first_attack = 6,
     .magic_interval = 4,
     .p1_cycle = 31,
@@ -91,7 +93,8 @@ static TfaNpc* tfa_xarth_boss(TfaState* s) {
 
 static void tfa_xarth_enter(TfaState* s) {
     const TfaRoomLayout* l = tfa_room_layout(TFA_ROOM_XARTH);
-    tfa_npc_spawn(s, TFA_NPC_XARTH, MON_TFA_XARTH, XARTH_NPC, l->boss_x, l->boss_y);
+    TfaNpc* x = tfa_npc_spawn(s, TFA_NPC_XARTH, MON_TFA_XARTH, XARTH_NPC, l->boss_x, l->boss_y);
+    x->hp = x->max_hp = tfa_party_hp(s, MONSTER_DATABASE[MON_TFA_XARTH].hp, TFA_XARTH.hp_trio);
     for (int i = 0; i < 3; i++)
         tfa_npc_spawn_inert(s, TFA_NPC_XARTH_PILLAR, XARTH_NPC_PILLAR, 2,
             TFA_XARTH_PILLAR_TILES[i][0], TFA_XARTH_PILLAR_TILES[i][1]);

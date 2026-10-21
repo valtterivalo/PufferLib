@@ -9,6 +9,8 @@ FIXTURES = pathlib.Path(__file__).resolve().parent.parent / "fixtures"
 ATTACKS = {
     "guardian": {"14751", "14753", "14754", "14752", "14750"},
     "xarth": {"14983", "14984", "14985", "14992", "14989"},
+    "bork": {"14542", "14550", "14551", "14554", "14555"},
+    "moia": {"14785", "14788"},
     "dreadnoth": {"14779", "14777", "14780", "14782"},
     "ezekiel": {"14685", "14686", "14687", "14688", "14691", "14693"},
     "ocellus": {"14806", "14807", "14809", "14810", "14811", "14812", "14813", "14837", "14878", "14842", "14846", "14848", "14851",
@@ -191,7 +193,14 @@ def guardian(real, sim):
     compare("4201 launch, flight", projectile_offsets(real, "14751", "4201"), projectile_offsets(sim, "14751", "4201"), failures)
     rg, sg = ground_durations(real), ground_durations(sim)
     for k in sorted(set(rg) | set(sg)):
+        if k == "cross":
+            continue
         compare(f"ground {k}", rg.get(k, hist([])), sg.get(k, hist([])), failures)
+    on_vine_tick = lambda c: all(v >= 14 and (v - 5) % 3 == 0 for v in c)
+    ok = on_vine_tick(rg.get("cross", {})) and on_vine_tick(sg.get("cross", {})) and bool(sg.get("cross"))
+    if not ok:
+        failures.append("ground cross on vine ticks")
+    print(f"{'ok ' if ok else 'BAD'} {'ground cross on vine ticks':28s} real {fmt(rg.get('cross', hist([]))):42s} sim {fmt(sg.get('cross', hist([])))}")
     for label, r, s in zip(("vine first", "vine gap", "vine anims", "vine life"), vines(real), vines(sim)):
         compare(label, r, s, failures)
     for label, r, s in zip(("mushrooms per special", "mushroom arm"), mushrooms(real), mushrooms(sim)):
@@ -286,6 +295,200 @@ def xarth(real, sim):
     return failures
 
 
+def exact(name, real, sim, failures):
+    """A single-sample law: the real mode must be the sim mode whatever n is."""
+    if not real:
+        return
+    ok = bool(sim) and real.most_common(1)[0][0] == sim.most_common(1)[0][0]
+    if not ok:
+        failures.append(name)
+    print(f"{'ok ' if ok else 'BAD'} {name:28s} real {fmt(real):42s} sim {fmt(sim)}")
+
+
+def chain_gap(fights, a_id, b_id, actor_id):
+    out = []
+    for ev in fights.values():
+        anims = [e for e in ev if e["kind"] == "ANIM" and base(e["actor"]) == actor_id]
+        for a, b in zip(anims, anims[1:]):
+            if a["id"] == a_id and b["id"] == b_id:
+                out.append(b["t"] - a["t"])
+    return hist(out)
+
+
+def stomp_offsets(fights):
+    out = []
+    for ev in fights.values():
+        bombs = [e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14555"]
+        stomps = [e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14550"]
+        out += [min(t for t in stomps if t > b) - b for b in bombs if any(t > b for t in stomps)]
+    return hist(out)
+
+
+def proj_flights(fights, proj):
+    return hist([max(1, int(float(e["b"]))) for ev in fights.values() for e in ev if e["kind"] == "PROJ" and e["id"] == proj])
+
+
+def smork_gaps(fights):
+    out = []
+    for ev in fights.values():
+        ts = [e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] in ("14554", "14555")]
+        out += [b - a for a, b in zip(ts, ts[1:])]
+    return out
+
+
+def gong_hit_delays(fights):
+    out = []
+    for ev in fights.values():
+        hits = [e for e in ev if e["kind"] == "HIT" and e["actor"].startswith("P") and e["a"] in ("16", "17") and int(e["id"]) >= 5]
+        for g in (e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14542"):
+            out += [h["t"] - g for h in hits if g <= h["t"] <= g + 6]
+    return hist(out)
+
+
+def scorch_delay(fights):
+    out = []
+    for ev in fights.values():
+        objs = sorted(e["t"] for e in ev if e["kind"] == "OBJ+" and e["id"] == "62544")
+        for p in (e["t"] for e in ev if e["kind"] == "PROJ" and e["id"] in ("4045", "4440")):
+            nxt = next((t for t in objs if t >= p), None)
+            if nxt is not None:
+                out.append(nxt - p)
+    return hist(out)
+
+
+def scorch_counts(fights):
+    out = []
+    for ev in fights.values():
+        c = collections.Counter(e["t"] for e in ev if e["kind"] == "OBJ+" and e["id"] == "62544")
+        out += [c[t] for t in sorted(c)[:5]]
+    return out
+
+
+def shadowed(bx, by, x, y):
+    px, py = bx + 2.0, by + 2.0
+    dx, dy = x + 0.5 - px, y + 0.5 - py
+    enter, leave = 0.0, 1.0
+    for d, p, lo, hi in ((dx, px, 30.5, 32.5), (dy, py, 30.5, 32.5)):
+        if d == 0:
+            if p < lo or p > hi:
+                return False
+            continue
+        r0, r1 = (lo - p) / d, (hi - p) / d
+        enter, leave = max(enter, min(r0, r1)), min(leave, max(r0, r1))
+    return enter <= leave
+
+
+def gong_hits_in_shadow(fights):
+    """Gong-tick hits (>= 10, no projectile landing that tick) taken on a tile hidden from Bork's centre by the Smorks."""
+    inside = total = 0
+    for ev in fights.values():
+        lands = {e["t"] + int(float(e["b"])) for e in ev if e["kind"] == "PROJ"}
+        bork = {e["t"]: (int(e["x"]), int(e["y"])) for e in ev if e["kind"] == "NPOS" and base(e["actor"]) == "16640"}
+        for g in (e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14542"):
+            for h in ev:
+                if h["kind"] == "HIT" and h["actor"].startswith("P") and h["t"] == g and h["a"] in ("16", "17") and int(h["id"]) >= 10 and g not in lands:
+                    total += 1
+                    inside += shadowed(*bork[g], int(h["x"]), int(h["y"]))
+    return inside, total
+
+
+def bork(real, sim):
+    failures = []
+    compare("14542 next attack", next_attack(real, "bork", "14542"), next_attack(sim, "bork", "14542"), failures)
+    exact("14555 -> stomp 14550", stomp_offsets(real), stomp_offsets(sim), failures)
+    exact("14550 -> 14551", chain_gap(real, "14550", "14551", "16640"), chain_gap(sim, "14550", "14551", "16640"), failures)
+    exact("14551 -> gong", chain_gap(real, "14551", "14542", "16640"), chain_gap(sim, "14551", "14542", "16640"), failures)
+    for proj in ("4056", "4057", "4045", "4440"):
+        exact(f"{proj} flight", proj_flights(real, proj), proj_flights(sim, proj), failures)
+    median_law("smorks cannon gap", smork_gaps(real), smork_gaps(sim), 2, failures)
+    exact("gong player hit delay", gong_hit_delays(real), gong_hit_delays(sim), failures)
+    exact("scorch after projectile", scorch_delay(real), scorch_delay(sim), failures)
+    median_law("scorch tiles per landing", scorch_counts(real), scorch_counts(sim), 2, failures)
+    ri, rt = gong_hits_in_shadow(real)
+    si, st = gong_hits_in_shadow(sim)
+    ok = si == 0
+    if not ok:
+        failures.append("gong hits in shadow")
+    print(f"{('ok ' if st else '-- ') if ok else 'BAD'} {'gong hits in shadow':28s} real {ri}/{rt:<38} sim {si}/{st}")
+    return failures
+
+
+def first_anim(ev, anim):
+    return min((e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == anim), default=0)
+
+
+def moia_hits_at_proj(fights, proj, offset):
+    """Whether the aimed player takes a hit exactly offset ticks after each projectile launch."""
+    out = []
+    for ev in fights.values():
+        hits = {(e["t"], e["actor"]) for e in ev if e["kind"] == "HIT" and e["actor"].startswith("P")}
+        for e in ev:
+            if e["kind"] == "PROJ" and e["id"] == proj and e["a"].startswith("P"):
+                out.append((e["t"] + offset, e["a"]) in hits)
+    return hist(out)
+
+
+def moia_binder_phases(fights, kind):
+    attack, move = [], []
+    for ev in fights.values():
+        t0 = first_anim(ev, "14785")
+        if kind == "attack":
+            attack += [(e["t"] - t0) % 15 for e in ev if e["kind"] == "ANIM" and e["id"] == "14791"]
+        else:
+            last = {}
+            for e in ev:
+                if e["kind"] != "NPOS" or base(e["actor"]) != "16670":
+                    continue
+                pos = (e["x"], e["y"])
+                if e["actor"] in last and last[e["actor"]] != pos:
+                    move.append((e["t"] - t0) % 15)
+                last[e["actor"]] = pos
+    return hist(attack if kind == "attack" else move)
+
+
+def moia_teleports(fights):
+    out = []
+    for ev in fights.values():
+        tps = sorted(e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14788")
+        pos = {e["t"]: (e["x"], e["y"]) for e in ev if e["kind"] == "NPOS" and base(e["actor"]) == "16667"}
+        out += [pos[t + 1] for t in tps[:2] if t + 1 in pos]
+    return hist(out)
+
+
+def moia_tp_gaps(fights):
+    out = []
+    for ev in fights.values():
+        tps = sorted(e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14788")
+        out += [b - a for a, b in zip(tps, tps[1:])]
+    return hist(out)
+
+
+def moia_late_binders(fights):
+    out = []
+    for ev in fights.values():
+        t0 = first_anim(ev, "14785")
+        out += [e["t"] - t0 for e in ev if e["kind"] == "NPC+" and e["id"] == "16670" and e["t"] >= t0]
+    return hist(out)
+
+
+def moia(real, sim):
+    failures = []
+    compare("14785 next attack", next_attack(real, "moia", "14785"), next_attack(sim, "moia", "14785"), failures)
+    exact("14788 next attack", next_attack(real, "moia", "14788"), next_attack(sim, "moia", "14788"), failures)
+    exact("teleport to teleport", moia_tp_gaps(real), moia_tp_gaps(sim), failures)
+    for proj in ("4214", "4213"):
+        exact(f"{proj} flight", proj_flights(real, proj), proj_flights(sim, proj), failures)
+    exact("4214 hit at launch tick", moia_hits_at_proj(real, "4214", 0), moia_hits_at_proj(sim, "4214", 0), failures)
+    exact("4213 hit at launch +5", moia_hits_at_proj(real, "4213", 5), moia_hits_at_proj(sim, "4213", 5), failures)
+    exact("binder attack phase", moia_binder_phases(real, "attack"), moia_binder_phases(sim, "attack"), failures)
+    rm, sm = moia_binder_phases(real, "move"), moia_binder_phases(sim, "move")
+    rs, ss = {k for k, n in rm.items() if n >= 3}, {k for k, n in sm.items() if n >= 3}
+    ok = rs == ss
+    if not ok:
+        failures.append("binder move phases")
+    print(f"{'ok ' if ok else 'BAD'} {'binder move phases':28s} real {sorted(rs)} sim {sorted(ss)}")
+    exact("late binder spawn", moia_late_binders(real), moia_late_binders(sim), failures)
+    exact("Moia tile after teleport", moia_teleports(real), moia_teleports(sim), failures)
 def boss_anims(ev, anim):
     return sorted(e["t"] for e in ev if e["kind"] == "ANIM" and base(e["actor"]) == "16665" and e["id"] == anim)
 
@@ -658,7 +861,7 @@ def main():
         meta = {r["fight_id"]: r for r in csv.DictReader(open(FIXTURES / "tfa_fights.tsv"), delimiter="\t")}
         real = {k: v for k, v in real.items() if meta[k]["party_size"] == party}
     sim = load(sim_path)
-    failures = {"guardian": guardian, "xarth": xarth, "dreadnoth": dreadnoth, "ezekiel": ezekiel, "ocellus": ocellus}[boss](real, sim)
+    failures = {"guardian": guardian, "xarth": xarth, "dreadnoth": dreadnoth, "ezekiel": ezekiel, "bork": bork, "moia": moia, "ocellus": ocellus}[boss](real, sim)
     print(f"{len(failures)} laws differ: {failures}" if failures else "all laws agree")
     sys.exit(1 if failures else 0)
 

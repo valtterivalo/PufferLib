@@ -219,6 +219,8 @@ typedef struct {
 } TfaConfig;
 
 #include "tfa_guardian_model.inc"
+#include "tfa_bork_model.inc"
+#include "tfa_moia_model.inc"
 
 typedef struct {
     TfaPlayer players[TFA_MAX_PLAYERS];
@@ -245,6 +247,8 @@ typedef struct {
         TfaGuardianState guardian;
         TfaXarthState xarth;
         TfaOcellusState ocellus;
+        TfaBorkState bork;
+        TfaMoiaState moia;
         TfaDreadnothState dreadnoth;
         TfaEzekielState ezekiel;
     } boss;

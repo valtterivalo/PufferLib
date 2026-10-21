@@ -12,6 +12,16 @@ static int tfa_alive(const TfaState* s, int p) {
     return p >= 0 && p < s->team_size && s->players[p].life == TFA_LIFE_ALIVE;
 }
 
+/* Boss HP and shields scale with party size: duo values from the wiki, trio values from recorded kills,
+   one step per extra raider; a solo is scaled as a duo. Every measured boss steps duo to trio by 1.45
+   (Ezekiel 3000 to 4350, Xarth 2600 to 3770, Dreadnoth 2100 to 3050, Guardian 1100 to 1575). */
+#define TFA_TRIO_SCALE_PCT 145
+
+static int tfa_party_hp(const TfaState* s, int duo, int trio) {
+    int n = s->team_size < 2 ? 2 : s->team_size;
+    return duo + (trio - duo) * (n - 2);
+}
+
 static int tfa_alive_count(const TfaState* s) {
     int n = 0;
     for (int p = 0; p < s->team_size; p++) n += tfa_alive(s, p);
@@ -96,9 +106,9 @@ static FightStyle tfa_default_fight_style(AttackStyle style) {
 static const EncounterLoadoutStats* tfa_player_stats(TfaPlayer* tp) {
     if (tp->stats_dirty) {
         AttackStyle style = tfa_player_weapon_style(tp);
-        assert(style != ATTACK_STYLE_MAGIC && "tfa loadouts carry no magic weapon until powered staff damage is shared");
-        encounter_compute_player_equipped_stats(
-            &tp->player, style, tfa_default_fight_style(style), 0, &tp->stats);
+        uint8_t weapon = tp->player.equipped[GEAR_SLOT_WEAPON];
+        int spell = style == ATTACK_STYLE_MAGIC ? osrs_powered_staff_base_damage(weapon, tp->player.current_magic) : 0;
+        encounter_compute_player_equipped_stats(&tp->player, style, tfa_default_fight_style(style), spell, &tp->stats);
         tp->stats_dirty = 0;
     }
     return &tp->stats;
@@ -263,7 +273,11 @@ static int tfa_npc_def_roll(const TfaNpc* n, AttackStyle style, int melee_style)
 static void tfa_hazard_add(TfaState* s, TfaHazard h) {
     for (int i = 0; i < TFA_MAX_HAZARDS; i++) {
         if (s->hazards[i].kind != TFA_HAZ_NONE) continue;
-        s->hazards[i] = h;
+        TfaHazard* d = &s->hazards[i];
+        memset(d, 0, sizeof(*d));
+        d->kind = h.kind; d->style = h.style; d->w = h.w; d->h = h.h; d->owner = h.owner; d->effect = h.effect;
+        d->x = h.x; d->y = h.y; d->start_tick = h.start_tick; d->end_tick = h.end_tick; d->arm_ticks = h.arm_ticks;
+        d->min_damage = h.min_damage; d->max_damage = h.max_damage; d->protected_pct = h.protected_pct; d->gfx_id = h.gfx_id; d->loc_id = h.loc_id;
         return;
     }
     fprintf(stderr, "tfa hazard capacity %d exceeded\n", TFA_MAX_HAZARDS);

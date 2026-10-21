@@ -21,7 +21,7 @@
 
 typedef struct {
     int hp_base;                 /* wiki 2100 */
-    int hp_per_extra_player;     /* 3 players: damage in minus heals is 3050 in 4 of 4 kills; per-player step provisional */
+    int hp_trio;                 /* 3 players: damage in minus heals is 3050 in 4 of 4 kills */
     int threshold_pct[3];        /* first slam 1 tick after NHP drops below 76/90, 58/90, 40/90 (14/14, 13/13, 9/9 within +-1) */
     int final_pct;               /* *glub glub* when HP falls under 26 percent: replay brackets it to (789, 795] of 3050 over 7 fights, first jump 5 ticks later */
     int slams_per_phase[3];      /* 1, 2, 3 slams: 14777 groups 6 apart */
@@ -62,7 +62,7 @@ typedef struct {
 
 static const TfaDreadnothTuning TFA_DREAD = {
     .hp_base = 2100,
-    .hp_per_extra_player = 475,
+    .hp_trio = 3050,
     .threshold_pct = { 85, 65, 45 },
     .final_pct = 26,
     .slams_per_phase = { 1, 2, 3 },
@@ -120,7 +120,7 @@ static TfaNpc* tfa_dread_boss(TfaState* s) {
 static void tfa_dread_enter(TfaState* s) {
     const TfaRoomLayout* l = tfa_room_layout(TFA_ROOM_DREADNOTH);
     TfaNpc* b = tfa_npc_spawn(s, TFA_NPC_DREADNOTH, MON_TFA_DREADNOTH, DREAD_NPC, l->boss_x, l->boss_y);
-    b->hp = b->max_hp = TFA_DREAD.hp_base + TFA_DREAD.hp_per_extra_player * (s->team_size - 1);
+    b->hp = b->max_hp = tfa_party_hp(s, TFA_DREAD.hp_base, TFA_DREAD.hp_trio);
     s->boss.dreadnoth = (TfaDreadnothState){ .slam_start = -1, .spawn_tick = -1, .next_jump = -1 };
 }
 

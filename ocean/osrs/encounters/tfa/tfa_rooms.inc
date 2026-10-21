@@ -42,7 +42,8 @@ static void tfa_build_topologies(TfaContext* ctx) {
             .tile_flags_ctx = (void*)l,
             .los_tile_flags = tfa_topology_flags,
             .los_tile_flags_ctx = (void*)l,
-            .los_build_mode = ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_TILE_BLOCKED,
+            /* Moia's pocket is walled on walk flags only: P0 hit her from inside the ring in 12 of 12 attacks */
+            .los_build_mode = room == TFA_ROOM_MOIA ? ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_OPEN : ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_TILE_BLOCKED,
         };
         if (!TFA_TOPOLOGY_OWNER[room]) {
             TFA_TOPOLOGY_OWNER[room] = encounter_arena_topology_build(&spec);

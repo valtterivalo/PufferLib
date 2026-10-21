@@ -6,6 +6,7 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
     OverheadPrayer want = PRAYER_NONE;
     const TfaNpc* target = NULL;
     int hide_x = -1, hide_y = -1, flee_x = -1, flee_y = -1, go_x = -1, go_y = -1;
+    int flee = 0;
     if (s->room == TFA_ROOM_GUARDIAN) {
         target = tfa_npc_first(s, TFA_NPC_GUARDIAN);
         want = s->boss.guardian.phase == TFA_GUARDIAN_GROUNDED ? PRAYER_PROTECT_MELEE : PRAYER_PROTECT_RANGED;
@@ -29,6 +30,54 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
         const TfaNpc* boss = tfa_npc_first(s, TFA_NPC_DREADNOTH);
         if (boss && encounter_rect_distance(tp->player.x, tp->player.y, 1, boss->x, boss->y, boss->size) <= 1)
             flee_x = boss->x, flee_y = boss->y;
+    } else if (s->room == TFA_ROOM_MOIA) {
+        target = tfa_npc_first(s, TFA_NPC_MOIA);
+        want = s->boss.moia.magic_land_tick == s->tick + 1 ? PRAYER_PROTECT_MAGIC : PRAYER_PROTECT_RANGED;
+        int here_min = 1 << 30, best_min = -1;
+        for (int i = 0; i < TFA_MAX_NPCS; i++) {
+            const TfaNpc* b = &s->npcs[i];
+            if (!b->active || b->kind != TFA_NPC_BINDER) continue;
+            int d = chebyshev_distance(b->x, b->y, tp->player.x, tp->player.y);
+            if (d < here_min) here_min = d;
+        }
+        int t = s->boss.moia.clock - TFA_MOIA.first_attack;
+        int soon = 0;
+        for (int k = 1; k <= 2; k++) {
+            int ph = (t + k) % TFA_MOIA.binder_cycle;
+            soon |= t + k >= TFA_MOIA.binder_attack_first &&
+                (ph == TFA_MOIA.binder_attack_phase_a || ph == TFA_MOIA.binder_attack_phase_b);
+        }
+        if (soon && here_min <= TFA_MOIA.binder_reach) {
+            for (int a = 1; a < OSRS_PRIMARY_MOVE_ACTIONS; a++) {
+                int nx = tp->player.x + ENCOUNTER_MOVE_TARGET_DX[a], ny = tp->player.y + ENCOUNTER_MOVE_TARGET_DY[a];
+                if (tfa_layout_blocked(tfa_room_layout(s->room), nx, ny)) continue;
+                int nmin = 1 << 30;
+                for (int i = 0; i < TFA_MAX_NPCS; i++) {
+                    const TfaNpc* b = &s->npcs[i];
+                    if (!b->active || b->kind != TFA_NPC_BINDER) continue;
+                    int d = chebyshev_distance(b->x, b->y, nx, ny);
+                    if (d < nmin) nmin = d;
+                }
+                if (nmin > best_min) { best_min = nmin; flee = nmin > here_min ? a : 0; }
+            }
+        }
+    } else if (s->room == TFA_ROOM_BORK) {
+        const TfaBorkState* bs = &s->boss.bork;
+        const TfaNpc* bork = tfa_npc_first(s, TFA_NPC_BORK);
+        const TfaNpc* smorks = tfa_npc_first(s, TFA_NPC_SMORKS);
+        target = bork ? bork : smorks;
+        want = PRAYER_PROTECT_MELEE;
+        if (smorks && bs->next_smork == s->tick + 1 && bs->next_gong != s->tick + 1) want = PRAYER_PROTECT_RANGED;
+        int best = 1 << 30;
+        int wave_soon = bs->next_gong - s->tick <= 3 || (bs->stomp_tick >= 0 && s->tick <= bs->stomp_tick + 11);
+        if (bork && smorks && wave_soon) {
+            for (int x = TFA_BORK.arena_x0; x <= TFA_BORK.arena_x1; x++)
+                for (int y = TFA_BORK.arena_y0; y <= TFA_BORK.arena_y1; y++) {
+                    if (tfa_layout_blocked(tfa_room_layout(s->room), x, y) || tfa_tile_danger(s, p, x, y) >= 0 || !tfa_bork_shadowed(bork, smorks, x, y)) continue;
+                    int d = chebyshev_distance(x, y, tp->player.x, tp->player.y);
+                    if (d < best) { best = d; hide_x = x; hide_y = y; }
+                }
+        }
     } else if (s->room == TFA_ROOM_EZEKIEL) {
         const TfaNpc* boss = tfa_npc_first(s, TFA_NPC_EZEKIEL);
         target = boss;
@@ -98,12 +147,20 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
     if (tp->player.prayer != want)
         acts[OSRS_HEAD_OVERHEAD] = want == PRAYER_NONE ? ENCOUNTER_OVERHEAD_OFF : want == PRAYER_PROTECT_MELEE ? ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE
             : want == PRAYER_PROTECT_MAGIC ? ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC : ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED;
+    if (s->room == TFA_ROOM_BORK) {
+        if (tp->player.offensive_prayer != OFFENSIVE_PRAYER_PIETY) acts[OSRS_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY;
+        for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++) {
+            const OsrsItemContentMetadata* md = osrs_inventory_cell_metadata(&tp->player.inventory_cells[cell]);
+            if ((md->item_idx == ITEM_INQUISITORS_MACE || md->item_idx == ITEM_AVERNIC_DEFENDER) && tp->player.equipped[md->gear_slot] != md->item_idx)
+                acts[OSRS_HEAD_EQUIP_SLOT(md->gear_slot)] = cell + 1;
+        }
+    }
     acts[OSRS_HEAD_PRIMARY] = TFA_PRIMARY_ATTACK_BASE + tfa_npc_slot(s, target);
     if (hide_x >= 0 && (tp->player.x != hide_x || tp->player.y != hide_y) && tp->player.attack_timer > 0) {
         int best = 1 << 30;
         for (int a = 1; a < OSRS_PRIMARY_MOVE_ACTIONS; a++) {
             int nx = tp->player.x + ENCOUNTER_MOVE_TARGET_DX[a], ny = tp->player.y + ENCOUNTER_MOVE_TARGET_DY[a];
-            if (tfa_layout_blocked(tfa_room_layout(s->room), nx, ny)) continue;
+            if (tfa_layout_blocked(tfa_room_layout(s->room), nx, ny) || (s->room == TFA_ROOM_BORK && tfa_tile_danger(s, p, nx, ny) >= 0)) continue;
             int d = chebyshev_distance(nx, ny, hide_x, hide_y);
             if (d < best) { best = d; acts[OSRS_HEAD_PRIMARY] = a; }
         }
@@ -117,6 +174,7 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
             if (d < best) { best = d; acts[OSRS_HEAD_PRIMARY] = a; }
         }
     }
+    if (flee) acts[OSRS_HEAD_PRIMARY] = flee;
     if (flee_x >= 0) {
         int best = encounter_rect_distance(tp->player.x, tp->player.y, 1, flee_x, flee_y, 5);
         for (int a = 1; a < OSRS_PRIMARY_MOVE_ACTIONS; a++) {

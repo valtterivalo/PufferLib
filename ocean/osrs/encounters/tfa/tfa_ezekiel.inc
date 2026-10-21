@@ -203,8 +203,7 @@ static TfaNpc* tfa_ezekiel_boss(TfaState* s) {
 }
 
 static int tfa_ezekiel_hp(const TfaState* s) {
-    int players = s->team_size < 2 ? 2 : s->team_size;
-    return TFA_EZEKIEL.hp_base + TFA_EZEKIEL.hp_per_player * (players - 2);
+    return tfa_party_hp(s, TFA_EZEKIEL.hp_base, TFA_EZEKIEL.hp_base + TFA_EZEKIEL.hp_per_player);
 }
 
 static void tfa_ezekiel_enter(TfaState* s) {

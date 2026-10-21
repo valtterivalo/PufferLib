@@ -115,9 +115,10 @@ static void tfa_player_attack(TfaState* s, int p, TfaNpc* n) {
         return;
     }
 
+    OsrsMagicAttackKind magic_kind = style == ATTACK_STYLE_MAGIC ? OSRS_MAGIC_ATTACK_POWERED_STAFF : OSRS_MAGIC_ATTACK_NONE;
     OsrsPreparedAttackEffects fx = osrs_prepare_attack_effects_for_melee_style(
         &tp->player.equipment_effect_profile, &tp->player.item_effect_state, weapon, style, melee_style,
-        OSRS_MAGIC_ATTACK_NONE, target, 1, osrs_player_att_roll(ls->eff_level, ls->attack_bonus), ls->max_hit,
+        magic_kind, target, 1, osrs_player_att_roll(ls->eff_level, ls->attack_bonus), ls->max_hit,
         osrs_target_effect_context_magic(m->magic_level, m->magic_att_bonus),
         tp->player.current_hitpoints, tp->player.base_hitpoints);
     tp->player.attack_timer = ls->attack_speed;
@@ -128,7 +129,7 @@ static void tfa_player_attack(TfaState* s, int p, TfaNpc* n) {
     tfa_queue_player_hit(s, n, p, dmg, style, delay);
     OsrsPostAttackEffects post = osrs_finalize_attack_effects(
         &tp->player.equipment_effect_profile, &tp->player.item_effect_state, weapon, style,
-        OSRS_MAGIC_ATTACK_NONE, target, 1, fx.use_double_accuracy, hit, dmg, &s->rng_state);
+        magic_kind, target, 1, fx.use_double_accuracy, hit, dmg, &s->rng_state);
     if (post.heal_amount > 0) {
         tp->player.current_hitpoints += post.heal_amount;
         if (tp->player.current_hitpoints > tp->player.base_hitpoints)
