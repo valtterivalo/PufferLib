@@ -8,6 +8,9 @@ nice -n 19 cc -std=c11 -O2 -Wno-unused-function -I. -o $out/dump ocean/osrs/test
 nice -n 19 $out/smoke | tail -1 || exit 1
 nice -n 19 cc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=undefined -Wno-unused-function -I. -o $out/fuzz ocean/osrs/tests/fuzz_tfa.c -lm || exit 1
 nice -n 19 $out/fuzz | tail -1 || exit 1
+nice -n 19 cc -std=c11 -O2 -Wno-unused-function -I. -o $out/replay_guardian ocean/osrs/tests/tfa_replay_guardian.c -lm || exit 1
+echo "== guardian forced-damage replay"
+nice -n 19 $out/replay_guardian ocean/osrs/encounters/tfa/fixtures/tfa_guardian_events.tsv ocean/osrs/encounters/tfa/fixtures/tfa_fights.tsv | tail -3 || exit 1
 fail=0
 for spec in "guardian 0 2" "guardian 0 3" "xarth 5 3"; do
     set -- ${=spec}

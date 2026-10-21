@@ -38,7 +38,7 @@ typedef struct {
     int land_delay;               /* shield 0 -> 14747 three ticks later, 24/24 */
     int ground_base;              /* knockdown 1, 2, 3 ground for 35, 41, 47 ticks */
     int ground_step;
-    int ground_min;               /* an HP crossing of the enrage threshold ends the ground phase, never before 14 */
+    int ground_min;               /* an HP crossing seen at one vine tick rises at the next, never before 14: 51/51 forced-damage replays */
     int enrage_pct;               /* breath loop starts at the rise that follows HP <= 33% */
     int rise_to_attack;           /* 14748 -> next attack 5 in 64/65 */
     int vine_first;               /* first vine at knockdown +5, 65/65 */
@@ -91,8 +91,9 @@ static const TfaGuardianTuning TFA_GUARDIAN = {
     .pylon_shield_delay = 4,
 };
 
-/* Party scaling: shield 550 at 2 players and 800 at 3 (24/24 bars), HP 1100 and 1620
-   (health-bar fits, 23 grounded phases). A solo is scaled as a duo. Four players extrapolate. */
+/* Party scaling: shield 550 at 2 players and 800 at 3 (24/24 bars). HP 1100 at 2 and 1575 at 3: the
+   values for which forced-damage replays (tfa_replay_guardian.c) reproduce all 51 rises; the 3-player
+   window is 1575 alone. A solo is scaled as a duo. Four players extrapolate. */
 static int tfa_guardian_scaled_players(const TfaState* s) {
     return s->team_size < 2 ? 2 : s->team_size;
 }
@@ -102,7 +103,7 @@ static int tfa_guardian_shield(const TfaState* s) {
 }
 
 static int tfa_guardian_hp(const TfaState* s) {
-    return 1100 + 520 * (tfa_guardian_scaled_players(s) - 2);
+    return 1100 + 475 * (tfa_guardian_scaled_players(s) - 2);
 }
 
 /* Swoosh destinations recorded in the breath loop (31 swooshes): the boss SW tile. */
@@ -334,18 +335,16 @@ static void tfa_guardian_bar_damage(TfaState* s, TfaNpc* g, int damage) {
     g->hp -= damage < g->hp ? damage : g->hp;
 }
 
-/* Flying, only ranged and magic reach it (wiki Strategies); melee lands on the grounded body. */
+/* Flying, only ranged and magic reach it (wiki Strategies); melee lands on the grounded body.
+   Hits after the shield breaks, during the 3-tick landing, already drain HP (guardian_04: 21 damage, 2% of 1100). */
 static int tfa_guardian_npc_damage(TfaState* s, TfaNpc* n, int damage, int attacker, AttackStyle style) {
     (void)attacker;
     if (n->kind != TFA_NPC_GUARDIAN || damage <= 0) return 0;
     TfaGuardianState* gs = &s->boss.guardian;
     if (style == ATTACK_STYLE_MELEE && gs->phase != TFA_GUARDIAN_GROUNDED) return 0;
     int before = n->shield + n->hp;
-    if (gs->phase == TFA_GUARDIAN_GROUNDED || (gs->enraged && n->shield == 0)) {
-        n->hp -= damage < n->hp ? damage : n->hp;
-    } else if (n->shield > 0) {
-        tfa_guardian_bar_damage(s, n, damage);
-    }
+    if (n->shield > 0 && gs->phase != TFA_GUARDIAN_GROUNDED) tfa_guardian_bar_damage(s, n, damage);
+    else n->hp -= damage < n->hp ? damage : n->hp;
     return before - (n->shield + n->hp);
 }
 
@@ -429,17 +428,15 @@ static void tfa_guardian_tick(TfaState* s, TfaContext* ctx) {
             }
             break;
         case TFA_GUARDIAN_GROUNDED: {
-            if (--gs->vine_timer == 0) {
-                tfa_guardian_spawn_vines(s, g);
-                gs->vine_timer = TFA_GUARDIAN.vine_interval;
-            }
-            if (g->hp <= threshold && gs->cross_tick == 0) gs->cross_tick = gs->phase_ticks;
+            if (--gs->vine_timer != 0) break;
+            gs->vine_timer = TFA_GUARDIAN.vine_interval;
             int base = TFA_GUARDIAN.ground_base + TFA_GUARDIAN.ground_step * (gs->knockdowns - 1);
-            int rise = gs->cross_tick > 0
-                ? (gs->cross_tick + 1 > TFA_GUARDIAN.ground_min ? gs->cross_tick + 1 : TFA_GUARDIAN.ground_min)
-                : base;
-            if (rise > base) rise = base;
-            if (gs->phase_ticks < rise) break;
+            int rise = gs->phase_ticks >= base || (gs->cross_tick > 0 && gs->phase_ticks >= TFA_GUARDIAN.ground_min);
+            if (!rise && g->hp <= threshold && gs->cross_tick == 0) gs->cross_tick = gs->phase_ticks;
+            if (!rise) {
+                tfa_guardian_spawn_vines(s, g);
+                break;
+            }
             gs->phase = TFA_GUARDIAN_FLYING;
             gs->phase_ticks = 0;
             g->npc_id = GUARDIAN_NPC_FLYING;
