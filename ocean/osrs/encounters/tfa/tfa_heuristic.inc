@@ -205,7 +205,9 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
                     if (d < best) { best = d; go_x = x; go_y = y; }
                 }
         }
-        if ((os->deflect == ATTACK_STYLE_RANGED || os->soul_split) && target && target->kind == TFA_NPC_OCELLUS) target = NULL;
+        /* No hits that would land into his soul split: hold for the 4 ticks before it as well. */
+        int split_soon = os->phase == TFA_OCELLUS_P4 && (os->p4_step == OC4_QUAD_A || os->p4_step == OC4_QUAD_B) && os->next_attack_tick - s->tick <= 4;
+        if ((os->deflect == ATTACK_STYLE_RANGED || os->soul_split || split_soon) && target && target->kind == TFA_NPC_OCELLUS) target = NULL;
         if (!target) {
             if (tp->player.prayer != want && want == PRAYER_NONE) acts[OSRS_HEAD_OVERHEAD] = ENCOUNTER_OVERHEAD_OFF;
             if (osrs_interaction_active(&tp->player.interaction)) {

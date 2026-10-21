@@ -1,5 +1,5 @@
-/* Ocellus, phases 3 and 4, and the room dispatch. Phase 3 is measured from 6 fights (the melee rotation, five specials,
-   the add timer and the quadrant destroy); phase 4 was never reached and follows the wiki description, provisional. */
+/* Ocellus, phases 3 and 4, and the room dispatch. Phase 3 is measured from 7 fights (the melee rotation, five specials, the add timer and the
+   three quadrant destroys); phase 4 from the one fight that reached it (ocellus_08), the rest of it after the wiki, provisional. */
 
 typedef struct {
     int first_attack;            /* 14881 -> first 14842 +10 (3/3) */
@@ -17,8 +17,9 @@ typedef struct {
     int spin_debris_short, spin_debris_long; /* gfx 4346 at +3, +6 after the quadrant destroyed (6/6 spins); the long spin also checks the short spin's tick */
     int spin_loop;               /* 14870 at +5 in the long variant */
     int spin_to_next;            /* 14871 -> next attack +4 */
-    int injury_after, injury_ticks, hit_after; /* a protection prayer at t+4 injures (3 ticks locked) and the t+5 hit lands through it; off at t+4 and back
-                                                   by t+5 blocks it (run 5: 6/6 spins, 17363 the one clean flick); the long spin checks t+4 and t+7, hits t+5 and t+8 */
+    int spin_check, spin_check_gap, injury_ticks; /* a protection prayer at t+4 injures (3 ticks locked) and the t+5 hit lands through it; off at t+4 and
+                                                    back by t+5 blocks it (run 5: 6/6 spins, 17363 the one clean flick). One check and hit per destroyed quadrant
+                                                    more, 3 apart: t+4/t+5, t+7/t+8 after one destroy (8/8), t+10/t+11 after two (3/3, 14871 at +11) */
     int void_first_min, void_first_max, void_tick_min, void_tick_max, void_tick_count; /* 62702: 14..16 at G+5, 6..7 every 2 for 12 ticks */
     int void_first;
     int unt_loop;                /* 14858 at +2 */
@@ -30,7 +31,8 @@ typedef struct {
     int unt_slam_out_min, unt_slam_out_max; /* at S everyone outside his 3x3 at S-1: 34..42 */
     int unt_slam_in_min, unt_slam_in_max;   /* at S+1 everyone inside it at S: 19..34 (runs 2-5, every player, both slams of run 5) */
     int unt_next;                /* 14857 -> next 14842 +37 */
-    int destroy_hp_pct[2];       /* quadrant destroy at the first action slot with hp at or below 75% (run 4 crossed 76.7 -> 73.2, run 5 77.9 -> 75.1), then 50%: provisional */
+    int destroy_hp_pct[3];       /* quadrant destroys at the first action slot with hp at or below 75, 50, 25% (bars 73-75, 51, 26 at the 14860 over 5 destroys),
+                                    the third leads into phase 4 */
     int destroy_after_slam;      /* after an Untether 14860 comes 4 after the slam (run 4) */
     int destroy_in;              /* elsewhere "Obliteration..." and 14859 2 before the 14860, on the slot the next attack had (run 5, after a spin) */
     int destroy_end, destroy_move, destroy_boss, destroy_next; /* from the 14860: 14862 +9 (2/2), players moved +11, boss +16, first 14842 +19 (2/2) */
@@ -52,7 +54,6 @@ typedef struct {
     int augmenter_blow;          /* detonates 30 after spawn: 37..39 on everyone */
     int augmenter_min, augmenter_max;
     int tile_lo, tile_hi;        /* add tiles 4..10 from the cross */
-    int p4_first_hp_pct;         /* provisional: the boss keeps at least a fifth of its pool for phase 4 */
 } TfaOcellusP3Tuning;
 
 static const TfaOcellusP3Tuning TFA_OC3 = {
@@ -64,7 +65,7 @@ static const TfaOcellusP3Tuning TFA_OC3 = {
     .special_after_slash = 4,
     .spin_hit_min = 14, .spin_hit_max = 26,
     .spin_debris_short = 3, .spin_debris_long = 6, .spin_loop = 5, .spin_to_next = 4,
-    .injury_after = 1, .injury_ticks = 3, .hit_after = 2,
+    .spin_check = 4, .spin_check_gap = 3, .injury_ticks = 3,
     .void_first_min = 14, .void_first_max = 16, .void_tick_min = 6, .void_tick_max = 7, .void_tick_count = 6,
     .void_first = 5,
     .unt_loop = 2,
@@ -76,7 +77,7 @@ static const TfaOcellusP3Tuning TFA_OC3 = {
     .unt_slam_out_min = 34, .unt_slam_out_max = 42,
     .unt_slam_in_min = 19, .unt_slam_in_max = 34,
     .unt_next = 37,
-    .destroy_hp_pct = { 75, 50 },
+    .destroy_hp_pct = { 75, 50, 25 },
     .destroy_after_slam = 4, .destroy_in = 2,
     .destroy_end = 9, .destroy_move = 11, .destroy_boss = 16, .destroy_next = 19,
     .destroy_min = 6, .destroy_max = 7,
@@ -91,33 +92,34 @@ static const TfaOcellusP3Tuning TFA_OC3 = {
     .siphon_pulse = 4, .siphon_heal_min = 12, .siphon_heal_max = 14, .siphon_death_heal = 22,
     .augmenter_blow = 30, .augmenter_min = 37, .augmenter_max = 39,
     .tile_lo = 4, .tile_hi = 10,
-    .p4_first_hp_pct = 20,
 };
 
 typedef struct {
-    int rise, wind_hit, wind_explosions, wind_gap, wind_len; /* provisional: the wiki gives no ticks */
-    int land, soul_len, soul_hit, void_len;
-    int steps;
+    int step_len[9];             /* one 60-tick cycle (ocellus_08, 3 cycles, from 14863 at C): rise C, wind C+8, land 14865 C+21, quadrant attack 14844
+                                    C+24, void 14855 C+34, wind C+39, void end 14856 C+50, quadrant attack 14844 C+52, rifts C+59, next rise C+60 */
+    int wind_explosions, wind_gap; /* provisional: 6 personal explosions every 2 ticks after each wind (void spin spotanim 4340 for 3 ticks) */
+    int quad_hit;                /* quadrant attack hit 9 after the 14844 (hits through prayer at C+33 and C+61, 6..8) */
     int ring;
-    int ring_min, ring_max;
-    int wind_min, wind_max;      /* explosion damage per hit, provisional */
-    int soul_min, soul_max;
+    int wind_min, wind_max;      /* explosion damage: 6..16 seen (n=7) */
+    int quad_min, quad_max;      /* unprotected quadrant attack: provisional */
     int void_min, void_max;
-    int rifts, rift_life, rift_radius, rift_min, rift_max;
+    int rifts_max;               /* 2, 3, 4 over the three recorded cycles; held at 4 after that (unrecorded, provisional) */
+    int rift_life, rift_radius, rift_min, rift_max;
 } TfaOcellusP4Tuning;
 
-/* All provisional: the wiki describes the order of P4 (deflect melee, wind of half current hp, 6 void explosions every 2 ticks,
-   soul split with a quadrant-wide attack, void quadrant with deflect range) but publishes no ticks, ids or damage. */
+/* Phase 4 from ocellus_08 (one raider alive through 3 cycles): "End..." 16 after the third destroy, the first rise 3 later. The wind takes half
+   of current hp (27, 29, 24, 18, 6 on that raider) and the raider's orb heals exactly that (4314 at pickup, 4/4). Rifts come one tick before
+   each rise from the second, one more each cycle (2, 3, 4). Which visual asks for which prayer is still unknown, so the quadrant style is drawn. */
 static const TfaOcellusP4Tuning TFA_OC4 = {
-    .rise = 4, .wind_hit = 2, .wind_explosions = 6, .wind_gap = 2, .wind_len = 14,
-    .land = 3, .soul_len = 8, .soul_hit = 4, .void_len = 14,
-    .steps = 8,
+    .step_len = { 8, 13, 3, 10, 5, 11, 2, 7, 1 },
+    .wind_explosions = 6, .wind_gap = 2,
+    .quad_hit = 9,
     .ring = 2,
-    .ring_min = 6, .ring_max = 8,
-    .wind_min = 14, .wind_max = 20,
-    .soul_min = 25, .soul_max = 40,
+    .wind_min = 6, .wind_max = 16,
+    .quad_min = 25, .quad_max = 40,
     .void_min = 8, .void_max = 12,
-    .rifts = 2, .rift_life = 12, .rift_radius = 3, .rift_min = 40, .rift_max = 48,
+    .rifts_max = 4,
+    .rift_life = 12, .rift_radius = 3, .rift_min = 40, .rift_max = 48,
 };
 
 static const int8_t OC_QUAD_ORDER[4] = { 1, 3, 2, 0 };
@@ -284,7 +286,7 @@ static void oc_p3_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e);
 
 static int oc_destroy_due(const TfaState* s, const TfaNpc* n) {
     const TfaOcellusState* os = &s->boss.ocellus;
-    return os->destroyed < 2 && n->hp * 100 <= TFA_OC3.destroy_hp_pct[os->destroyed] * n->max_hp;
+    return os->destroyed < 3 && n->hp * 100 <= TFA_OC3.destroy_hp_pct[os->destroyed] * n->max_hp;
 }
 
 /* The quadrant destroy from the 14860 at delay 0 (now) or later: it replaces the pending attack, the second one leads into phase 4. */
@@ -300,7 +302,7 @@ static void oc_destroy(TfaState* s, TfaNpc* n, int delay) {
     oc_at(s, delay + TFA_OC3.destroy_move, OCE_P3_DESTROY_MOVE, 0, 0);
     oc_at(s, delay + TFA_OC3.destroy_boss, OCE_P3_DESTROY_MOVE, 1, 0);
     int next = delay + TFA_OC3.destroy_next;
-    oc_at(s, next, os->destroyed + (delay ? 1 : 0) == 2 ? OCE_P4_START : OCE_P3_ATTACK, 0, 0);
+    oc_at(s, next, os->destroyed + (delay ? 1 : 0) == 3 ? OCE_P4_START : OCE_P3_ATTACK, 0, 0);
     os->pause_until = s->tick + delay + TFA_OC3.destroy_boss + 2;
     os->busy_until = s->tick + next;
     os->next_attack_tick = s->tick + next;
@@ -357,24 +359,26 @@ static void oc_p3_attack(TfaState* s, TfaNpc* n) {
 
 static void oc_spin(TfaState* s, TfaNpc* n) {
     TfaOcellusState* os = oc_state(s);
-    int long_variant = os->destroyed >= 1;
-    int g = long_variant ? TFA_OC3.spin_debris_long : TFA_OC3.spin_debris_short;
+    int pairs = (os->destroyed < 2 ? os->destroyed : 2) + 1;
+    int g = os->destroyed ? TFA_OC3.spin_debris_long : TFA_OC3.spin_debris_short;
     n->act = TFA_ACT_SPECIAL;
     tfa_npc_anim(s, n, OC_ANIM_SPIN);
     os->spins++;
     if (os->spins % TFA_OC3.vine_every == 1) os->vine_pending = 1;
     oc_whole_room(s, s->tick + 1, TFA_OC3.spin_hit_min, TFA_OC3.spin_hit_max, ATTACK_STYLE_MELEE, 0);
     oc_at(s, g, OCE_P3_SPIN_DEBRIS, 0, 0);
-    for (int k = 0; k <= long_variant; k++) {
-        int check = (k ? TFA_OC3.spin_debris_long : TFA_OC3.spin_debris_short) + TFA_OC3.injury_after;
-        oc_whole_room(s, s->tick + check - TFA_OC3.injury_after + TFA_OC3.hit_after, TFA_OC3.spin_hit_min, TFA_OC3.spin_hit_max, ATTACK_STYLE_MELEE, 0);
+    int last_hit = 0;
+    for (int k = 0; k < pairs; k++) {
+        int check = TFA_OC3.spin_check + TFA_OC3.spin_check_gap * k;
+        last_hit = check + 1;
+        oc_whole_room(s, s->tick + last_hit, TFA_OC3.spin_hit_min, TFA_OC3.spin_hit_max, ATTACK_STYLE_MELEE, 0);
         oc_at(s, check, OCE_P3_SPIN_INJURY, 0, 0);
         oc_at(s, check - 1, OCE_P3_WANT, PRAYER_NONE, 0);
         oc_at(s, check, OCE_P3_WANT, PRAYER_PROTECT_MELEE, 0);
     }
-    if (long_variant) oc_at(s, TFA_OC3.spin_loop, OCE_P3_ANIM, OC_ANIM_SPIN_LOOP, 0);
-    oc_at(s, g + TFA_OC3.hit_after, OCE_P3_ANIM, OC_ANIM_SPIN_END, 0);
-    int next = g + TFA_OC3.hit_after + TFA_OC3.spin_to_next;
+    if (pairs > 1) oc_at(s, TFA_OC3.spin_loop, OCE_P3_ANIM, OC_ANIM_SPIN_LOOP, 0);
+    oc_at(s, last_hit, OCE_P3_ANIM, OC_ANIM_SPIN_END, 0);
+    int next = last_hit + TFA_OC3.spin_to_next;
     oc_at(s, next, OCE_P3_ATTACK, 0, 0);
     oc_at(s, next - TFA_OC3.destroy_in, OCE_P3_DESTROY_CHECK, 1, 0);
     os->next_attack_tick = s->tick + next;
@@ -582,7 +586,7 @@ static void oc_p3_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
 
 /* Phase 4. */
 typedef enum {
-    OC4_RISE = 0, OC4_WIND_A, OC4_LAND_A, OC4_SOUL_A, OC4_VOID, OC4_WIND_B, OC4_LAND_B, OC4_SOUL_B,
+    OC4_RISE = 0, OC4_WIND_A, OC4_LAND, OC4_QUAD_A, OC4_VOID, OC4_WIND_B, OC4_VOID_END, OC4_QUAD_B, OC4_RIFTS, OC4_STEPS,
 } TfaOc4Step;
 
 static void oc_p4_ring(TfaState* s, const TfaNpc* n, int inverse, int start, int end, int min, int max) {
@@ -636,59 +640,63 @@ static void oc_p4_orbs(TfaState* s) {
     }
 }
 
+static void oc_p4_quadrant(TfaState* s, TfaNpc* n) {
+    TfaOcellusState* os = oc_state(s);
+    tfa_npc_anim(s, n, OC_ANIM_QUADRANT_ATTACK);
+    os->soul_split = 1;
+    os->deflect = ATTACK_STYLE_NONE;
+    AttackStyle style = (AttackStyle)(ATTACK_STYLE_MELEE + tfa_rand(s, 3));
+    n->act = style == ATTACK_STYLE_MELEE ? TFA_ACT_MELEE : style == ATTACK_STYLE_RANGED ? TFA_ACT_RANGED : TFA_ACT_MAGIC;
+    oc_want(s, style == ATTACK_STYLE_MELEE ? PRAYER_PROTECT_MELEE : style == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED : PRAYER_PROTECT_MAGIC);
+    for (int p = 0; p < s->team_size; p++)
+        if (tfa_alive(s, p))
+            tfa_queue_npc_hit_land(s, p, tfa_rand_range(s, TFA_OC4.quad_min, TFA_OC4.quad_max), style, TFA_OC4.quad_hit, 0, n);
+}
+
 static void oc_p4_step(TfaState* s, TfaNpc* n, int step) {
     TfaOcellusState* os = oc_state(s);
-    int len;
     n->act = TFA_ACT_IDLE;
-    switch (step) {
+    switch ((TfaOc4Step)step) {
         case OC4_RISE:
             tfa_npc_anim(s, n, OC_ANIM_DEFLECT_IN);
             os->deflect = ATTACK_STYLE_MELEE;
             os->soul_split = 0;
-            oc_p4_ring(s, n, 0, s->tick + 1, s->tick + TFA_OC4.rise, TFA_OC4.ring_min, TFA_OC4.ring_max);
-            if (os->p4_cycle > 0) {
-                for (int k = 0; k < TFA_OC4.rifts; k++) {
-                    int x, y;
-                    oc_add_tile(s, oc_cur_quad(os), &x, &y);
-                    TfaNpc* r = tfa_npc_spawn(s, TFA_NPC_VOID_RIFT, MON_TFA_VOID_RIFT, OC_NPC_RIFT, x, y);
-                    oc_at(s, TFA_OC4.rift_life, OCE_P4_RIFT_BLOW, tfa_npc_slot(s, r), (int)r->instance_id);
-                }
-            }
-            len = TFA_OC4.rise;
+            oc_p4_ring(s, n, 0, s->tick + 1, s->tick + TFA_OC4.step_len[OC4_RISE] + TFA_OC4.step_len[OC4_WIND_A], TFA_OC4.void_min, TFA_OC4.void_max);
             break;
         case OC4_WIND_A:
         case OC4_WIND_B:
             oc_p4_wind(s, n);
-            len = TFA_OC4.wind_len;
             break;
-        case OC4_LAND_A:
-        case OC4_LAND_B:
+        case OC4_LAND:
             tfa_npc_anim(s, n, OC_ANIM_DEFLECT_OUT);
             os->deflect = ATTACK_STYLE_NONE;
-            len = TFA_OC4.land;
             break;
-        case OC4_SOUL_A:
-        case OC4_SOUL_B: {
-            tfa_npc_anim(s, n, OC_ANIM_SOUL_SPLIT);
-            os->soul_split = 1;
-            AttackStyle style = (AttackStyle)(ATTACK_STYLE_MELEE + tfa_rand(s, 3));
-            n->act = style == ATTACK_STYLE_MELEE ? TFA_ACT_MELEE : style == ATTACK_STYLE_RANGED ? TFA_ACT_RANGED : TFA_ACT_MAGIC;
-            oc_want(s, style == ATTACK_STYLE_MELEE ? PRAYER_PROTECT_MELEE : style == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED : PRAYER_PROTECT_MAGIC);
-            for (int p = 0; p < s->team_size; p++)
-                if (tfa_alive(s, p))
-                    tfa_queue_npc_hit_land(s, p, tfa_rand_range(s, TFA_OC4.soul_min, TFA_OC4.soul_max), style, TFA_OC4.soul_hit, 0, n);
-            len = TFA_OC4.soul_len;
+        case OC4_QUAD_A:
+        case OC4_QUAD_B:
+            oc_p4_quadrant(s, n);
             break;
-        }
-        default:
-            tfa_npc_anim(s, n, OC_ANIM_DEFLECT_IN);
+        case OC4_VOID:
+            tfa_npc_anim(s, n, OC_ANIM_VOID_IN);
             os->deflect = ATTACK_STYLE_RANGED;
             os->soul_split = 0;
-            len = TFA_OC4.void_len;
-            oc_p4_ring(s, n, 1, s->tick + 1, s->tick + len, TFA_OC4.void_min, TFA_OC4.void_max);
+            oc_p4_ring(s, n, 1, s->tick + 1, s->tick + TFA_OC4.step_len[OC4_VOID] + TFA_OC4.step_len[OC4_WIND_B], TFA_OC4.void_min, TFA_OC4.void_max);
             break;
+        case OC4_VOID_END:
+            tfa_npc_anim(s, n, OC_ANIM_VOID_OUT);
+            os->deflect = ATTACK_STYLE_NONE;
+            break;
+        case OC4_RIFTS:
+            for (int k = 0; k <= os->p4_cycle && k < TFA_OC4.rifts_max; k++) {
+                int x, y;
+                oc_add_tile(s, oc_cur_quad(os), &x, &y);
+                TfaNpc* r = tfa_npc_spawn(s, TFA_NPC_VOID_RIFT, MON_TFA_VOID_RIFT, OC_NPC_RIFT, x, y);
+                oc_at(s, TFA_OC4.rift_life, OCE_P4_RIFT_BLOW, tfa_npc_slot(s, r), (int)r->instance_id);
+            }
+            break;
+        case OC4_STEPS: abort();
     }
-    os->p4_step = (step + 1) % TFA_OC4.steps;
+    int len = TFA_OC4.step_len[step];
+    os->p4_step = (step + 1) % OC4_STEPS;
     if (os->p4_step == 0) os->p4_cycle++;
     oc_at(s, len, OCE_P4_STEP, os->p4_step, 0);
     os->next_attack_tick = s->tick + len;
@@ -703,7 +711,6 @@ static void oc_p4_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
             oc_cancel(s, OCE_P3_ADD_DUE, OCE_P3_ADD_DUE);
             oc_cancel(s, OCE_P3_SIPHON_PULSE, OCE_P3_AUGMENTER_BLOW);
             n->attackable = 1;
-            if (n->hp * 100 < n->max_hp * TFA_OC3.p4_first_hp_pct) n->hp = n->max_hp * TFA_OC3.p4_first_hp_pct / 100;
             oc_want(s, PRAYER_NONE);
             oc_p4_step(s, n, OC4_RISE);
             break;

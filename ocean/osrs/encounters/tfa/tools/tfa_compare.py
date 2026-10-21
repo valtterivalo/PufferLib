@@ -1610,9 +1610,9 @@ def ocellus_destroys(fights):
     return hist(out)
 
 
-def ocellus_first_destroy_hp(fights):
-    """The first destroy: (Ocellus' bar at or below 75 at the 14860, at least 75 the tick before the special before it began; the sim's bar rounds down,
-    the client's up)."""
+def ocellus_destroy_hp(fights):
+    """Per quadrant destroy k (thresholds 75, 50, 25): (k, bar at the 14860 at most one step above the threshold, bar at least the threshold the tick
+    before the special before it began). The client's bar rounds up, the sim's down."""
     out = []
     for ev in fights.values():
         bars = sorted((e["t"], int(e["id"])) for e in ev if e["kind"] == "NHP" and base(e["actor"]) == "16677" and e["id"] != "-1")
@@ -1620,12 +1620,35 @@ def ocellus_first_destroy_hp(fights):
         specials = sorted([e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] in ("14869", "14857")] +
             [t for i, t in enumerate(rays) if i == 0 or t - rays[i - 1] > 12])
         destroys = sorted(e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14860")
-        if not destroys or not bars:
-            continue
-        d = destroys[0]
-        before = max((t for t in specials if t < d - 4), default=None)
         bar = lambda t: max((b for b in bars if b[0] <= t), default=(0, 100))[1]
-        out.append((bar(d) <= 75, before is not None and bar(before - 1) >= 75))
+        for k, d in enumerate(destroys[:3]):
+            thr = (75, 50, 25)[k]
+            before = max((t for t in specials if t < d - 4), default=None)
+            out.append((k + 1, bar(d) <= thr + 1, before is not None and bar(before - 1) >= thr))
+    return hist(out)
+
+
+def ocellus_p4(fights):
+    """Phase 4: ('start', first 14863 - third 14860), ('cycle', offsets of 14865, 14844, 14855, 14856, 14844 and the next 14863 from each 14863),
+    ('rifts', spawn tick - next 14863, count)."""
+    out = []
+    for ev in fights.values():
+        anims = collections.defaultdict(list)
+        for e in ev:
+            if e["kind"] == "ANIM" and base(e["actor"]) == "16677":
+                anims[e["id"]].append(e["t"])
+        destroys = sorted(anims["14860"])
+        rises = sorted(anims["14863"])
+        if len(destroys) >= 3 and rises:
+            out.append(("start", rises[0] - destroys[2]))
+        for c, nxt in zip(rises, rises[1:]):
+            after = lambda a: sorted(t - c for t in anims[a] if c < t < nxt)
+            out.append(("cycle", tuple(after("14865")), tuple(after("14844")), tuple(after("14855")), tuple(after("14856")), nxt - c))
+        spawns = collections.Counter(e["t"] for e in ev if e["kind"] == "NPC+" and base(e["actor"]) == "16678" and rises and e["t"] >= rises[0])
+        for t, n in sorted(spawns.items()):
+            nxt = min((r for r in rises if r >= t), default=None)
+            if nxt is not None:
+                out.append(("rifts", t - nxt, n))
     return hist(out)
 
 
@@ -1663,7 +1686,8 @@ def ocellus(real, sim):
     compare("14881 -> first 14842", anim_offsets(real, "14881", "14842", 20), anim_offsets(sim, "14881", "14842", 20), failures)
     support("slam: (check, where, hit)", ocellus_slam_rule(real), ocellus_slam_rule(sim), failures)
     support("destroy (form, end, next)", ocellus_destroys(real), ocellus_destroys(sim), failures)
-    support("first destroy at 75%", ocellus_first_destroy_hp(real), ocellus_first_destroy_hp(sim), failures)
+    support("destroys at 75/50/25%", ocellus_destroy_hp(real), ocellus_destroy_hp(sim), failures)
+    support("phase 4", ocellus_p4(real), ocellus_p4(sim), failures)
     ocellus_ground_laws(real, sim, failures)
     damage_laws(real, sim, {"16673", "16674", "16675", "16677"}, failures, rate=False)
     return failures
