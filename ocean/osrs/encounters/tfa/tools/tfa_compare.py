@@ -75,6 +75,16 @@ def targeted_hit_delay(fights, anim, window=8):
     return hist(out)
 
 
+def projectile_offsets(fights, anim, proj):
+    """(projectile tick minus anim tick, flight rounded down) for each projectile an anim fires."""
+    out = []
+    for ev in fights.values():
+        projs = [e for e in ev if e["kind"] == "PROJ" and e["id"] == proj]
+        for a in (e for e in ev if e["kind"] == "ANIM" and e["id"] == anim):
+            out += [(p["t"] - a["t"], int(float(p["b"]))) for p in projs if 0 <= p["t"] - a["t"] <= 3 and p["actor"] == a["actor"]]
+    return hist(out)
+
+
 def median_law(name, real, sim, tol, failures):
     r = sorted(real)
     m = sorted(sim)
@@ -175,6 +185,7 @@ def guardian(real, sim):
     for anim in ("14751", "14753", "14754", "14748"):
         compare(f"{anim} next attack", next_attack(real, "guardian", anim), next_attack(sim, "guardian", anim), failures)
     compare("14751 P0 hit delay", anim_to_p0_hit(real, "14751"), anim_to_p0_hit(sim, "14751"), failures)
+    compare("4201 launch, flight", projectile_offsets(real, "14751", "4201"), projectile_offsets(sim, "14751", "4201"), failures)
     rg, sg = ground_durations(real), ground_durations(sim)
     for k in sorted(set(rg) | set(sg)):
         compare(f"ground {k}", rg.get(k, hist([])), sg.get(k, hist([])), failures)
@@ -255,6 +266,8 @@ def xarth(real, sim):
         compare(f"{anim} next attack", next_attack(real, "xarth", anim), next_attack(sim, "xarth", anim), failures)
     compare("AOE schedule", hist(schedule(real, "14992")), hist(schedule(sim, "14992")), failures)
     compare("first ranged", first_of(real, "14985"), first_of(sim, "14985"), failures)
+    compare("4374 launch, flight", projectile_offsets(real, "14985", "4374"), projectile_offsets(sim, "14985", "4374"), failures)
+    compare("4034 launch, flight", projectile_offsets(real, "14984", "4034"), projectile_offsets(sim, "14984", "4034"), failures)
     compare("14985 aimed P0 hit delay", targeted_hit_delay(real, "14985"), targeted_hit_delay(sim, "14985"), failures)
     compare("14984 aimed P0 hit delay", targeted_hit_delay(real, "14984"), targeted_hit_delay(sim, "14984"), failures)
     compare("pillar break after AOE", pillar_breaks(real), pillar_breaks(sim), failures)
