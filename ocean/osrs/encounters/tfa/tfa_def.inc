@@ -78,7 +78,9 @@ static void tfa_reset_typed(TfaState* s, TfaContext* ctx, uint32_t seed) {
     s->episode_mode = ctx->config.episode_mode;
     s->path = ctx->config.path;
     for (int p = 0; p < TFA_MAX_PLAYERS; p++) tfa_player_reset(s, p);
-    int room = ctx->config.start_room;
+    int room = ctx->config.start_room >= 0
+        ? ctx->config.start_room
+        : TFA_IMPLEMENTED_ROOMS[tfa_rand(s, TFA_NUM_IMPLEMENTED_ROOMS)];
     s->raid_index = 0;
     if (s->episode_mode == TFA_EPISODE_RAID) room = tfa_raid_room(0, s->path);
     tfa_room_enter(s, room);
@@ -241,7 +243,7 @@ static void tfa_put_int(EncounterState* state, EncounterContext* context, const 
     else if (strcmp(key, "episode_mode") == 0)
         ctx->config.episode_mode = encounter_require_binary_config("tfa", key, value);
     else if (strcmp(key, "start_room") == 0)
-        ctx->config.start_room = encounter_require_int_range_config("tfa", key, value, 0, TFA_ROOM_COUNT - 1);
+        ctx->config.start_room = encounter_require_int_range_config("tfa", key, value, -1, TFA_ROOM_COUNT - 1);
     else if (strcmp(key, "path") == 0)
         ctx->config.path = encounter_require_int_range_config("tfa", key, value, 0, 7);
     else if (strcmp(key, "room_max_ticks") == 0)
@@ -286,16 +288,39 @@ static int tfa_get_winner(EncounterState* state, EncounterContext* context) {
     return s->outcome == TFA_OUTCOME_CLEARED ? 0 : s->episode_over ? 1 : -1;
 }
 
+/* Hazard tiles, loc hazards as models on their tile, and this tick's NPC projectiles. Durations are client cycles. */
 static void tfa_render_post_tick(EncounterState* state, EncounterContext* context, EncounterOverlay* ov) {
     (void)context;
     TfaState* s = (TfaState*)state;
-    for (int i = 0; i < TFA_MAX_HAZARDS && ov->hazard_count < ENCOUNTER_MAX_OVERLAY_TILES; i++) {
+    for (int i = 0; i < TFA_MAX_HAZARDS; i++) {
         const TfaHazard* h = &s->hazards[i];
         if (h->kind == TFA_HAZ_NONE) continue;
+        if (h->loc_id > 0 && ov->floating_model_count < ENCOUNTER_MAX_OVERLAY_FLOATING_MODELS) {
+            encounter_emit_floating_model(ov, ENCOUNTER_PROJECTILE_TARGET_FIXED, -1, h->x, h->y,
+                OSRS_LOC_MODEL_BASE | (uint32_t)h->loc_id, -1, 0.0f, 0.0f, 1.0f);
+            continue;
+        }
+        if (ov->hazard_count >= ENCOUNTER_MAX_OVERLAY_TILES) continue;
         ov->hazards[ov->hazard_count].x = h->x;
         ov->hazards[ov->hazard_count].y = h->y;
         ov->hazards[ov->hazard_count].active = 1;
         ov->hazard_count++;
+    }
+    for (int i = 0; i < s->fx_count; i++) {
+        const TfaFx* fx = &s->fx[i];
+        const TfaNpc* src = &s->npcs[fx->src_slot];
+        const Player* dst = &s->players[fx->dst_player].player;
+        OsrsProjectileEventSpec spec = {
+            .src_x = src->x, .src_y = src->y, .dst_x = dst->x, .dst_y = dst->y,
+            .duration_ticks = fx->duration * 30,
+            .start_delay = fx->delay * 30,
+            .start_h = 100, .end_h = 40, .curve = 16,
+            .src_size = src->size, .dst_size = 1,
+            .model_id = fx->model,
+            .anim_id = fx->anim,
+        };
+        int idx = osrs_emit_projectile_with_spec(ov, &spec, fx->dst_player == 0);
+        encounter_set_projectile_source_npc_slot(ov, idx, fx->src_slot);
     }
 }
 

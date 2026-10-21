@@ -15,6 +15,10 @@ typedef struct {
     int gfx;
 } DumpHazard;
 
+typedef struct {
+    int t, gfx, npc_id, slot, x, y, dst, flight;
+} DumpProj;
+
 static const char* const ROOM_NAMES[TFA_ROOM_COUNT] = {
     "guardian", "bork", "ezekiel", "dreadnoth", "moia", "xarth", "dagonhai", "ocellus",
 };
@@ -54,6 +58,8 @@ int main(int argc, char** argv) {
         DumpHazard hazards[TFA_MAX_HAZARDS] = {0};
         char pray[TFA_MAX_PLAYERS][64] = {{0}};
         int last_hp[TFA_MAX_PLAYERS] = {0};
+        static DumpProj pending[256];
+        int npending = 0;
         int acts[TFA_MAX_PLAYERS * TFA_NUM_ACTION_HEADS];
         int t = 0;
         for (;;) {
@@ -89,12 +95,27 @@ int main(int argc, char** argv) {
             for (int i = 0; i < TFA_MAX_HAZARDS; i++) {
                 const TfaHazard* h = &s->hazards[i];
                 DumpHazard* d = &hazards[i];
+                int loc = h->kind == TFA_HAZ_NONE ? -1 : h->loc_id;
                 int gfx = h->kind == TFA_HAZ_NONE ? -1 : h->gfx_id;
-                if (d->gfx > 0 && d->gfx != gfx)
+                if (d->gfx > 0 && d->gfx != loc)
                     printf("%s\t%d\tOBJ-\t-\t%d\t%d\t%d\t1x1\t0\t-\n", fid, t, d->gfx, h->x, h->y);
-                if (gfx > 0 && d->gfx != gfx)
-                    printf("%s\t%d\tOBJ+\t-\t%d\t%d\t%d\t1x1\t0\t-\n", fid, t, gfx, h->x, h->y);
-                d->gfx = gfx;
+                if (loc > 0 && d->gfx != loc)
+                    printf("%s\t%d\tOBJ+\t-\t%d\t%d\t%d\t1x1\t0\t-\n", fid, t, loc, h->x, h->y);
+                if (gfx > 0 && d->kind != h->kind + 1000 * gfx)
+                    printf("%s\t%d\tGFX\t-\t%d\t%d\t%d\t-\t-\t-\n", fid, t, gfx, h->x, h->y);
+                d->gfx = loc;
+                d->kind = h->kind == TFA_HAZ_NONE ? 0 : h->kind + 1000 * gfx;
+            }
+            for (int i = 0; i < s->fx_count; i++) {
+                const TfaFx* fx = &s->fx[i];
+                const TfaNpc* src = &s->npcs[fx->src_slot];
+                pending[npending++] = (DumpProj){ t + fx->delay, fx->gfx_id, src->npc_id, fx->src_slot, src->x, src->y, fx->dst_player, fx->duration };
+            }
+            for (int i = 0; i < npending; i++) {
+                if (pending[i].t != t) continue;
+                printf("%s\t%d\tPROJ\t%d#%d\t%d\t%d\t%d\tP%d\t%d\t-\n", fid, t, pending[i].npc_id, pending[i].slot,
+                    pending[i].gfx, pending[i].x, pending[i].y, pending[i].dst, pending[i].flight);
+                pending[i--] = pending[--npending];
             }
             for (int p = 0; p < team; p++) {
                 const TfaPlayer* tp = &s->players[p];

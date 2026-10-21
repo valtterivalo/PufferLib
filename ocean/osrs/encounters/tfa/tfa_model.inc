@@ -126,6 +126,7 @@ typedef struct {
     int16_t min_damage, max_damage;
     int16_t protected_pct;
     int32_t gfx_id;
+    int32_t loc_id;
 } TfaHazard;
 
 typedef enum {
@@ -181,6 +182,24 @@ typedef struct {
     EncounterProjectileTiming attack_timing;
 } TfaPlayer;
 
+/* Render-only effects of this tick: projectiles from an NPC to a player, models on tiles. */
+typedef enum {
+    TFA_FX_PROJECTILE = 1,
+} TfaFxKind;
+
+typedef struct {
+    uint8_t kind;
+    int8_t src_slot;
+    int8_t dst_player;
+    int16_t delay;
+    int16_t duration;
+    int32_t gfx_id;
+    uint32_t model;
+    int32_t anim;
+} TfaFx;
+
+#define TFA_MAX_FX 32
+
 typedef struct {
     float room_clear;
     float raid_clear;
@@ -220,6 +239,8 @@ typedef struct {
     float team_damage_dealt_tick;
     float episode_return;
     int room_cleared_this_tick;
+    TfaFx fx[TFA_MAX_FX];
+    int fx_count;
     union {
         TfaGuardianState guardian;
         TfaXarthState xarth;
