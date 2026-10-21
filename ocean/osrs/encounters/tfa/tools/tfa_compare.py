@@ -9,6 +9,8 @@ FIXTURES = pathlib.Path(__file__).resolve().parent.parent / "fixtures"
 ATTACKS = {
     "guardian": {"14751", "14753", "14754", "14752", "14750"},
     "xarth": {"14983", "14984", "14985", "14992", "14989"},
+    "bork": {"14542", "14550", "14551", "14554", "14555"},
+    "moia": {"14785", "14788"},
 }
 
 
@@ -268,6 +270,128 @@ def xarth(real, sim):
     return failures
 
 
+def exact(name, real, sim, failures):
+    """A single-sample law: the real mode must be the sim mode whatever n is."""
+    if not real:
+        return
+    ok = bool(sim) and real.most_common(1)[0][0] == sim.most_common(1)[0][0]
+    if not ok:
+        failures.append(name)
+    print(f"{'ok ' if ok else 'BAD'} {name:28s} real {fmt(real):42s} sim {fmt(sim)}")
+
+
+def chain_gap(fights, a_id, b_id, actor_id):
+    out = []
+    for ev in fights.values():
+        anims = [e for e in ev if e["kind"] == "ANIM" and base(e["actor"]) == actor_id]
+        for a, b in zip(anims, anims[1:]):
+            if a["id"] == a_id and b["id"] == b_id:
+                out.append(b["t"] - a["t"])
+    return hist(out)
+
+
+def stomp_offsets(fights):
+    out = []
+    for ev in fights.values():
+        bombs = [e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14555"]
+        stomps = [e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14550"]
+        out += [min(t for t in stomps if t > b) - b for b in bombs if any(t > b for t in stomps)]
+    return hist(out)
+
+
+def proj_flights(fights, proj):
+    return hist([e["b"] for ev in fights.values() for e in ev if e["kind"] == "PROJ" and e["id"] == proj])
+
+
+def smork_gaps(fights):
+    out = []
+    for ev in fights.values():
+        ts = [e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] in ("14554", "14555")]
+        out += [b - a for a, b in zip(ts, ts[1:])]
+    return out
+
+
+def gong_hit_delays(fights):
+    out = []
+    for ev in fights.values():
+        hits = [e for e in ev if e["kind"] == "HIT" and e["actor"].startswith("P") and e["a"] in ("16", "17") and int(e["id"]) >= 5]
+        for g in (e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14542"):
+            out += [h["t"] - g for h in hits if g <= h["t"] <= g + 6]
+    return hist(out)
+
+
+def scorch_delay(fights):
+    out = []
+    for ev in fights.values():
+        objs = sorted(e["t"] for e in ev if e["kind"] == "OBJ+" and e["id"] == "62544")
+        for p in (e["t"] for e in ev if e["kind"] == "PROJ" and e["id"] in ("4045", "4440")):
+            nxt = next((t for t in objs if t >= p), None)
+            if nxt is not None:
+                out.append(nxt - p)
+    return hist(out)
+
+
+def scorch_counts(fights):
+    out = []
+    for ev in fights.values():
+        c = collections.Counter(e["t"] for e in ev if e["kind"] == "OBJ+" and e["id"] == "62544")
+        out += [c[t] for t in sorted(c)[:5]]
+    return out
+
+
+def shadowed(bx, by, x, y):
+    px, py = bx + 2.0, by + 2.0
+    dx, dy = x + 0.5 - px, y + 0.5 - py
+    enter, leave = 0.0, 1.0
+    for d, p, lo, hi in ((dx, px, 30.5, 32.5), (dy, py, 30.5, 32.5)):
+        if d == 0:
+            if p < lo or p > hi:
+                return False
+            continue
+        r0, r1 = (lo - p) / d, (hi - p) / d
+        enter, leave = max(enter, min(r0, r1)), min(leave, max(r0, r1))
+    return enter <= leave
+
+
+def gong_hits_in_shadow(fights):
+    """Gong-tick hits (>= 10, no projectile landing that tick) taken on a tile hidden from Bork's centre by the Smorks."""
+    inside = total = 0
+    for ev in fights.values():
+        lands = {e["t"] + int(float(e["b"])) for e in ev if e["kind"] == "PROJ"}
+        bork = {e["t"]: (int(e["x"]), int(e["y"])) for e in ev if e["kind"] == "NPOS" and base(e["actor"]) == "16640"}
+        for g in (e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14542"):
+            for h in ev:
+                if h["kind"] == "HIT" and h["actor"].startswith("P") and h["t"] == g and h["a"] in ("16", "17") and int(h["id"]) >= 10 and g not in lands:
+                    total += 1
+                    inside += shadowed(*bork[g], int(h["x"]), int(h["y"]))
+    return inside, total
+
+
+def bork(real, sim):
+    failures = []
+    compare("14542 next attack", next_attack(real, "bork", "14542"), next_attack(sim, "bork", "14542"), failures)
+    exact("14555 -> stomp 14550", stomp_offsets(real), stomp_offsets(sim), failures)
+    exact("14550 -> 14551", chain_gap(real, "14550", "14551", "16640"), chain_gap(sim, "14550", "14551", "16640"), failures)
+    exact("14551 -> gong", chain_gap(real, "14551", "14542", "16640"), chain_gap(sim, "14551", "14542", "16640"), failures)
+    for proj in ("4056", "4057", "4045", "4440"):
+        exact(f"{proj} flight", proj_flights(real, proj), proj_flights(sim, proj), failures)
+    median_law("smorks cannon gap", smork_gaps(real), smork_gaps(sim), 2, failures)
+    exact("gong player hit delay", gong_hit_delays(real), gong_hit_delays(sim), failures)
+    exact("scorch after projectile", scorch_delay(real), scorch_delay(sim), failures)
+    median_law("scorch tiles per landing", scorch_counts(real), scorch_counts(sim), 2, failures)
+    ri, rt = gong_hits_in_shadow(real)
+    si, st = gong_hits_in_shadow(sim)
+    ok = si == 0
+    if not ok:
+        failures.append("gong hits in shadow")
+    print(f"{('ok ' if st else '-- ') if ok else 'BAD'} {'gong hits in shadow':28s} real {ri}/{rt:<38} sim {si}/{st}")
+    return failures
+
+
+def moia(real, sim):
+    return []
+
+
 def main():
     boss, sim_path = sys.argv[1], sys.argv[2]
     party = sys.argv[3] if len(sys.argv) > 3 else None
@@ -276,7 +400,7 @@ def main():
         meta = {r["fight_id"]: r for r in csv.DictReader(open(FIXTURES / "tfa_fights.tsv"), delimiter="\t")}
         real = {k: v for k, v in real.items() if meta[k]["party_size"] == party}
     sim = load(sim_path)
-    failures = {"guardian": guardian, "xarth": xarth}[boss](real, sim)
+    failures = {"guardian": guardian, "xarth": xarth, "bork": bork, "moia": moia}[boss](real, sim)
     print(f"{len(failures)} laws differ: {failures}" if failures else "all laws agree")
     sys.exit(1 if failures else 0)
 

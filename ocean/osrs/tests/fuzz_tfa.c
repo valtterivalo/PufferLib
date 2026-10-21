@@ -44,7 +44,7 @@ static uint64_t run(int room, int team, uint32_t seed, int steps) {
 }
 
 int main(void) {
-    static const int rooms[] = { TFA_ROOM_GUARDIAN, TFA_ROOM_XARTH };
+    static const int rooms[] = { TFA_ROOM_GUARDIAN, TFA_ROOM_XARTH, TFA_ROOM_BORK };
     for (size_t r = 0; r < sizeof(rooms) / sizeof(*rooms); r++)
         for (int team = 1; team <= TFA_MAX_PLAYERS; team++) {
             uint64_t a = run(rooms[r], team, 11u + (uint32_t)team, 20000);

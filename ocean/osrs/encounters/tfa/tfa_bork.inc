@@ -231,12 +231,23 @@ static void tfa_bork_scorch(TfaState* s, int x, int y) {
     });
 }
 
-/* A blob of scorch tiles: the landing tile plus random neighbours, offsets seen in 5 clusters
+/* A blob of scorch tiles: the landing tile plus distinct random neighbours, offsets seen in 5 clusters
    (napalm dx -3..1, dy -2..3, bomb dx -1..1, dy -1..1). */
 static void tfa_bork_scorch_cluster(TfaState* s, int tx, int ty, int count, int dx0, int dx1, int dy0, int dy1) {
     tfa_bork_scorch(s, tx, ty);
-    for (int k = 1; k < count; k++)
-        tfa_bork_scorch(s, tx + tfa_rand_range(s, dx0, dx1), ty + tfa_rand_range(s, dy0, dy1));
+    int offsets[64][2], n = 0;
+    for (int dx = dx0; dx <= dx1; dx++)
+        for (int dy = dy0; dy <= dy1; dy++)
+            if (dx != 0 || dy != 0) { offsets[n][0] = dx; offsets[n][1] = dy; n++; }
+    for (int k = 1; k < count; k++) {
+        int pick = k - 1 + tfa_rand(s, n - (k - 1));
+        int sx = offsets[pick][0], sy = offsets[pick][1];
+        offsets[pick][0] = offsets[k - 1][0];
+        offsets[pick][1] = offsets[k - 1][1];
+        offsets[k - 1][0] = sx;
+        offsets[k - 1][1] = sy;
+        tfa_bork_scorch(s, tx + sx, ty + sy);
+    }
 }
 
 static void tfa_bork_blast(TfaState* s, int tx, int ty) {
@@ -290,7 +301,7 @@ static void tfa_bork_cannon(TfaState* s, TfaNpc* m) {
         int max_hit = magic ? TFA_BORK.magic_max_hit : TFA_BORK.ranged_max_hit;
         if (enraged) max_hit = max_hit * TFA_BORK.enraged_smork_pct / 100;
         int raw = tfa_npc_roll(s, m, p, style, max_hit);
-        tfa_queue_npc_hit(s, p, raw, style, TFA_BORK.ranged_hit, 0, m);
+        tfa_queue_npc_hit_land(s, p, raw, style, TFA_BORK.ranged_hit, 0, m);
         tfa_log_projectile(s, m, magic ? BORK_PROJ_MAGIC : BORK_PROJ_RANGED, p,
             s->players[p].player.x, s->players[p].player.y, 10);
         m->act = magic ? TFA_ACT_MAGIC : TFA_ACT_RANGED;

@@ -75,6 +75,15 @@ int main(int argc, char** argv) {
                         if (n->act != TFA_ACT_IDLE && n->target >= 0)
                             printf("%s\t%d\tTGT\t%d#%d\t%d\t-\t-\tP%d\t-\t-\n", fid, t, n->npc_id, i, n->anim_id, n->target);
                     }
+                    for (int k = 0; k < s->projectile_count; k++) {
+                        const TfaProjectile* pr = &s->projectiles[k];
+                        if (pr->source_slot != i) continue;
+                        char who[8] = "-";
+                        if (pr->target >= 0) snprintf(who, sizeof(who), "P%d", pr->target);
+                        printf("%s\t%d\tPROJ\t%d#%d\t%d\t%d\t%d\t%s\t%d%s\t%d,%d\n", fid, t, n->npc_id, i, pr->id,
+                            pr->source_x, pr->source_y, who, pr->flight_halves / 2, pr->flight_halves % 2 ? ".5" : "",
+                            pr->target_x, pr->target_y);
+                    }
                     for (int h = 0; h < n->hit_count_tick; h++)
                         printf("%s\t%d\tHIT\t%d#%d\t%d\t%d\t%d\t%d\t-\t-\n", fid, t, n->npc_id, i, n->hits_tick[h], n->x, n->y, n->hits_tick[h] > 0 ? 17 : 13);
                     if (n->max_hp > 0)
