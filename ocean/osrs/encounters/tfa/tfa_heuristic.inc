@@ -57,9 +57,20 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
                 if (!target || target->kind == TFA_NPC_OCELLUS || c->kind != TFA_NPC_OCELLUS_BLADE) target = c;
             }
         }
-        if (os->deflect != 0 && target && target->kind == TFA_NPC_OCELLUS) target = NULL;
+        const TfaNpc* boss = &s->npcs[0];
+        if (p == 0 && os->phase >= TFA_OCELLUS_P3 && boss->attackable && go_x < 0) {
+            go_x = boss->x - 1;
+            go_y = boss->y + 1;
+            if (tfa_layout_blocked(tfa_room_layout(s->room), go_x, go_y) || oc_quadrant(go_x, go_y) != oc_quadrant(boss->x + 1, boss->y + 1)) go_x = boss->x + 3;
+        }
+        if ((os->deflect == ATTACK_STYLE_RANGED || os->soul_split) && target && target->kind == TFA_NPC_OCELLUS) target = NULL;
         if (!target) {
             if (tp->player.prayer != want && want == PRAYER_NONE) acts[OSRS_HEAD_OVERHEAD] = ENCOUNTER_OVERHEAD_OFF;
+            if (osrs_interaction_active(&tp->player.interaction)) {
+                for (int a = 1; a < OSRS_PRIMARY_MOVE_ACTIONS && !acts[OSRS_HEAD_PRIMARY]; a++)
+                    if (!tfa_layout_blocked(tfa_room_layout(s->room), tp->player.x + ENCOUNTER_MOVE_TARGET_DX[a], tp->player.y + ENCOUNTER_MOVE_TARGET_DY[a]))
+                        acts[OSRS_HEAD_PRIMARY] = a;
+            }
             return;
         }
     } else if (s->room == TFA_ROOM_XARTH) {

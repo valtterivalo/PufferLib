@@ -11,6 +11,8 @@ ATTACKS = {
     "xarth": {"14983", "14984", "14985", "14992", "14989"},
     "dreadnoth": {"14779", "14777", "14780", "14782"},
     "ezekiel": {"14685", "14686", "14687", "14688", "14691", "14693"},
+    "ocellus": {"14806", "14807", "14809", "14810", "14811", "14812", "14813", "14837", "14878", "14842", "14846", "14848", "14851",
+                "14857", "14858", "14861", "14869", "14871"},
 }
 EZEKIEL_SLOT_NAMES = {"14685": "M", "14686": "G", "14687": "S", "14688": "H", "14691": "W", "14693": "R", "14694": "F", "14684": "X"}
 
@@ -529,6 +531,87 @@ def ezekiel(real, sim):
     return failures
 
 
+def first_offsets(fights, anchor, kind, npc_id, window=400):
+    """Ticks from each anchor anim to the first NPC+ of npc_id after it."""
+    out = []
+    for ev in fights.values():
+        for a in (e for e in ev if e["kind"] == "ANIM" and e["id"] == anchor):
+            n = next((e for e in ev if e["kind"] == kind and e["id"] == npc_id and 0 <= e["t"] - a["t"] <= window), None)
+            if n:
+                out.append(n["t"] - a["t"])
+    return hist(out)
+
+
+def anim_offsets(fights, anchor, anim, window):
+    out = []
+    for ev in fights.values():
+        for a in (e for e in ev if e["kind"] == "ANIM" and e["id"] == anchor):
+            out += [e["t"] - a["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == anim and 0 < e["t"] - a["t"] <= window]
+    return hist(out)
+
+
+def gfx_offsets(fights, anchor, gfx, window):
+    """Offset of the first gfx row after each anchor anim, split by the anchor's following anim (the spin variant)."""
+    out = []
+    for ev in fights.values():
+        for a in (e for e in ev if e["kind"] == "ANIM" and e["id"] == anchor):
+            g = next((e for e in ev if e["kind"] == "GFX" and e["id"] == gfx and 0 <= e["t"] - a["t"] <= window), None)
+            if g:
+                out.append(g["t"] - a["t"])
+    return hist(out)
+
+
+def big_hits(fights, anim, lo, window):
+    out = []
+    for ev in fights.values():
+        for a in (e for e in ev if e["kind"] == "ANIM" and e["id"] == anim):
+            out += [h["t"] - a["t"] for h in ev if h["kind"] == "HIT" and h["actor"].startswith("P") and h["a"] in ("16", "17")
+                    and int(h["id"]) >= lo and 0 <= h["t"] - a["t"] <= window]
+    return hist(out)
+
+
+def projectile_launch(fights, anim, proj):
+    out = []
+    for ev in fights.values():
+        projs = [e for e in ev if e["kind"] == "PROJ" and e["id"] == proj]
+        for a in (e for e in ev if e["kind"] == "ANIM" and e["id"] == anim):
+            out += [p["t"] - a["t"] for p in projs if 0 <= p["t"] - a["t"] <= 3 and p["actor"] == a["actor"]]
+    return hist(out)
+
+
+def explode_next(fights):
+    """What follows a 14811: (previous charge 18 ticks back is a corner, 6 a middle charge), ticks to the next anim."""
+    out = []
+    for ev in fights.values():
+        anims = [e for e in ev if e["kind"] == "ANIM" and e["id"] in ATTACKS["ocellus"] and e["actor"].split("#")[0] == "16674"]
+        for i, a in enumerate(anims[1:-1], 1):
+            if a["id"] == "14811" and anims[i - 1]["id"] == "14809":
+                out.append((a["t"] - anims[i - 1]["t"], anims[i + 1]["t"] - a["t"], anims[i + 1]["id"]))
+    return hist(out)
+
+
+def ocellus(real, sim):
+    failures = []
+    for anim in ("14806", "14809", "14810", "14842", "14846", "14851", "14857", "14869", "14871", "14837"):
+        compare(f"{anim} next attack", next_attack(real, "ocellus", anim), next_attack(sim, "ocellus", anim), failures)
+    rx, sx = explode_next(real), explode_next(sim)
+    for key in sorted({k for k in rx if rx[k] >= 3}):
+        ok = sx[key] > 0
+        if not ok:
+            failures.append(f"explode {key}")
+        print(f"{'ok ' if ok else 'BAD'} explode (charge, next, anim) {key!s:20s} real {rx[key]} sim {sx[key]}")
+    compare("4229 launch", projectile_launch(real, "14806", "4229"), projectile_launch(sim, "14806", "4229"), failures)
+    compare("4232 launch", projectile_launch(real, "14806", "4232"), projectile_launch(sim, "14806", "4232"), failures)
+    compare("14811 big hit offset", big_hits(real, "14811", 25, 3), big_hits(sim, "14811", 25, 3), failures)
+    compare("14861 slam hit offset", big_hits(real, "14861", 30, 3), big_hits(sim, "14861", 30, 3), failures)
+    compare("14857 -> 14861", anim_offsets(real, "14857", "14861", 40), anim_offsets(sim, "14857", "14861", 40), failures)
+    compare("14869 -> 4346 debris", gfx_offsets(real, "14869", "4346", 8), gfx_offsets(sim, "14869", "4346", 8), failures)
+    compare("14842 P0 hit delay", anim_to_p0_hit(real, "14842", 1), anim_to_p0_hit(sim, "14842", 1), failures)
+    compare("14861 -> siphon spawn", first_offsets(real, "14861", "NPC+", "16679", 10), first_offsets(sim, "14861", "NPC+", "16679", 10), failures)
+    compare("14881 -> first 14842", anim_offsets(real, "14881", "14842", 20), anim_offsets(sim, "14881", "14842", 20), failures)
+    return failures
+
+
 def main():
     boss, sim_path = sys.argv[1], sys.argv[2]
     party = sys.argv[3] if len(sys.argv) > 3 else None
@@ -537,7 +620,7 @@ def main():
         meta = {r["fight_id"]: r for r in csv.DictReader(open(FIXTURES / "tfa_fights.tsv"), delimiter="\t")}
         real = {k: v for k, v in real.items() if meta[k]["party_size"] == party}
     sim = load(sim_path)
-    failures = {"guardian": guardian, "xarth": xarth, "dreadnoth": dreadnoth, "ezekiel": ezekiel}[boss](real, sim)
+    failures = {"guardian": guardian, "xarth": xarth, "dreadnoth": dreadnoth, "ezekiel": ezekiel, "ocellus": ocellus}[boss](real, sim)
     print(f"{len(failures)} laws differ: {failures}" if failures else "all laws agree")
     sys.exit(1 if failures else 0)
 

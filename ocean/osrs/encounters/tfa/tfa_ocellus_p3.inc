@@ -25,7 +25,7 @@ typedef struct {
     int unt_dot_hit, unt_dot_min, unt_dot_max, unt_dot_decoys; /* hits 4 later, 23..27 (n=12), 12 tiles per batch */
     int unt_wave_min, unt_wave_max; /* waves 17..27 under no Magic, 0 under Magic (12/12) at +10 +14 +18 +22 */
     int unt_pray_on, unt_pray_off;
-    int unt_slam_tell, unt_slam_anim, unt_slam_hit; /* gfx 4320 +25, 14861 +29, hit +30 */
+    int unt_slam_tell, unt_slam_anim, unt_slam_hit; /* gfx 4320 +25, 14861 +29, the hit lands on the anim tick for 9 of 13 recorded hits and one later for 4 */
     int unt_slam_radius, unt_slam_min, unt_slam_max; /* 13/13 hits at Chebyshev 0..4, 34..42 */
     int unt_next;                /* 14857 -> next 14842 +37 */
     int destroy_text, destroy_anim, destroy_end, destroy_move, destroy_boss, destroy_next; /* +31 +33 +42 +44 +49 +52 (f6, run 4) */
@@ -68,7 +68,7 @@ static const TfaOcellusP3Tuning TFA_OC3 = {
     .unt_dot_hit = 4, .unt_dot_min = 23, .unt_dot_max = 27, .unt_dot_decoys = 2,
     .unt_wave_min = 17, .unt_wave_max = 27,
     .unt_pray_on = 5, .unt_pray_off = 22,
-    .unt_slam_tell = 25, .unt_slam_anim = 29, .unt_slam_hit = 30,
+    .unt_slam_tell = 25, .unt_slam_anim = 29, .unt_slam_hit = 29,
     .unt_slam_radius = 4, .unt_slam_min = 34, .unt_slam_max = 42,
     .unt_next = 37,
     .destroy_text = 31, .destroy_anim = 33, .destroy_end = 42, .destroy_move = 44, .destroy_boss = 49, .destroy_next = 52,
@@ -352,7 +352,7 @@ static void oc_untether(TfaState* s, TfaNpc* n) {
     oc_at(s, TFA_OC3.unt_slam_anim, OCE_P3_ANIM, OC_ANIM_SLAM, 0);
     int next = TFA_OC3.unt_next;
     os->busy_until = s->tick + TFA_OC3.unt_slam_hit;
-    os->pause_until = s->tick + TFA_OC3.unt_slam_hit + 2;
+    os->pause_until = s->tick + TFA_OC3.unt_slam_anim + 3;
     if (destroy) {
         oc_at(s, TFA_OC3.destroy_anim, OCE_P3_DESTROY, 0, 0);
         oc_at(s, TFA_OC3.destroy_end, OCE_P3_DESTROY_END, 0, 0);
@@ -650,6 +650,8 @@ static void oc_p4_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
         case OCE_P4_START:
             os->phase = TFA_OCELLUS_P4;
             os->phase_start = s->tick;
+            oc_cancel(s, OCE_P3_ADD_DUE, OCE_P3_ADD_DUE);
+            oc_cancel(s, OCE_P3_SIPHON_PULSE, OCE_P3_AUGMENTER_BLOW);
             n->attackable = 1;
             if (n->hp * 100 < n->max_hp * TFA_OC3.p4_first_hp_pct) n->hp = n->max_hp * TFA_OC3.p4_first_hp_pct / 100;
             oc_want(s, PRAYER_NONE);
