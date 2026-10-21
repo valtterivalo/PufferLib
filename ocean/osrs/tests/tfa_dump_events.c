@@ -42,7 +42,8 @@ static void prayers_string(const Player* pl, char* out) {
 }
 
 int main(int argc, char** argv) {
-    assert(argc == 5);
+    assert(argc == 5 || (argc == 6 && strcmp(argv[5], "invulnerable") == 0));
+    int invulnerable = argc == 6;
     int room = atoi(argv[1]), team = atoi(argv[2]), episodes = atoi(argv[3]);
     uint32_t seed = (uint32_t)atoi(argv[4]);
     TfaState* s = calloc(1, sizeof(TfaState));
@@ -56,7 +57,8 @@ int main(int argc, char** argv) {
         char fid[64];
         snprintf(fid, sizeof(fid), "sim_%s_%03d", ROOM_NAMES[room], e);
         tfa_reset_typed(s, ctx, seed + (uint32_t)e);
-        DumpNpc npcs[TFA_MAX_NPCS] = {0};
+        DumpNpc npcs[TFA_MAX_NPCS];
+        for (int i = 0; i < TFA_MAX_NPCS; i++) npcs[i] = (DumpNpc){ .overhead = -1 };
         DumpHazard hazards[TFA_MAX_HAZARDS] = {0};
         char pray[TFA_MAX_PLAYERS][64] = {{0}};
         int last_hp[TFA_MAX_PLAYERS] = {0};
@@ -91,10 +93,14 @@ int main(int argc, char** argv) {
                         printf("%s\t%d\tNHP\t%d#%d\t%d\t-\t-\t100\t-\t-\n", fid, t, n->npc_id, i,
                             n->max_shield > 0 && n->shield > 0 ? 100 * n->shield / n->max_shield : 100 * n->hp / n->max_hp);
                 }
-                if (n->active && n->overhead != d->overhead)
-                    printf("%s\t%d\tOVH\t%d#%d\t%s\t-\t-\t-\t-\t-\n", fid, t, n->npc_id, i,
-                        n->overhead == PRAYER_PROTECT_MELEE ? "0" : n->overhead == PRAYER_PROTECT_RANGED ? "1" : n->overhead == PRAYER_PROTECT_MAGIC ? "2" : "-");
-                d->overhead = n->overhead;
+                /* Overhead sprite ids as recorded: 0-2 the protections, 11 soul split. */
+                int sprite = n->overhead == PRAYER_PROTECT_MELEE ? 0 : n->overhead == PRAYER_PROTECT_RANGED ? 1 : n->overhead == PRAYER_PROTECT_MAGIC ? 2
+                    : s->room == TFA_ROOM_OCELLUS && n->kind == TFA_NPC_OCELLUS && s->boss.ocellus.soul_split ? 11 : -1;
+                if (n->active && sprite != d->overhead) {
+                    if (sprite < 0) printf("%s\t%d\tOVH\t%d#%d\t-\t-\t-\t-\t-\t-\n", fid, t, n->npc_id, i);
+                    else printf("%s\t%d\tOVH\t%d#%d\t%d\t-\t-\t-\t-\t-\n", fid, t, n->npc_id, i, sprite);
+                }
+                d->overhead = sprite;
                 d->active = n->active;
                 d->npc_id = n->npc_id;
                 d->instance = n->instance_id;
@@ -150,6 +156,7 @@ int main(int argc, char** argv) {
             }
             if (s->episode_over) break;
             for (int p = 0; p < TFA_MAX_PLAYERS; p++) tfa_scripted_actions(s, p, acts + p * TFA_NUM_ACTION_HEADS);
+            for (int p = 0; p < team && invulnerable; p++) s->players[p].player.current_hitpoints = 10000;
             tfa_step_team(s, ctx, acts);
             t++;
         }

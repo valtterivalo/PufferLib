@@ -1648,9 +1648,9 @@ def ocellus_destroy_hp(fights):
     return hist(out)
 
 
-def ocellus_p4(fights):
+def ocellus_p4(fights, max_rises=None):
     """Phase 4: ('start', first 14863 - third 14860), ('cycle', offsets of 14865, 14844, 14855, 14856, 14844 and the next 14863 from each 14863),
-    ('rifts', spawn tick - next 14863, count)."""
+    ('rifts', spawn tick - next 14863, count); with max_rises only the first max_rises rises count."""
     out = []
     for ev in fights.values():
         anims = collections.defaultdict(list)
@@ -1658,7 +1658,7 @@ def ocellus_p4(fights):
             if e["kind"] == "ANIM" and base(e["actor"]) == "16677":
                 anims[e["id"]].append(e["t"])
         destroys = sorted(anims["14860"])
-        rises = sorted(anims["14863"])
+        rises = sorted(anims["14863"])[:max_rises]
         if len(destroys) >= 3 and rises:
             out.append(("start", rises[0] - destroys[2]))
         for c, nxt in zip(rises, rises[1:]):
@@ -1693,6 +1693,35 @@ def ocellus_p1_guard(fights):
     return out
 
 
+def ocellus_soul_split(fights):
+    """Soul split overhead (sprite 11): ticks from the latest quadrant attack 14844 to it, and how long it stays up."""
+    out = collections.Counter()
+    for ev in fights.values():
+        quads = [e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14844"]
+        ovh = [e for e in ev if e["kind"] == "OVH" and base(e["actor"]) == "16677"]
+        for k, e in enumerate(ovh):
+            if e["id"].split("+")[0] != "11":
+                continue
+            prev = [q for q in quads if q <= e["t"]]
+            if prev:
+                out[("on", e["t"] - prev[-1])] += 1
+            if k + 1 < len(ovh):
+                out[("up", ovh[k + 1]["t"] - e["t"])] += 1
+    return out
+
+
+def ocellus_p4_laws(real, sim):
+    """Phase 4 and the spin (one check per destroy so far: 5, 8, 11) against an invulnerable sim team (the dump's invulnerable mode), so every sim
+    fight goes through all three destroys."""
+    failures = []
+    shapes_law("14869 -> 14871 (short, long)", next_attack(real, "ocellus", "14869"), next_attack(sim, "ocellus", "14869"), failures)
+    shapes_law("14869 -> 4346 debris", gfx_offsets(real, "14869", "4346", 8), gfx_offsets(sim, "14869", "4346", 8), failures)
+    rises = max(len([e for e in ev if e["kind"] == "ANIM" and e["id"] == "14863"]) for ev in real.values())
+    support("phase 4", ocellus_p4(real), ocellus_p4(sim, rises), failures)
+    support("P4 soul split window", ocellus_soul_split(real), ocellus_soul_split(sim), failures)
+    return failures
+
+
 def ocellus(real, sim):
     failures = []
     rs, ss = barrage_shapes(real), barrage_shapes(sim)
@@ -1720,8 +1749,6 @@ def ocellus(real, sim):
     compare("14811 big hit offset", big_hits(real, "14811", 25, 3), big_hits(sim, "14811", 25, 3), failures)
     compare("14861 slam hit offset", big_hits(real, "14861", 30, 3), big_hits(sim, "14861", 30, 3), failures)
     compare("14857 -> 14861", anim_offsets(real, "14857", "14861", 40), anim_offsets(sim, "14857", "14861", 40), failures)
-    shapes_law("14869 -> 14871 (short, long)", next_attack(real, "ocellus", "14869"), next_attack(sim, "ocellus", "14869"), failures)
-    shapes_law("14869 -> 4346 debris", gfx_offsets(real, "14869", "4346", 8), gfx_offsets(sim, "14869", "4346", 8), failures)
     compare("14842 P0 hit delay", anim_to_p0_hit(real, "14842", 1), anim_to_p0_hit(sim, "14842", 1), failures)
     compare("14861 -> siphon spawn", first_offsets(real, "14861", "NPC+", "16679", 10), first_offsets(sim, "14861", "NPC+", "16679", 10), failures)
     compare("14881 -> first 14842", anim_offsets(real, "14881", "14842", 20), anim_offsets(sim, "14881", "14842", 20), failures)
@@ -1749,7 +1776,7 @@ def main():
         keep = (lambda n: int(n) >= int(party[:-1])) if party.endswith("+") else (lambda n: n == party)
         real = {k: v for k, v in real.items() if keep(meta[k]["party_size"])}
     sim = load(sim_path)
-    failures = {"guardian_slam": guardian_slam_laws, "guardian": guardian, "xarth": xarth, "dreadnoth": dreadnoth, "ezekiel": ezekiel, "bork": bork, "moia": moia, "ocellus": ocellus}[boss](real, sim)
+    failures = {"guardian_slam": guardian_slam_laws, "guardian": guardian, "xarth": xarth, "dreadnoth": dreadnoth, "ezekiel": ezekiel, "bork": bork, "moia": moia, "ocellus": ocellus, "ocellus_p4": ocellus_p4_laws}[boss](real, sim)
     print(f"{len(failures)} laws differ: {failures}" if failures else "all laws agree")
     sys.exit(1 if failures else 0)
 

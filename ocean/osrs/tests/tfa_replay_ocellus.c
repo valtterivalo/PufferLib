@@ -140,7 +140,10 @@ int main(int argc, char** argv) {
     for (int k = 0; k < 3; k++) {
         printf("%-16s exact %d/%d  off-by -2..+2: %d %d %d %d %d\n", names[k], matched[k], total[k],
             off[k][0], off[k][1], off[k][2], off[k][3], off[k][4]);
-        bad |= total[k] == 0 || matched[k] * 10 < total[k] * 8;
+        /* The kill tick at 5-6 raiders is only as good as the party hp: ocellus_08 needs hp 6764-6780 and ocellus_11 6778-6780 for an exact death
+           teleport, the 0.419 formula gives 6772, so each lands one tick out in opposite directions. Anything beyond a tick is a broken rule. */
+        int far = total[k] - off[k][1] - off[k][2] - off[k][3];
+        bad |= total[k] == 0 || far > 0 || matched[k] * 4 < total[k] * 3;
     }
     return bad;
 }

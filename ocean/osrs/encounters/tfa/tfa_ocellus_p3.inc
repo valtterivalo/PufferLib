@@ -99,6 +99,7 @@ typedef struct {
                                     C+24, void 14855 C+34, wind C+39, void end 14856 C+50, quadrant attack 14844 C+52, rifts C+59, next rise C+60 */
     int wind_explosions, wind_gap; /* provisional: 6 personal explosions every 2 ticks after each wind (void spin spotanim 4340 for 3 ticks) */
     int quad_hit;                /* quadrant attack hit 9 after the 14844 (hits through prayer at C+33 and C+61, 6..8) */
+    int split_from, split_ticks; /* soul split overhead (sprite 11) from 1 after each 14844 for 5 ticks, one 50 heal splat in it (ocellus_11, 2/2) */
     int ring;
     int wind_min, wind_max;      /* explosion damage: 6..16 seen (n=7) */
     int quad_min, quad_max;      /* unprotected quadrant attack: provisional */
@@ -114,6 +115,7 @@ static const TfaOcellusP4Tuning TFA_OC4 = {
     .step_len = { 8, 13, 3, 10, 5, 11, 2, 7, 1 },
     .wind_explosions = 6, .wind_gap = 2,
     .quad_hit = 9,
+    .split_from = 1, .split_ticks = 5,
     .ring = 2,
     .wind_min = 6, .wind_max = 16,
     .quad_min = 25, .quad_max = 40,
@@ -642,7 +644,8 @@ static void oc_p4_orbs(TfaState* s) {
 static void oc_p4_quadrant(TfaState* s, TfaNpc* n) {
     TfaOcellusState* os = oc_state(s);
     tfa_npc_anim(s, n, OC_ANIM_QUADRANT_ATTACK);
-    os->soul_split = 1;
+    oc_at(s, TFA_OC4.split_from, OCE_P4_SPLIT, 1, 0);
+    oc_at(s, TFA_OC4.split_from + TFA_OC4.split_ticks, OCE_P4_SPLIT, 0, 0);
     os->deflect = ATTACK_STYLE_NONE;
     AttackStyle style = (AttackStyle)(ATTACK_STYLE_MELEE + tfa_rand(s, 3));
     n->act = style == ATTACK_STYLE_MELEE ? TFA_ACT_MELEE : style == ATTACK_STYLE_RANGED ? TFA_ACT_RANGED : TFA_ACT_MAGIC;
@@ -659,7 +662,6 @@ static void oc_p4_step(TfaState* s, TfaNpc* n, int step) {
         case OC4_RISE:
             tfa_npc_anim(s, n, OC_ANIM_DEFLECT_IN);
             os->deflect = ATTACK_STYLE_MELEE;
-            os->soul_split = 0;
             oc_p4_ring(s, n, 0, s->tick + 1, s->tick + TFA_OC4.step_len[OC4_RISE] + TFA_OC4.step_len[OC4_WIND_A], TFA_OC4.void_min, TFA_OC4.void_max);
             break;
         case OC4_WIND_A:
@@ -677,7 +679,6 @@ static void oc_p4_step(TfaState* s, TfaNpc* n, int step) {
         case OC4_VOID:
             tfa_npc_anim(s, n, OC_ANIM_VOID_IN);
             os->deflect = ATTACK_STYLE_RANGED;
-            os->soul_split = 0;
             oc_p4_ring(s, n, 1, s->tick + 1, s->tick + TFA_OC4.step_len[OC4_VOID] + TFA_OC4.step_len[OC4_WIND_B], TFA_OC4.void_min, TFA_OC4.void_max);
             break;
         case OC4_VOID_END:
@@ -685,7 +686,7 @@ static void oc_p4_step(TfaState* s, TfaNpc* n, int step) {
             os->deflect = ATTACK_STYLE_NONE;
             break;
         case OC4_RIFTS:
-            for (int k = 0; k <= os->p4_cycle && k < TFA_OC4.rifts_max; k++) {
+            for (int k = 0; k < os->p4_cycle + 2 && k < TFA_OC4.rifts_max; k++) {
                 int x, y;
                 oc_add_tile(s, oc_cur_quad(os), &x, &y);
                 TfaNpc* r = tfa_npc_spawn(s, TFA_NPC_VOID_RIFT, MON_TFA_VOID_RIFT, OC_NPC_RIFT, x, y);
@@ -714,6 +715,7 @@ static void oc_p4_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
             oc_p4_step(s, n, OC4_RISE);
             break;
         case OCE_P4_STEP: oc_p4_step(s, n, e->arg); break;
+        case OCE_P4_SPLIT: os->soul_split = e->arg; break;
         case OCE_P4_EXPLOSION:
             for (int p = 0; p < s->team_size; p++) {
                 if (!tfa_alive(s, p)) continue;

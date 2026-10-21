@@ -114,6 +114,7 @@ typedef enum {
     OCE_P4_STEP,
     OCE_P4_EXPLOSION,
     OCE_P4_RIFT_BLOW,
+    OCE_P4_SPLIT,
 } TfaOcEventKind;
 
 typedef struct {
