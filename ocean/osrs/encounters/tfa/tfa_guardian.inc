@@ -179,6 +179,9 @@ static void tfa_guardian_ranged(TfaState* s, TfaNpc* g) {
             : TFA_GUARDIAN.ranged_max_hit;
         int dmg = tfa_npc_roll(s, g, p, ATTACK_STYLE_RANGED, max_hit);
         tfa_queue_npc_hit(s, p, dmg, ATTACK_STYLE_RANGED, TFA_GUARDIAN.ranged_hit_ticks, 100, g);
+        tfa_fx_projectile(s, g, p, GUARDIAN_PROJ_RANGED, SPOTANIM_TFA_GUARDIAN_VFX_GUARDIAN_RANGED_PROJANIM01,
+            SPOTANIM_TFA_GUARDIAN_VFX_GUARDIAN_RANGED_PROJANIM01_ANIM, TFA_GUARDIAN.ranged_launch_ticks,
+            TFA_GUARDIAN.ranged_hit_ticks - TFA_GUARDIAN.ranged_launch_ticks);
     }
 }
 
@@ -200,7 +203,7 @@ static void tfa_guardian_mushroom(TfaState* s, int x, int y) {
         .min_damage = (int16_t)TFA_GUARDIAN.mushroom_min_damage,
         .max_damage = (int16_t)TFA_GUARDIAN.mushroom_max_damage,
         .protected_pct = 100,
-        .gfx_id = GUARDIAN_LOC_MUSHROOM_SPROUT,
+        .loc_id = GUARDIAN_LOC_MUSHROOM_SPROUT,
     });
 }
 
@@ -228,7 +231,7 @@ static void tfa_guardian_mushrooms_tick(TfaState* s) {
         TfaHazard* h = &s->hazards[i];
         if (h->kind != TFA_HAZ_MUSHROOM) continue;
         if (h->arm_ticks > 0) {
-            if (--h->arm_ticks == 0) h->gfx_id = GUARDIAN_LOC_MUSHROOM_ARMED;
+            if (--h->arm_ticks == 0) h->loc_id = GUARDIAN_LOC_MUSHROOM_ARMED;
             continue;
         }
         if (h->arm_ticks < 0) {
@@ -242,7 +245,7 @@ static void tfa_guardian_mushrooms_tick(TfaState* s) {
         for (int p = 0; p < s->team_size; p++) {
             if (tfa_alive(s, p) && chebyshev_distance(h->x, h->y, s->players[p].player.x, s->players[p].player.y) <= 1) {
                 h->arm_ticks = -1;
-                h->gfx_id = GUARDIAN_LOC_MUSHROOM_BURST;
+                h->loc_id = GUARDIAN_LOC_MUSHROOM_BURST;
                 break;
             }
         }
@@ -272,7 +275,6 @@ static void tfa_guardian_spawn_vines(TfaState* s, TfaNpc* g) {
                 .min_damage = (int16_t)TFA_GUARDIAN.vine_min_damage,
                 .max_damage = (int16_t)TFA_GUARDIAN.vine_max_damage,
                 .protected_pct = (int16_t)TFA_GUARDIAN.vine_protected_pct,
-                .gfx_id = -1,
             });
         }
     }

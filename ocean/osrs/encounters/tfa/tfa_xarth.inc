@@ -14,6 +14,8 @@
 #define XARTH_ANIM_DEATH 14995
 #define XARTH_ANIM_PILLAR_BREAK 14997
 #define XARTH_GFX_AOE 4379
+#define XARTH_PROJ_RANGED 4374
+#define XARTH_PROJ_MAGIC 4034
 
 typedef struct {
     int first_attack;            /* first magic 6 ticks after "Challenge started", 4/4 */
@@ -29,7 +31,9 @@ typedef struct {
     int pillar_cone_degrees;     /* players within this angle behind a pillar are shielded; fitted on 12 blasts, provisional */
     int p2_start;                /* first ranged 13 ticks after the last AOE, 4/4 */
     int p2_cycle;                /* R R R R M then the next R: 21 ticks */
+    int ranged_launch;           /* 4374 first seen at anim +2 in 239/302 */
     int ranged_hit;              /* 4374 at anim +2, flight 2: hit +4 (110/111) */
+    int magic_launch;            /* 4034 first seen at anim +1 in 125/207 */
     int magic_hit;               /* 4034 at anim +1, flight 2: hit +3 */
     int ranged_max_hit;          /* unprotected 7..32 on teammates; Protect from Missiles blocks 107/107 */
     int magic_max_hit;           /* one unprotected 34 */
@@ -58,7 +62,9 @@ static const TfaXarthTuning TFA_XARTH = {
     .pillar_cone_degrees = 25,
     .p2_start = 13,
     .p2_cycle = 21,
+    .ranged_launch = 2,
     .ranged_hit = 4,
+    .magic_launch = 1,
     .magic_hit = 3,
     .ranged_max_hit = 32,
     .magic_max_hit = 34,
@@ -111,6 +117,8 @@ static void tfa_xarth_magic(TfaState* s, TfaNpc* x) {
         if (p < 0) continue;
         tfa_queue_npc_hit_land(s, p, tfa_npc_roll(s, x, p, ATTACK_STYLE_MAGIC, TFA_XARTH.magic_max_hit),
             ATTACK_STYLE_MAGIC, TFA_XARTH.magic_hit, TFA_XARTH.magic_protected_pct, x);
+        tfa_fx_projectile(s, x, p, XARTH_PROJ_MAGIC, SPOTANIM_TFA_XARTH_TFA_UNNAMED_4034, SPOTANIM_TFA_XARTH_TFA_UNNAMED_4034_ANIM,
+            TFA_XARTH.magic_launch, TFA_XARTH.magic_hit - TFA_XARTH.magic_launch);
     }
 }
 
@@ -132,6 +140,8 @@ static void tfa_xarth_ranged(TfaState* s, TfaNpc* x) {
     x->target = (int8_t)p;
     tfa_npc_anim(s, x, XARTH_ANIM_RANGED);
     tfa_queue_npc_hit_land(s, p, tfa_npc_roll(s, x, p, ATTACK_STYLE_RANGED, TFA_XARTH.ranged_max_hit), ATTACK_STYLE_RANGED, TFA_XARTH.ranged_hit, 0, x);
+    tfa_fx_projectile(s, x, p, XARTH_PROJ_RANGED, SPOTANIM_TFA_XARTH_VFX_XARTH_ATTACK_RANGED_PROJECTILE_01,
+        SPOTANIM_TFA_XARTH_VFX_XARTH_ATTACK_RANGED_PROJECTILE_01_ANIM, TFA_XARTH.ranged_launch, TFA_XARTH.ranged_hit - TFA_XARTH.ranged_launch);
 }
 
 /* AOE tiles: each player's tile and, half the time, one neighbour (4-6 tiles for 3 players, 12/12 casts). */

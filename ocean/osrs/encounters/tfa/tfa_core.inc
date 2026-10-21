@@ -263,7 +263,7 @@ static void tfa_hazard_add(TfaState* s, TfaHazard h) {
         memset(d, 0, sizeof(*d));
         d->kind = h.kind; d->style = h.style; d->w = h.w; d->h = h.h; d->owner = h.owner; d->effect = h.effect;
         d->x = h.x; d->y = h.y; d->start_tick = h.start_tick; d->end_tick = h.end_tick; d->arm_ticks = h.arm_ticks;
-        d->min_damage = h.min_damage; d->max_damage = h.max_damage; d->protected_pct = h.protected_pct; d->gfx_id = h.gfx_id;
+        d->min_damage = h.min_damage; d->max_damage = h.max_damage; d->protected_pct = h.protected_pct; d->gfx_id = h.gfx_id; d->loc_id = h.loc_id;
         return;
     }
     fprintf(stderr, "tfa hazard capacity %d exceeded\n", TFA_MAX_HAZARDS);
@@ -285,16 +285,20 @@ static void tfa_hazard_hit_player(TfaState* s, const TfaHazard* h, int p) {
         tp->burn_ticks = 10;
 }
 
-static void tfa_log_projectile(
-    TfaState* s, const TfaNpc* src, int id, int target, int target_x, int target_y, int flight_halves
-) {
-    assert(s->projectile_count < TFA_MAX_PROJECTILES);
-    s->projectiles[s->projectile_count++] = (TfaProjectile){
-        .id = (int16_t)id,
-        .source_slot = (int8_t)tfa_npc_slot(s, src),
-        .target = (int8_t)target,
-        .source_x = src->x, .source_y = src->y,
-        .target_x = (int16_t)target_x, .target_y = (int16_t)target_y,
-        .flight_halves = (int8_t)flight_halves,
+/* A projectile from NPC src to player p, launched delay ticks from now and flying duration ticks. */
+static void tfa_fx_projectile(TfaState* s, const TfaNpc* src, int p, int gfx_id, uint32_t model, int anim, int delay, int duration) {
+    if (s->fx_count >= TFA_MAX_FX) {
+        fprintf(stderr, "tfa fx capacity %d exceeded tick=%d\n", TFA_MAX_FX, s->tick);
+        abort();
+    }
+    s->fx[s->fx_count++] = (TfaFx){
+        .kind = TFA_FX_PROJECTILE,
+        .src_slot = (int8_t)tfa_npc_slot(s, src),
+        .dst_player = (int8_t)p,
+        .delay = (int16_t)delay,
+        .duration = (int16_t)duration,
+        .gfx_id = gfx_id,
+        .model = model,
+        .anim = anim,
     };
 }

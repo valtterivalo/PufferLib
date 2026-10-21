@@ -20,7 +20,14 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
             int d = chebyshev_distance(b->x, b->y, tp->player.x, tp->player.y);
             if (d < here_min) here_min = d;
         }
-        if (here_min <= 3) {
+        int t = s->boss.moia.clock - TFA_MOIA.first_attack;
+        int soon = 0;
+        for (int k = 1; k <= 2; k++) {
+            int ph = (t + k) % TFA_MOIA.binder_cycle;
+            soon |= t + k >= TFA_MOIA.binder_attack_first &&
+                (ph == TFA_MOIA.binder_attack_phase_a || ph == TFA_MOIA.binder_attack_phase_b);
+        }
+        if (soon && here_min <= TFA_MOIA.binder_reach) {
             for (int a = 1; a < OSRS_PRIMARY_MOVE_ACTIONS; a++) {
                 int nx = tp->player.x + ENCOUNTER_MOVE_TARGET_DX[a], ny = tp->player.y + ENCOUNTER_MOVE_TARGET_DY[a];
                 if (tfa_layout_blocked(tfa_room_layout(s->room), nx, ny)) continue;

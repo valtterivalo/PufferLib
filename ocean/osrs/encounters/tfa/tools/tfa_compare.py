@@ -75,6 +75,16 @@ def targeted_hit_delay(fights, anim, window=8):
     return hist(out)
 
 
+def projectile_offsets(fights, anim, proj):
+    """(projectile tick minus anim tick, flight rounded down) for each projectile an anim fires."""
+    out = []
+    for ev in fights.values():
+        projs = [e for e in ev if e["kind"] == "PROJ" and e["id"] == proj]
+        for a in (e for e in ev if e["kind"] == "ANIM" and e["id"] == anim):
+            out += [(p["t"] - a["t"], int(float(p["b"]))) for p in projs if 0 <= p["t"] - a["t"] <= 3 and p["actor"] == a["actor"]]
+    return hist(out)
+
+
 def median_law(name, real, sim, tol, failures):
     r = sorted(real)
     m = sorted(sim)
@@ -175,6 +185,7 @@ def guardian(real, sim):
     for anim in ("14751", "14753", "14754", "14748"):
         compare(f"{anim} next attack", next_attack(real, "guardian", anim), next_attack(sim, "guardian", anim), failures)
     compare("14751 P0 hit delay", anim_to_p0_hit(real, "14751"), anim_to_p0_hit(sim, "14751"), failures)
+    compare("4201 launch, flight", projectile_offsets(real, "14751", "4201"), projectile_offsets(sim, "14751", "4201"), failures)
     rg, sg = ground_durations(real), ground_durations(sim)
     for k in sorted(set(rg) | set(sg)):
         compare(f"ground {k}", rg.get(k, hist([])), sg.get(k, hist([])), failures)
@@ -255,6 +266,8 @@ def xarth(real, sim):
         compare(f"{anim} next attack", next_attack(real, "xarth", anim), next_attack(sim, "xarth", anim), failures)
     compare("AOE schedule", hist(schedule(real, "14992")), hist(schedule(sim, "14992")), failures)
     compare("first ranged", first_of(real, "14985"), first_of(sim, "14985"), failures)
+    compare("4374 launch, flight", projectile_offsets(real, "14985", "4374"), projectile_offsets(sim, "14985", "4374"), failures)
+    compare("4034 launch, flight", projectile_offsets(real, "14984", "4034"), projectile_offsets(sim, "14984", "4034"), failures)
     compare("14985 aimed P0 hit delay", targeted_hit_delay(real, "14985"), targeted_hit_delay(sim, "14985"), failures)
     compare("14984 aimed P0 hit delay", targeted_hit_delay(real, "14984"), targeted_hit_delay(sim, "14984"), failures)
     compare("pillar break after AOE", pillar_breaks(real), pillar_breaks(sim), failures)
@@ -300,7 +313,7 @@ def stomp_offsets(fights):
 
 
 def proj_flights(fights, proj):
-    return hist([e["b"] for ev in fights.values() for e in ev if e["kind"] == "PROJ" and e["id"] == proj])
+    return hist([max(1, int(float(e["b"]))) for ev in fights.values() for e in ev if e["kind"] == "PROJ" and e["id"] == proj])
 
 
 def smork_gaps(fights):
@@ -388,8 +401,83 @@ def bork(real, sim):
     return failures
 
 
+def first_anim(ev, anim):
+    return min((e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == anim), default=0)
+
+
+def moia_hits_at_proj(fights, proj, offset):
+    """Whether the aimed player takes a hit exactly offset ticks after each projectile launch."""
+    out = []
+    for ev in fights.values():
+        hits = {(e["t"], e["actor"]) for e in ev if e["kind"] == "HIT" and e["actor"].startswith("P")}
+        for e in ev:
+            if e["kind"] == "PROJ" and e["id"] == proj and e["a"].startswith("P"):
+                out.append((e["t"] + offset, e["a"]) in hits)
+    return hist(out)
+
+
+def moia_binder_phases(fights, kind):
+    attack, move = [], []
+    for ev in fights.values():
+        t0 = first_anim(ev, "14785")
+        if kind == "attack":
+            attack += [(e["t"] - t0) % 15 for e in ev if e["kind"] == "ANIM" and e["id"] == "14791"]
+        else:
+            last = {}
+            for e in ev:
+                if e["kind"] != "NPOS" or base(e["actor"]) != "16670":
+                    continue
+                pos = (e["x"], e["y"])
+                if e["actor"] in last and last[e["actor"]] != pos:
+                    move.append((e["t"] - t0) % 15)
+                last[e["actor"]] = pos
+    return hist(attack if kind == "attack" else move)
+
+
+def moia_teleports(fights):
+    out = []
+    for ev in fights.values():
+        tps = sorted(e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14788")
+        pos = {e["t"]: (e["x"], e["y"]) for e in ev if e["kind"] == "NPOS" and base(e["actor"]) == "16667"}
+        out += [pos[t + 1] for t in tps[:2] if t + 1 in pos]
+    return hist(out)
+
+
+def moia_tp_gaps(fights):
+    out = []
+    for ev in fights.values():
+        tps = sorted(e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14788")
+        out += [b - a for a, b in zip(tps, tps[1:])]
+    return hist(out)
+
+
+def moia_late_binders(fights):
+    out = []
+    for ev in fights.values():
+        t0 = first_anim(ev, "14785")
+        out += [e["t"] - t0 for e in ev if e["kind"] == "NPC+" and e["id"] == "16670" and e["t"] >= t0]
+    return hist(out)
+
+
 def moia(real, sim):
-    return []
+    failures = []
+    compare("14785 next attack", next_attack(real, "moia", "14785"), next_attack(sim, "moia", "14785"), failures)
+    exact("14788 next attack", next_attack(real, "moia", "14788"), next_attack(sim, "moia", "14788"), failures)
+    exact("teleport to teleport", moia_tp_gaps(real), moia_tp_gaps(sim), failures)
+    for proj in ("4214", "4213"):
+        exact(f"{proj} flight", proj_flights(real, proj), proj_flights(sim, proj), failures)
+    exact("4214 hit at launch tick", moia_hits_at_proj(real, "4214", 0), moia_hits_at_proj(sim, "4214", 0), failures)
+    exact("4213 hit at launch +5", moia_hits_at_proj(real, "4213", 5), moia_hits_at_proj(sim, "4213", 5), failures)
+    exact("binder attack phase", moia_binder_phases(real, "attack"), moia_binder_phases(sim, "attack"), failures)
+    rm, sm = moia_binder_phases(real, "move"), moia_binder_phases(sim, "move")
+    rs, ss = {k for k, n in rm.items() if n >= 3}, {k for k, n in sm.items() if n >= 3}
+    ok = rs == ss
+    if not ok:
+        failures.append("binder move phases")
+    print(f"{'ok ' if ok else 'BAD'} {'binder move phases':28s} real {sorted(rs)} sim {sorted(ss)}")
+    exact("late binder spawn", moia_late_binders(real), moia_late_binders(sim), failures)
+    exact("Moia tile after teleport", moia_teleports(real), moia_teleports(sim), failures)
+    return failures
 
 
 def main():

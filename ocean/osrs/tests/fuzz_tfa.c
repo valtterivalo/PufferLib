@@ -44,12 +44,12 @@ static uint64_t run(int room, int team, uint32_t seed, int steps) {
 }
 
 int main(void) {
-    static const int rooms[] = { TFA_ROOM_GUARDIAN, TFA_ROOM_XARTH, TFA_ROOM_BORK };
-    for (size_t r = 0; r < sizeof(rooms) / sizeof(*rooms); r++)
+    for (int r = -1; r < TFA_NUM_IMPLEMENTED_ROOMS; r++)
         for (int team = 1; team <= TFA_MAX_PLAYERS; team++) {
-            uint64_t a = run(rooms[r], team, 11u + (uint32_t)team, 20000);
-            uint64_t b = run(rooms[r], team, 11u + (uint32_t)team, 20000);
-            printf("room %d team %d hash %016llx %s\n", rooms[r], team, (unsigned long long)a, a == b ? "replays" : "DIVERGES");
+            int room = r < 0 ? -1 : TFA_IMPLEMENTED_ROOMS[r];
+            uint64_t a = run(room, team, 11u + (uint32_t)team, 20000);
+            uint64_t b = run(room, team, 11u + (uint32_t)team, 20000);
+            printf("room %d team %d hash %016llx %s\n", room, team, (unsigned long long)a, a == b ? "replays" : "DIVERGES");
             assert(a == b);
         }
     return 0;

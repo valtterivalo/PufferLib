@@ -2,7 +2,6 @@
 #define TFA_MAX_NPCS 40
 #define TFA_NUM_TARGET_SLOTS 8
 #define TFA_MAX_HAZARDS 256
-#define TFA_MAX_PROJECTILES 8
 #define TFA_ARENA_MAX ENCOUNTER_ARENA_TOPOLOGY_MAX_DIMENSION
 #define TFA_PLAYER_PRAYER 99
 #define TFA_ROOM_MAX_TICKS 3000
@@ -125,6 +124,7 @@ typedef struct {
     int16_t min_damage, max_damage;
     int16_t protected_pct;
     int32_t gfx_id;
+    int32_t loc_id;
 } TfaHazard;
 
 typedef enum {
@@ -178,6 +178,24 @@ typedef struct {
     EncounterProjectileTiming attack_timing;
 } TfaPlayer;
 
+/* Render-only effects of this tick: projectiles from an NPC to a player, models on tiles. */
+typedef enum {
+    TFA_FX_PROJECTILE = 1,
+} TfaFxKind;
+
+typedef struct {
+    uint8_t kind;
+    int8_t src_slot;
+    int8_t dst_player;
+    int16_t delay;
+    int16_t duration;
+    int32_t gfx_id;
+    uint32_t model;
+    int32_t anim;
+} TfaFx;
+
+#define TFA_MAX_FX 32
+
 typedef struct {
     float room_clear;
     float raid_clear;
@@ -200,16 +218,6 @@ typedef struct {
 #include "tfa_bork_model.inc"
 #include "tfa_moia_model.inc"
 
-/* One projectile launch this tick, kept for the event dump and the flight laws. */
-typedef struct {
-    int16_t id;
-    int8_t source_slot;
-    int8_t target;
-    int16_t source_x, source_y;
-    int16_t target_x, target_y;
-    int8_t flight_halves;
-} TfaProjectile;
-
 typedef struct {
     TfaPlayer players[TFA_MAX_PLAYERS];
     TfaNpc npcs[TFA_MAX_NPCS];
@@ -229,8 +237,8 @@ typedef struct {
     float team_damage_dealt_tick;
     float episode_return;
     int room_cleared_this_tick;
-    int projectile_count;
-    TfaProjectile projectiles[TFA_MAX_PROJECTILES];
+    TfaFx fx[TFA_MAX_FX];
+    int fx_count;
     union {
         TfaGuardianState guardian;
         TfaXarthState xarth;

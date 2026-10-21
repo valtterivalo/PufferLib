@@ -25,6 +25,8 @@ typedef struct {
     int dagger_max_hit;          /* unprotected 15 16 21: provisional */
     int magic_max_hit;           /* unprotected 26 and 35: provisional */
     int projectile_delay;        /* 4214 and 4213 first seen 1 after the anim, 8/8 */
+    int dagger_flight;           /* 4214 flight 0.5, 19/19: drawn as 1 tick */
+    int magic_flight;            /* 4213 flight 5.5 rounded down, 3/3 */
     int binder_ring_length;      /* all 8 recorded binder tracks lie on one 36 tile loop */
     int binder_move_first;       /* binders step 4 tiles at 5..8, 20..23, 35..38, 50..53: every 15 from 5 */
     int binder_move_ticks;
@@ -39,6 +41,7 @@ typedef struct {
     int binders;
     int binder_heal_teleport;    /* binders and Moia healed at the second teleport (35 32 57 55 back to full, Moia +30): 1/1 */
     int moia_heal;
+    int shield_pct;              /* shadow shield unmodelled: 144 dealt dropped her bar 6% (about 47 of 785), 35 percent through, provisional */
 } TfaMoiaTuning;
 
 static const TfaMoiaTuning TFA_MOIA = {
@@ -54,6 +57,8 @@ static const TfaMoiaTuning TFA_MOIA = {
     .dagger_max_hit = 22,
     .magic_max_hit = 35,
     .projectile_delay = 1,
+    .dagger_flight = 1,
+    .magic_flight = 5,
     .binder_ring_length = 36,
     .binder_move_first = 5,
     .binder_move_ticks = 4,
@@ -69,6 +74,7 @@ static const TfaMoiaTuning TFA_MOIA = {
     .binders = 8,
     .binder_heal_teleport = 2,
     .moia_heal = 30,
+    .shield_pct = 35,
 };
 
 /* The binder loop around the arena centre (31, 31): up the east edge, in along the top, down the west edge,
@@ -114,7 +120,7 @@ static void tfa_moia_enter(TfaState* s) {
     TfaNpc* m = tfa_npc_spawn(s, TFA_NPC_MOIA, MON_TFA_MOIA, MOIA_NPC, l->boss_x, l->boss_y);
     assert(tfa_npc_slot(s, m) == 0);
     for (int i = 0; i < TFA_MOIA.binders; i++) tfa_moia_spawn_binder(s, TFA_MOIA_BINDER_START[i]);
-    s->boss.moia = (TfaMoiaState){ .respawn_tick = -1, .proj_tick = -1, .magic_land_tick = -1 };
+    s->boss.moia = (TfaMoiaState){ .respawn_tick = -1, .magic_land_tick = -1 };
 }
 
 /* An attack on every living player, aimed at the throw tick and landing after delay. */
@@ -125,9 +131,16 @@ static void tfa_moia_volley(TfaState* s, TfaNpc* m, AttackStyle style, int max_h
     }
 }
 
-static void tfa_moia_log_volley(TfaState* s, TfaNpc* m, int id, int flight_halves) {
-    for (int p = 0; p < s->team_size; p++)
-        if (tfa_alive(s, p)) tfa_log_projectile(s, m, id, p, s->players[p].player.x, s->players[p].player.y, flight_halves);
+static void tfa_moia_fx_volley(TfaState* s, TfaNpc* m, int magic) {
+    for (int p = 0; p < s->team_size; p++) {
+        if (!tfa_alive(s, p)) continue;
+        if (magic)
+            tfa_fx_projectile(s, m, p, MOIA_PROJ_MAGIC, SPOTANIM_TFA_MOIA_MOIA_DAGGER_MAGIC, SPOTANIM_TFA_MOIA_MOIA_DAGGER_MAGIC_ANIM,
+                TFA_MOIA.projectile_delay, TFA_MOIA.magic_flight);
+        else
+            tfa_fx_projectile(s, m, p, MOIA_PROJ_DAGGER, SPOTANIM_TFA_MOIA_MOIA_DAGGER, SPOTANIM_TFA_MOIA_MOIA_DAGGER_ANIM,
+                TFA_MOIA.projectile_delay, TFA_MOIA.dagger_flight);
+    }
 }
 
 static void tfa_moia_binders_tick(TfaState* s, int t) {
@@ -164,6 +177,7 @@ static void tfa_moia_binders_tick(TfaState* s, int t) {
 static int tfa_moia_npc_damage(TfaState* s, TfaNpc* n, int damage, int attacker, AttackStyle style) {
     (void)s; (void)attacker; (void)style;
     if (n->kind != TFA_NPC_MOIA && n->kind != TFA_NPC_BINDER) return 0;
+    if (n->kind == TFA_NPC_MOIA) damage = (damage * TFA_MOIA.shield_pct + 99) / 100;
     int applied = damage < n->hp ? damage : n->hp;
     n->hp -= applied;
     return applied;
@@ -192,10 +206,6 @@ static void tfa_moia_tick(TfaState* s, TfaContext* ctx) {
     ms->clock++;
     int t = ms->clock - TFA_MOIA.first_attack;
 
-    if (ms->proj_tick == s->tick) {
-        tfa_moia_log_volley(s, m, ms->proj_id, ms->proj_flight_halves);
-        ms->proj_tick = -1;
-    }
     if (t == TFA_MOIA.binder_spawn_first || ms->respawn_tick == s->tick)
         tfa_moia_spawn_binder(s, MOIA_LOOP_CENTRE);
     if (t >= 0) tfa_moia_binders_tick(s, t);
@@ -227,17 +237,13 @@ static void tfa_moia_tick(TfaState* s, TfaContext* ctx) {
         m->act = TFA_ACT_RANGED;
         tfa_npc_anim(s, m, MOIA_ANIM_DAGGER);
         tfa_moia_volley(s, m, ATTACK_STYLE_RANGED, TFA_MOIA.dagger_max_hit, TFA_MOIA.dagger_hit);
-        ms->proj_tick = s->tick + TFA_MOIA.projectile_delay;
-        ms->proj_id = MOIA_PROJ_DAGGER;
-        ms->proj_flight_halves = 1;
+        tfa_moia_fx_volley(s, m, 0);
     }
     if (magic) {
         m->act = TFA_ACT_MAGIC;
         tfa_npc_anim(s, m, MOIA_ANIM_DAGGER);
         tfa_moia_volley(s, m, ATTACK_STYLE_MAGIC, TFA_MOIA.magic_max_hit, TFA_MOIA.magic_hit);
-        ms->proj_tick = s->tick + TFA_MOIA.projectile_delay;
-        ms->proj_id = MOIA_PROJ_MAGIC;
-        ms->proj_flight_halves = 11;
+        tfa_moia_fx_volley(s, m, 1);
         ms->magic_land_tick = s->tick + TFA_MOIA.magic_hit;
     }
     m->attack_timer = (int16_t)(t < 0 ? -t : (TFA_MOIA.dagger_interval - (t % TFA_MOIA.dagger_interval)) % TFA_MOIA.dagger_interval);

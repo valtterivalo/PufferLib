@@ -51,7 +51,7 @@ typedef struct {
     int napalm_flight;           /* 4045 flight 4, 3/3 */
     int napalm_scorch_delay;     /* scorch objects 1 after the landing gfx, 3/3 */
     int bomb_proj_delay;         /* 4440 first seen 1 after the anim, 3/3 */
-    int bomb_flight;             /* 4440 lands 4 after its first tick (flight 4.5), 3/3 */
+    int bomb_flight;             /* 4440 lands 4 after its first tick (flight 4.5 rounded down), 3/3 */
     int napalm_bork_delay;       /* Bork hit 26 one tick after the napalm landed on him, 1/1 */
     int napalm_bork_damage;
     int bomb_bork_damage;        /* 28 at the landing tick, 1/1 */
@@ -231,7 +231,7 @@ static void tfa_bork_scorch(TfaState* s, int x, int y) {
         .min_damage = (int16_t)TFA_BORK.scorch_min,
         .max_damage = (int16_t)TFA_BORK.scorch_max,
         .protected_pct = 100,
-        .gfx_id = BORK_OBJ_SCORCH,
+        .loc_id = BORK_OBJ_SCORCH,
     });
 }
 
@@ -283,13 +283,15 @@ static void tfa_bork_cannon(TfaState* s, TfaNpc* m) {
         bs->next_bomb = s->tick + tfa_rand_range(s, TFA_BORK.bomb_gap_min, TFA_BORK.bomb_gap_max);
         bs->stomp_tick = s->tick + TFA_BORK.bomb_to_stomp;
         tfa_npc_anim(s, m, BORK_ANIM_BIG_CANNON);
-        tfa_bork_pend(bs, s->tick + TFA_BORK.bomb_proj_delay, TFA_BORK_PEND_BOMB_PROJ, tp->x, tp->y);
+        tfa_fx_projectile(s, m, bs->target, BORK_PROJ_BOMB, SPOTANIM_TFA_BORK_CANNONBALL_TRAVEL_BIG,
+            SPOTANIM_TFA_BORK_CANNONBALL_TRAVEL_BIG_ANIM, TFA_BORK.bomb_proj_delay, TFA_BORK.bomb_flight);
         tfa_bork_pend(bs, s->tick + TFA_BORK.bomb_proj_delay + TFA_BORK.bomb_flight, TFA_BORK_PEND_BOMB_LAND, tp->x, tp->y);
         return;
     }
     tfa_npc_anim(s, m, BORK_ANIM_CANNON);
     if (pick < TFA_BORK.napalm_weight) {
-        tfa_log_projectile(s, m, BORK_PROJ_NAPALM, -1, tp->x, tp->y, 2 * TFA_BORK.napalm_flight);
+        tfa_fx_projectile(s, m, bs->target, BORK_PROJ_NAPALM, SPOTANIM_TFA_BORK_VFX_SMORK_NAPALM_FIRE_PROJANIM01,
+            SPOTANIM_TFA_BORK_VFX_SMORK_NAPALM_FIRE_PROJANIM01_ANIM, 0, TFA_BORK.napalm_flight);
         tfa_bork_pend(bs, s->tick + TFA_BORK.napalm_flight, TFA_BORK_PEND_NAPALM_LAND, tp->x, tp->y);
         return;
     }
@@ -302,8 +304,12 @@ static void tfa_bork_cannon(TfaState* s, TfaNpc* m) {
         if (enraged) max_hit = max_hit * TFA_BORK.enraged_smork_pct / 100;
         int raw = tfa_npc_roll(s, m, p, style, max_hit);
         tfa_queue_npc_hit_land(s, p, raw, style, TFA_BORK.ranged_hit, 0, m);
-        tfa_log_projectile(s, m, magic ? BORK_PROJ_MAGIC : BORK_PROJ_RANGED, p,
-            s->players[p].player.x, s->players[p].player.y, 10);
+        if (magic)
+            tfa_fx_projectile(s, m, p, BORK_PROJ_MAGIC, SPOTANIM_TFA_BORK_VFX_SMORK_MAGE_ATTACK_PROJANIM01,
+                SPOTANIM_TFA_BORK_VFX_SMORK_MAGE_ATTACK_PROJANIM01_ANIM, 0, TFA_BORK.magic_hit);
+        else
+            tfa_fx_projectile(s, m, p, BORK_PROJ_RANGED, SPOTANIM_TFA_BORK_VFX_SMORK_RANGE_ATTACK_PROJANIM01,
+                SPOTANIM_TFA_BORK_VFX_SMORK_RANGE_ATTACK_PROJANIM01_ANIM, 0, TFA_BORK.ranged_hit);
         m->act = magic ? TFA_ACT_MAGIC : TFA_ACT_RANGED;
     }
 }
@@ -317,9 +323,6 @@ static void tfa_bork_pending_tick(TfaState* s, TfaNpc* b, TfaNpc* m) {
         switch ((TfaBorkPendKind)e.kind) {
             case TFA_BORK_PEND_NAPALM_LAND:
                 tfa_bork_landing(s, b, e.x, e.y, TFA_BORK.napalm_bork_damage, TFA_BORK_PEND_SCORCH_NAPALM);
-                break;
-            case TFA_BORK_PEND_BOMB_PROJ:
-                tfa_log_projectile(s, m, BORK_PROJ_BOMB, -1, e.x, e.y, 2 * TFA_BORK.bomb_flight + 1);
                 break;
             case TFA_BORK_PEND_BOMB_LAND:
                 tfa_bork_landing(s, b, e.x, e.y, TFA_BORK.bomb_bork_damage, TFA_BORK_PEND_SCORCH_BOMB);
