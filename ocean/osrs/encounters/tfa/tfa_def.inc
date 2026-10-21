@@ -325,16 +325,20 @@ static void tfa_emit_hazard_model(EncounterOverlay* ov, const TfaHazard* h, uint
     ov->floating_models[ov->floating_model_count - 1].depth_offset = (float)h->y + h->h * 0.5f - (ay + 0.5f);
 }
 
-/* Hazard spotanims and locs, Ocellus's lit lane portals, and this tick's NPC projectiles. Tile-only hazards draw nothing: their telegraph is an NPC (Guardian vines). Durations are client cycles. */
+/* Hazard spotanims and locs, Ocellus's safe portals, lit lane portals and lane fire, and this tick's NPC projectiles. Tile-only hazards draw nothing: their telegraph is an NPC (Guardian vines). Durations are client cycles. */
 static void tfa_render_post_tick(EncounterState* state, EncounterContext* context, EncounterOverlay* ov) {
     (void)context;
     TfaState* s = (TfaState*)state;
     ov->floating_model_count = 0;
     ov->projectile_count = 0;
-    for (int i = 0; i < TFA_MAX_NPCS; i++)
-        if (s->npcs[i].active && s->npcs[i].kind == TFA_NPC_OCELLUS_PORTAL)
-            encounter_emit_floating_model(ov, ENCOUNTER_PROJECTILE_TARGET_FIXED, -1, s->npcs[i].x, s->npcs[i].y,
-                SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_P2_SAFE_PORTAL_IDLE, SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_P2_SAFE_PORTAL_IDLE_ANIM, 0.0f, 0.0f, 1.0f);
+    if (s->room == TFA_ROOM_OCELLUS) oc_scenery(s, ov);
+    for (int i = 0; i < TFA_MAX_NPCS; i++) {
+        if (!s->npcs[i].active || s->npcs[i].kind != TFA_NPC_OCELLUS_PORTAL) continue;
+        uint32_t model;
+        int anim;
+        oc_portal_visual(s, &s->npcs[i], &model, &anim);
+        encounter_emit_floating_model(ov, ENCOUNTER_PROJECTILE_TARGET_FIXED, -1, s->npcs[i].x, s->npcs[i].y, model, anim, 0.0f, 0.0f, 1.0f);
+    }
     for (int i = 0; i < TFA_MAX_HAZARDS; i++) {
         const TfaHazard* h = &s->hazards[i];
         if (h->kind == TFA_HAZ_NONE) continue;
@@ -345,6 +349,11 @@ static void tfa_render_post_tick(EncounterState* state, EncounterContext* contex
                 OSRS_LOC_MODEL_BASE | OC_LOC_LANE_PORTAL, -1, 0.0f, turned ? 0.0f : 0.5f, 1.0f);
             ov->floating_models[ov->floating_model_count - 1].depth_offset = turned ? 0.5f : 0.0f;
             ov->floating_models[ov->floating_model_count - 1].yaw = turned ? (float)(-0.5 * TFA_PI) : 0.0f;
+            if (h->start_tick != s->tick + 1) continue;
+            OsrsProjectileEventSpec shot = { .start_h = 40, .end_h = 40, .src_size = 1, .dst_size = 1, .start_delay = 30,
+                .model_id = SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_PORTAL_PROJECTILE, .anim_id = SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_PORTAL_PROJECTILE_ANIM };
+            oc_lane_shot(h, &shot.src_x, &shot.src_y, &shot.dst_x, &shot.dst_y, &shot.duration_ticks);
+            osrs_emit_projectile_with_spec(ov, &shot, 0);
         } else if (h->loc_id) {
             tfa_emit_hazard_model(ov, h, OSRS_LOC_MODEL_BASE | (uint32_t)h->loc_id, -1);
         } else if (h->gfx_id) {
@@ -425,7 +434,8 @@ TFA_ROOM_DEF(TFA_ROOM_DREADNOTH, dreadnoth, "TFA: Dreadnoth the Jellied", "tfa_d
 TFA_ROOM_DEF(TFA_ROOM_MOIA, moia, "TFA: Moia", "tfa_moia", 4032, 5632)
 TFA_ROOM_DEF(TFA_ROOM_XARTH, xarth, "TFA: Xarth", "tfa_xarth", 4160, 5504)
 TFA_ROOM_DEF(TFA_ROOM_DAGONHAI, dagonhai, "TFA: Dagon'hai Trio", "tfa_dagonhai", 4032, 5568)
-TFA_ROOM_DEF(TFA_ROOM_OCELLUS, ocellus, "TFA: Ocellus", "tfa_ocellus", 4096, 5632)
+/* The Ocellus instance sits 8 tiles north of its template region: fixture (31,49) is template (31,41) in 9/9 scenes. */
+TFA_ROOM_DEF(TFA_ROOM_OCELLUS, ocellus, "TFA: Ocellus", "tfa_ocellus", 4096, 5624)
 
 /* The wrapper's definition: config decides the room, no scene of its own. */
 static const EncounterDef ENCOUNTER_TFA = {

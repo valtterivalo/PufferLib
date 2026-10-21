@@ -185,4 +185,6 @@ typedef struct {
     int orb_x[TFA_MAX_PLAYERS], orb_y[TFA_MAX_PLAYERS], orb_heal[TFA_MAX_PLAYERS];
     int no_line_heal;
     int centre;
+    int centre_gone, centre_back;
+    int blade_tick;
 } TfaOcellusState;

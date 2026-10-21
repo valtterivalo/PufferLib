@@ -48,7 +48,7 @@ if [ -n "$tfa_cache" ]; then
   t scene tfa_bork 65,87
   t scene tfa_dreadnoth 65,88
   t scene tfa_xarth 65,86
-  t scene tfa_ocellus 64,88 plane=1
+  t scene tfa_ocellus 64,88 plane=1 altobjects=tfa_ocellus:62706,62955
   t scene tfa_nexus 64,87 plane=2
 
   t npcs tfa_bork npc=16642 \
@@ -135,7 +135,7 @@ if [ -n "$tfa_cache" ]; then
     loc=62687 loc=62688 loc=62689 loc=62690 loc=62691 loc=62692 loc=62693 loc=62694 loc=62695 loc=62696 \
     loc=62697 loc=62698 loc=62699 loc=62700 loc=62701 loc=62702 loc=62703 loc=62704 loc=62705 loc=63000 \
     loc=63001 loc=63002 loc=63003 loc=63004 loc=63005 loc=63006 loc=63007 loc=63008 loc=63109 loc=63110 \
-    loc=63111 seq=14830 seq=14833 seq=14834 seq=14891 seq=14924 seq=14927 seq=14930 seq=14936 seq=14970 \
+    loc=63111 loc=62706 loc=62707 loc=62955 seq=14830 seq=14833 seq=14834 seq=14891 seq=14924 seq=14927 seq=14930 seq=14936 seq=14970 \
     seq=14977 seq=14978 seq=15020 seq=15022
 
   t npcs tfa_nexus npc=16761 npc=16762 loc=63087 loc=63088 loc=63089 loc=63090 loc=63091 loc=63092 loc=63093 \

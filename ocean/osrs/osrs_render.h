@@ -86,7 +86,7 @@ static inline Camera2D render_chrome_camera(float fixed_x, float fixed_y) {
 #define COLOR_TEXT_DIM     CLITERAL(Color){ 130, 130, 140, 255 }
 #define COLOR_LABEL        CLITERAL(Color){ 170, 170, 180, 255 }
 
-#define MAX_FLIGHT_PROJECTILES 64
+#define MAX_FLIGHT_PROJECTILES 192
 #define RENDER_CLIENT_TICK_SECONDS 0.020
 #define RENDER_DEFAULT_GAME_TICKS_PER_SECOND (1.0f / 0.6f)
 #define RENDER_MAX_VISUAL_GAME_TICKS_PER_SECOND 50.0f

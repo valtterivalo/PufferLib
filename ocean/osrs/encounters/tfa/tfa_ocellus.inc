@@ -53,6 +53,13 @@
 #define OC_GFX_SLAM 4320
 #define OC_GFX_DEBRIS 4346
 #define OC_GFX_SWORD_DROP 4388
+#define OC_LOC_BLADE 62706
+#define OC_LOC_BLADE_FALLING 62707
+#define OC_LOC_CENTRE 62955
+#define OC_CENTRE_HIDE_FIRST 1       /* centre piece OBJ- 1 after 14813, 5/5 middles */
+#define OC_CENTRE_HIDE_LAST 36       /* OBJ+ 36 after 14813, 5/5 */
+#define OC_CENTRE_GONE_P2 9          /* OBJ- 9 after 14814, 2/2 */
+#define OC_BLADE_FALL_TICKS 32       /* 62707 replaces 62706 when the blade spawns, OBJ- 32 later, 2/2 */
 #define OC_LOC_VOID 62702
 
 typedef enum {
@@ -519,6 +526,7 @@ static void oc_p1_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
             n->x = OC_CENTRE_X;
             n->y = OC_CENTRE_Y;
             os->centre = 1;
+            if (!e->arg) os->centre_gone = s->tick + OC_CENTRE_HIDE_FIRST, os->centre_back = s->tick + OC_CENTRE_HIDE_LAST;
             tfa_npc_anim(s, n, OC_ANIM_TP_IN);
             if (e->arg) {
                 oc_at(s, TFA_OC1.death_transform, OCE_P1_DYING_IN, 0, 0);
@@ -561,6 +569,7 @@ static void oc_p1_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
         }
         case OCE_P1_DYING_IN:
             tfa_npc_anim(s, n, OC_ANIM_P1_TRANSFORM);
+            os->centre_gone = s->tick + OC_CENTRE_GONE_P2, os->centre_back = INT32_MAX;
             oc_at(s, TFA_OC1.death_p2, OCE_P2_START, 0, 0);
             break;
         default: abort();
@@ -601,6 +610,50 @@ static int oc_lane_portal(const TfaHazard* h, int* x, int* y, int* turned) {
     }
     *x = OC_CROSS_X, *y = h->y, *turned = 1;
     return h->x + h->w == OC_CROSS_X || h->x == OC_CROSS_X + 1;
+}
+
+/* Lane projectile end: the far tile inside the arena octagon |dx| + |dy| <= 21, dx -14..14, dy -15..14 around the cross (all 92 recorded 4269 targets). */
+static int oc_lane_inside(int x, int y) {
+    int dx = x - OC_CROSS_X, dy = y - OC_CROSS_Y;
+    return dx >= -14 && dx <= 14 && dy >= -15 && dy <= 14 && abs(dx) + abs(dy) <= 21;
+}
+
+/* Projectile 4269 of a firing lane: from the hidden shooter at x = 32 (row lanes, row + 1) or y = 50 (column lanes, column + 1) in every quadrant,
+   flight 2 ticks to 12 tiles and 3 at 15-16 (recorded PROJ). Takes a near segment from oc_lane_portal. */
+static void oc_lane_shot(const TfaHazard* h, int* sx, int* sy, int* dx, int* dy, int* cycles) {
+    if (h->w == 2) {
+        int dir = h->y == OC_CROSS_Y + 1 ? 1 : -1;
+        *sx = h->x + 1, *sy = OC_CROSS_Y + 1, *dx = h->x, *dy = OC_CROSS_Y + dir;
+        while (oc_lane_inside(*dx, *dy + dir)) *dy += dir;
+    } else {
+        int dir = h->x == OC_CROSS_X + 1 ? 1 : -1;
+        *sx = OC_CROSS_X + 1, *sy = h->y + 1, *dx = OC_CROSS_X + dir, *dy = h->y;
+        while (oc_lane_inside(*dx + dir, *dy)) *dx += dir;
+    }
+    int d = chebyshev_distance(*sx, *sy, *dx, *dy);
+    *cycles = 60 + 8 * (d > 12 ? d - 12 : 0);
+}
+
+/* Scenery the live room changes during the fight: the centre piece (3x3 at 30,48, rotation 2) leaves for each middle sequence and for good
+   at the transform, the Blade at the cross (31,49) gives way to the falling blade when the blade NPC spawns. */
+static void oc_scenery(const TfaState* s, EncounterOverlay* ov) {
+    const TfaOcellusState* os = &s->boss.ocellus;
+    if (s->tick < os->centre_gone || s->tick >= os->centre_back) {
+        encounter_emit_floating_model(ov, ENCOUNTER_PROJECTILE_TARGET_FIXED, -1, OC_CENTRE_X + 1, OC_CENTRE_Y + 1,
+            OSRS_LOC_MODEL_BASE | OC_LOC_CENTRE, -1, 0.0f, 0.0f, 1.0f);
+        ov->floating_models[ov->floating_model_count - 1].yaw = (float)TFA_PI;
+    }
+    int loc = os->blade_tick == 0 ? OC_LOC_BLADE : s->tick < os->blade_tick + OC_BLADE_FALL_TICKS ? OC_LOC_BLADE_FALLING : 0;
+    if (loc) encounter_emit_floating_model(ov, ENCOUNTER_PROJECTILE_TARGET_FIXED, -1, OC_CROSS_X, OC_CROSS_Y,
+        OSRS_LOC_MODEL_BASE | (uint32_t)loc, SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_SWORD_IDLE_STATIC_ANIM, 0.0f, 0.0f, 1.0f);
+}
+
+/* The safe portal's spotanim: spawn 4271 on its first tick, despawn 4273 on the fire tick, idle 4272 between (recorded GFX, 12 portals). */
+static void oc_portal_visual(const TfaState* s, const TfaNpc* portal, uint32_t* model, int* anim) {
+    int age = s->tick - portal->anim_tick;
+    if (age == 0) *model = SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_P2_SAFE_PORTAL_SPAWN, *anim = SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_P2_SAFE_PORTAL_SPAWN_ANIM;
+    else if (age == TFA_OC2.special_fire) *model = SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_P2_SAFE_PORTAL_DESPAWN, *anim = SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_P2_SAFE_PORTAL_DESPAWN_ANIM;
+    else *model = SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_P2_SAFE_PORTAL_IDLE, *anim = SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_P2_SAFE_PORTAL_IDLE_ANIM;
 }
 
 /* Lanes of one quadrant: wall portals light all but one per wall, and fire along 2-wide lanes 4 ticks later. */
@@ -664,6 +717,7 @@ static void oc_p2_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
             if (e->arg == -1) {
                 TfaNpc* b = tfa_npc_spawn(s, TFA_NPC_OCELLUS_BLADE, MON_TFA_OCELLUS_BLADE, OC_NPC_BLADE, OC_CENTRE_X, OC_CENTRE_Y);
                 b->hp = b->max_hp = 1;
+                os->blade_tick = s->tick;
                 break;
             }
             for (int q = 0; q < 4; q++)
@@ -685,6 +739,7 @@ static void oc_p2_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
                 if (!(e->arg & (1 << q))) continue;
                 TfaNpc* portal = tfa_npc_alloc(s, TFA_NPC_OCELLUS_PORTAL, OC_GFX_SAFE_PORTAL, 1, os->portal_x[q], os->portal_y[q], 1);
                 portal->state = (int16_t)q;
+                tfa_npc_anim(s, portal, SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_P2_SAFE_PORTAL_SPAWN_ANIM);
                 oc_lanes(s, q, 1, s->tick + TFA_OC2.special_fire);
             }
             oc_at(s, TFA_OC2.special_fire + 1, OCE_P2_FIRE_ALL, 0, 0);
