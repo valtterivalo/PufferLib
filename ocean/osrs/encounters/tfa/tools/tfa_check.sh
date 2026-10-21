@@ -3,6 +3,9 @@
 set -uo pipefail
 cd "$(dirname "$0")/../../../../.."
 out=$(mktemp -d)
+echo '#include "ocean/osrs_tfa/osrs_tfa.h"' > $out/tfa_cxx.cpp
+echo "== C++ syntax of the TFA headers (the CUDA trainer compiles them with nvcc)"
+nice -n 19 clang++ -std=c++17 -fsyntax-only -w -Werror=c++11-narrowing -Werror=address-of-temporary -D_POSIX_C_SOURCE=200809L -I. -I./raylib-5.5_macos/include -I./src -I./vendor $out/tfa_cxx.cpp || exit 1
 nice -n 19 cc -std=c11 -O2 -Wno-unused-function -I. -o $out/smoke ocean/osrs/tests/test_tfa_smoke.c -lm || exit 1
 nice -n 19 cc -std=c11 -O2 -Wno-unused-function -I. -o $out/dump ocean/osrs/tests/tfa_dump_events.c -lm || exit 1
 nice -n 19 $out/smoke | tail -1 || exit 1

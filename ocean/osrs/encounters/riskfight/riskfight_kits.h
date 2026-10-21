@@ -383,7 +383,7 @@ static void riskfight_kit_apply(RiskfightState* s, int seat, const RiskfightKit*
     if (kit->ranged_level) him->current_ranged = kit->ranged_level;
     if (kit->equipment[GEAR_SLOT_RING] == ITEM_NONE) {
         int ranged = kit->ranged_level > 0;
-        uint16_t pick[5] = {ITEM_RING_OF_RECOIL, ranged ? ITEM_VENATOR_RING : ITEM_ULTOR_RING, ranged ? ITEM_RING_OF_SUFFERING_RI : ITEM_BERSERKER_RING_I, ITEM_NONE};
+        uint16_t pick[5] = {ITEM_RING_OF_RECOIL, (uint16_t)(ranged ? ITEM_VENATOR_RING : ITEM_ULTOR_RING), (uint16_t)(ranged ? ITEM_RING_OF_SUFFERING_RI : ITEM_BERSERKER_RING_I), ITEM_NONE};
         static const uint16_t share[2][4] = {{550, 150, 150, 150}, {350, 300, 150, 200}}; /* per mille; the recorded fights show a reflecting ring in 53 of 72 */
         int r = (int)((roll >> 8) % 1000u), at = 0, sum = share[ranged][0];
         while (r >= sum && at < 3) sum += share[ranged][++at];

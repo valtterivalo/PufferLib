@@ -246,7 +246,7 @@ static void tfa_queue_player_hit(TfaState* s, TfaNpc* n, int attacker, int damag
         .active = 1,
         .ticks_remaining = (int8_t)delay,
         .attack_style = (int8_t)style,
-        .spell_type = freezes ? ENCOUNTER_SPELL_ICE : ENCOUNTER_SPELL_NONE,
+        .spell_type = (int8_t)(freezes ? ENCOUNTER_SPELL_ICE : ENCOUNTER_SPELL_NONE),
         .source_npc_type = -1,
         .source_npc_slot = (int8_t)attacker,
         .hit_success = (int8_t)(damage > 0),

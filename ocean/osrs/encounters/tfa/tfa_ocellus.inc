@@ -558,7 +558,8 @@ static void oc_p1_event(TfaState* s, TfaNpc* n, const TfaOcEvent* e) {
                 os->middles++;
                 os->barrage = 0;
                 oc_cancel(s, OCE_P1_SHOT, OCE_P1_CHARGE);
-                oc_p1_event(s, n, &(TfaOcEvent){ .kind = OCE_P1_TP_OUT });
+                TfaOcEvent tp_out = { .kind = OCE_P1_TP_OUT };
+                oc_p1_event(s, n, &tp_out);
             } else if (e->arg) {
                 tfa_npc_anim(s, n, OC_ANIM_BARRAGE_END);
             }
