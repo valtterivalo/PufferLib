@@ -219,6 +219,7 @@ typedef struct {
     union {
         TfaGuardianState guardian;
         TfaXarthState xarth;
+        TfaEzekielState ezekiel;
     } boss;
 } TfaState;
 

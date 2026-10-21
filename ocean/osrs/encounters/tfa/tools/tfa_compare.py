@@ -9,7 +9,9 @@ FIXTURES = pathlib.Path(__file__).resolve().parent.parent / "fixtures"
 ATTACKS = {
     "guardian": {"14751", "14753", "14754", "14752", "14750"},
     "xarth": {"14983", "14984", "14985", "14992", "14989"},
+    "ezekiel": {"14685", "14686", "14687", "14688", "14691", "14693"},
 }
+EZEKIEL_SLOT_NAMES = {"14685": "M", "14686": "G", "14687": "S", "14688": "H", "14691": "W", "14693": "R", "14694": "F", "14684": "X"}
 
 
 def load(path):
@@ -268,6 +270,109 @@ def xarth(real, sim):
     return failures
 
 
+def ezekiel_cycles(fights):
+    """Anim names between consecutive specials, and the special-to-heal and special-to-weaken offsets."""
+    patterns, heal_at, weaken_at = [], [], []
+    for ev in fights.values():
+        anims = [(e["t"], EZEKIEL_SLOT_NAMES[e["id"]]) for e in ev
+                 if e["kind"] == "ANIM" and base(e["actor"]) == "16652" and e["id"] in EZEKIEL_SLOT_NAMES]
+        for i, (t0, name) in enumerate(anims):
+            if name != "S":
+                continue
+            seg = []
+            for t, n in anims[i + 1:]:
+                seg.append((t - t0, n))
+                if n in "SFX":
+                    break
+            if not seg or seg[-1][1] != "S":
+                continue
+            patterns.append(" ".join(n for t, n in seg[:-1]))
+            heal_at += [t for t, n in seg if n == "H"]
+            weaken_at += [t for t, n in seg if n == "W"]
+    return patterns, hist(heal_at), hist(weaken_at)
+
+
+def ezekiel_volleys(fights):
+    """Sword counts per volley in order, and the boss health percent at the first three-sword volley."""
+    kinds, first3 = [], []
+    for ev in fights.values():
+        nhp = [(e["t"], int(e["id"]) * 100 // int(e["a"])) for e in ev if e["kind"] == "NHP" and base(e["actor"]) == "16652" and int(e["id"]) >= 0]
+        counts = collections.Counter(e["t"] for e in ev if e["kind"] == "NPC+" and e["id"] == "16653")
+        seq = [counts[e["t"]] for e in ev if e["kind"] == "ANIM" and e["id"] == "14687" and base(e["actor"]) == "16652"]
+        kinds.append(seq)
+        for e in ev:
+            if e["kind"] == "ANIM" and e["id"] == "14687" and counts[e["t"]] == 3:
+                first3.append(next((v for t, v in reversed(nhp) if t < e["t"]), 100))
+                break
+    return kinds, first3
+
+
+def ezekiel_alternation_breaks(kinds):
+    """Adjacent equal sword counts after the first three-sword volley; both real and sim never break."""
+    return sum(1 for seq in kinds if 3 in seq for a, b in zip(seq[seq.index(3):], seq[seq.index(3) + 1:]) if a == b)
+
+
+def ezekiel_finale(fights):
+    cast, wave_first, wave_gaps = [], [], []
+    for ev in fights.values():
+        x = [e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14684"]
+        f = [e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14694"]
+        if not f:
+            continue
+        if x:
+            cast.append(f[0] - x[0])
+        waves = sorted({e["t"] for e in ev if e["kind"] in ("GFX", "OBJ+") and e["id"] == "4197"})
+        if waves:
+            wave_first.append(waves[0] - f[0])
+            wave_gaps += [b - a for a, b in zip(waves, waves[1:])]
+    return hist(cast), hist(wave_first), hist(wave_gaps)
+
+
+def ezekiel_player_hits(fights):
+    """Player hit amounts at fixed offsets from a special: stars at +3, sword bands at the jump ticks +14..+16."""
+    star, band4, band3 = [], [], []
+    for ev in fights.values():
+        counts = collections.Counter(e["t"] for e in ev if e["kind"] == "NPC+" and e["id"] == "16653")
+        for a in (e for e in ev if e["kind"] == "ANIM" and e["id"] == "14687"):
+            for h in ev:
+                if h["kind"] != "HIT" or not h["actor"].startswith("P") or h["a"] not in ("16", "17") or h["t"] < a["t"]:
+                    continue
+                amount, d = int(h["id"]), h["t"] - a["t"]
+                if d == 3 and 20 <= amount <= 33:
+                    star.append(amount)
+                if 14 <= d <= 16 and counts[a["t"]] == 4 and 50 <= amount <= 63:
+                    band4.append(amount)
+                if 14 <= d <= 16 and counts[a["t"]] == 3 and 27 <= amount <= 33:
+                    band3.append(amount)
+    return star, band4, band3
+
+
+def ezekiel(real, sim):
+    failures = []
+    for anim in ("14685", "14686", "14687", "14688", "14691", "14693"):
+        compare(f"{anim} next attack", next_attack(real, "ezekiel", anim), next_attack(sim, "ezekiel", anim), failures)
+    rp, rh, rw = ezekiel_cycles(real)
+    sp, sh, sw = ezekiel_cycles(sim)
+    unknown = sorted({p.replace("G", "M") for p in sp} - {p.replace("G", "M") for p in rp})
+    ok = not unknown
+    if not ok:
+        failures.append("sim cycle shapes")
+    print(f"{'ok ' if ok else 'BAD'} {'cycle shapes (G as M) sim only':28s} {unknown}")
+    compare("heal after special", rh, sh, failures)
+    compare("weaken after special", rw, sw, failures)
+    rk, r3 = ezekiel_volleys(real)
+    sk, s3 = ezekiel_volleys(sim)
+    ok = ezekiel_alternation_breaks(rk) == 0 and ezekiel_alternation_breaks(sk) == 0 and max(s3) <= 85 and max(r3) <= 85
+    if not ok:
+        failures.append("three-sword phase")
+    print(f"{'ok ' if ok else 'BAD'} {'three-sword phase':28s} real first-3 hp max {max(r3)} breaks {ezekiel_alternation_breaks(rk)}  sim max {max(s3)} breaks {ezekiel_alternation_breaks(sk)}")
+    for label, r, s in zip(("roll to cast", "first wave", "wave gap"), ezekiel_finale(real), ezekiel_finale(sim)):
+        compare(f"finale {label}", r, s, failures)
+    for label, r, s in zip(("star damage", "4-sword band damage", "3-sword band damage"), ezekiel_player_hits(real), ezekiel_player_hits(sim)):
+        median_law(label, r, s, 3, failures)
+    return failures
+
+
 def main():
     boss, sim_path = sys.argv[1], sys.argv[2]
     party = sys.argv[3] if len(sys.argv) > 3 else None
@@ -276,7 +381,7 @@ def main():
         meta = {r["fight_id"]: r for r in csv.DictReader(open(FIXTURES / "tfa_fights.tsv"), delimiter="\t")}
         real = {k: v for k, v in real.items() if meta[k]["party_size"] == party}
     sim = load(sim_path)
-    failures = {"guardian": guardian, "xarth": xarth}[boss](real, sim)
+    failures = {"guardian": guardian, "xarth": xarth, "ezekiel": ezekiel}[boss](real, sim)
     print(f"{len(failures)} laws differ: {failures}" if failures else "all laws agree")
     sys.exit(1 if failures else 0)
 

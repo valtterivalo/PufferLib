@@ -9,6 +9,20 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
     if (s->room == TFA_ROOM_GUARDIAN) {
         target = tfa_npc_first(s, TFA_NPC_GUARDIAN);
         want = s->boss.guardian.phase == TFA_GUARDIAN_GROUNDED ? PRAYER_PROTECT_MELEE : PRAYER_PROTECT_RANGED;
+    } else if (s->room == TFA_ROOM_EZEKIEL) {
+        const TfaNpc* boss = tfa_npc_first(s, TFA_NPC_EZEKIEL);
+        target = boss;
+        want = PRAYER_PROTECT_MELEE;
+        for (int i = 0; i < TFA_NUM_TARGET_SLOTS; i++) {
+            const TfaNpc* w = &s->npcs[i];
+            if (!w->active || w->kind != TFA_NPC_EZEKIEL_SWORD || w->hp >= TFA_EZEKIEL.sword_charge_cap || w->state_ticks <= 0) continue;
+            int line = w->state ? w->y : w->x;
+            if ((w->state ? boss->y : boss->x) == line) { target = w; break; }
+        }
+        if (p != 0 && tfa_player_npc_distance(tp, boss) < 3) {
+            hide_x = tp->player.x + 3 * ((tp->player.x > boss->x + 1) - (tp->player.x < boss->x + 1));
+            hide_y = tp->player.y + 3 * ((tp->player.y > boss->y + 1) - (tp->player.y < boss->y + 1));
+        }
     } else if (s->room == TFA_ROOM_XARTH) {
         const TfaXarthState* xs = &s->boss.xarth;
         target = tfa_npc_first(s, TFA_NPC_XARTH);
@@ -45,12 +59,26 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
         }
     }
     int here = tfa_tile_danger(s, p, tp->player.x, tp->player.y);
-    if (here >= 0 && here <= 1) {
+    int react = s->room == TFA_ROOM_EZEKIEL ? 3 : 1;
+    if (here >= 0 && here <= react) {
+        const TfaRoomLayout* layout = tfa_room_layout(s->room);
+        int safe[289][2], safe_count = 0;
+        for (int dx = -8; dx <= 8; dx++)
+            for (int dy = -8; dy <= 8; dy++) {
+                int tx = tp->player.x + dx, ty = tp->player.y + dy;
+                if (!tfa_layout_blocked(layout, tx, ty) && tfa_tile_danger(s, p, tx, ty) < 0) {
+                    safe[safe_count][0] = tx;
+                    safe[safe_count++][1] = ty;
+                }
+            }
+        int best = 1 << 30;
         for (int a = 1; a < OSRS_PRIMARY_MOVE_ACTIONS; a++) {
             int nx = tp->player.x + ENCOUNTER_MOVE_TARGET_DX[a], ny = tp->player.y + ENCOUNTER_MOVE_TARGET_DY[a];
-            if (tfa_layout_blocked(tfa_room_layout(s->room), nx, ny) || tfa_tile_danger(s, p, nx, ny) >= 0) continue;
-            acts[OSRS_HEAD_PRIMARY] = a;
-            break;
+            if (tfa_layout_blocked(layout, nx, ny)) continue;
+            for (int k = 0; k < safe_count; k++) {
+                int d = chebyshev_distance(nx, ny, safe[k][0], safe[k][1]);
+                if (d < best) { best = d; acts[OSRS_HEAD_PRIMARY] = a; }
+            }
         }
     }
     for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++) {
