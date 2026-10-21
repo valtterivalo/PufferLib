@@ -124,7 +124,7 @@ int main(int argc, char** argv) {
                 /* Our specials of the step, by the weapon in hand after it (a double maul is one event). */
                 if (t < last_opener_tick) last_opener_tick = -1000; /* a new fight */
                 if (st->specs_used[0] > pre_specs) {
-                    const uint8_t hand = p->equipped[GEAR_SLOT_WEAPON];
+                    const uint16_t hand = p->equipped[GEAR_SLOT_WEAPON];
                     if (hand == ITEM_VOIDWAKER || hand == ITEM_AGS) { kit_openers[kit]++; last_opener_tick = t; }
                     if (pvp_is_maul(hand)) { kit_maul_specs[kit]++; kit_chains[kit] += t - last_opener_tick <= RF_PROBE_CHAIN_TICKS; }
                 }

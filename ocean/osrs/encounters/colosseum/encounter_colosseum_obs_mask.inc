@@ -1275,7 +1275,7 @@ static void col_write_thrall_dc(const ColosseumState* s, float* obs, int* idx) {
 
 static float col_expected_dpt_for_equipment_vs_npc(
     ColosseumState* s,
-    const uint8_t equipment[NUM_GEAR_SLOTS],
+    const uint16_t equipment[NUM_GEAR_SLOTS],
     const ColoNPC* npc,
     int use_style_matched_prayer
 ) {
@@ -1283,7 +1283,7 @@ static float col_expected_dpt_for_equipment_vs_npc(
     if (!col_npc_is_live_target(npc) || col_type_is_hazard_entity(npc->type))
         return 0.0f;
 
-    uint8_t weapon_item = equipment[GEAR_SLOT_WEAPON];
+    uint16_t weapon_item = equipment[GEAR_SLOT_WEAPON];
     AttackStyle style = ATTACK_STYLE_MELEE;
     int item_style = get_item_attack_style(weapon_item);
     if (item_style == 2) style = ATTACK_STYLE_RANGED;
@@ -1333,11 +1333,11 @@ static float col_expected_dpt_for_equipment_vs_npc(
 #define COLO_BEST_GEAR_MAX_CAND 16
 
 typedef struct {
-    uint8_t items[NUM_GEAR_SLOTS][COLO_BEST_GEAR_MAX_CAND];
+    uint16_t items[NUM_GEAR_SLOTS][COLO_BEST_GEAR_MAX_CAND];
     int count[NUM_GEAR_SLOTS];
 } ColoGearCandidates;
 
-static void col_gear_candidates_add(ColoGearCandidates* c, int slot, uint8_t item) {
+static void col_gear_candidates_add(ColoGearCandidates* c, int slot, uint16_t item) {
     if (item == ITEM_NONE) return;
     for (int k = 0; k < c->count[slot]; k++)
         if (c->items[slot][k] == item) return;
@@ -1355,7 +1355,7 @@ static void col_build_gear_candidates(const ColosseumState* s, ColoGearCandidate
     for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++) {
         const OsrsItemContentMetadata* metadata =
             osrs_inventory_cell_metadata(&s->player.inventory_cells[cell]);
-        uint8_t item = metadata->item_idx;
+        uint16_t item = metadata->item_idx;
         if (item == ITEM_NONE) continue;
         int gslot = metadata->gear_slot;
         if (gslot < 0) continue;
@@ -1364,7 +1364,7 @@ static void col_build_gear_candidates(const ColosseumState* s, ColoGearCandidate
 }
 
 static int col_item_dominates_empty_for_style(
-    uint8_t item, AttackStyle style, MeleeStyle melee_style
+    uint16_t item, AttackStyle style, MeleeStyle melee_style
 ) {
     const Item* it = get_item(item);
     if (!it) return 1;
@@ -1386,7 +1386,7 @@ static int col_item_dominates_empty_for_style(
 
 #define COLO_LOADOUT_MEMO_SLOTS 256
 typedef struct {
-    uint8_t key[COLO_LOADOUT_MEMO_SLOTS][NUM_GEAR_SLOTS];
+    uint16_t key[COLO_LOADOUT_MEMO_SLOTS][NUM_GEAR_SLOTS];
     EncounterLoadoutStats stats[COLO_LOADOUT_MEMO_SLOTS];
     OsrsEquipmentEffectProfile effects[COLO_LOADOUT_MEMO_SLOTS];
     uint8_t used[COLO_LOADOUT_MEMO_SLOTS];
@@ -1394,7 +1394,7 @@ typedef struct {
     int misses;
 } ColoLoadoutMemo;
 
-static uint32_t col_loadout_hash(const uint8_t equipment[NUM_GEAR_SLOTS]) {
+static uint32_t col_loadout_hash(const uint16_t equipment[NUM_GEAR_SLOTS]) {
     uint32_t h = 2166136261u;
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
         h ^= equipment[slot];
@@ -1405,7 +1405,7 @@ static uint32_t col_loadout_hash(const uint8_t equipment[NUM_GEAR_SLOTS]) {
 
 static void col_memo_loadout_stats(
     ColoLoadoutMemo* memo,
-    const uint8_t equipment[NUM_GEAR_SLOTS],
+    const uint16_t equipment[NUM_GEAR_SLOTS],
     AttackStyle style,
     OffensivePrayer prayer,
     int current_att_level,
@@ -1419,7 +1419,7 @@ static void col_memo_loadout_stats(
     for (int probe = 0; probe < COLO_LOADOUT_MEMO_SLOTS; probe++) {
         uint32_t idx = (slot + (uint32_t)probe) % COLO_LOADOUT_MEMO_SLOTS;
         if (memo->used[idx] &&
-                memcmp(memo->key[idx], equipment, NUM_GEAR_SLOTS) == 0) {
+                memcmp(memo->key[idx], equipment, NUM_GEAR_SLOTS * sizeof(uint16_t)) == 0) {
             memo->hits++;
             *out_stats = &memo->stats[idx];
             *out_effects = &memo->effects[idx];
@@ -1427,7 +1427,7 @@ static void col_memo_loadout_stats(
         }
         if (!memo->used[idx]) {
             memo->misses++;
-            memcpy(memo->key[idx], equipment, NUM_GEAR_SLOTS);
+            memcpy(memo->key[idx], equipment, NUM_GEAR_SLOTS * sizeof(uint16_t));
             encounter_compute_loadout_stats(
                 equipment, style, prayer, current_att_level, fight_style,
                 spell_base_damage, &memo->stats[idx]);
@@ -1461,7 +1461,7 @@ static void col_build_best_gear_table(
     for (int style = 0; style < COLO_NUM_WEAPON_SETS; style++)
         for (int type = 0; type < COLO_NUM_NPC_TYPES; type++) {
             best[style][type].dpt = -1.0f;
-            memset(best[style][type].setup, ITEM_NONE, NUM_GEAR_SLOTS);
+            memset(best[style][type].setup, ITEM_NONE, NUM_GEAR_SLOTS * sizeof(uint16_t));
         }
 
     ColoGearCandidates cand;
@@ -1483,7 +1483,7 @@ static void col_build_best_gear_table(
     const int n_combo_slots = (int)(sizeof(combo_slots) / sizeof(combo_slots[0]));
 
     for (int wc = 0; wc < cand.count[GEAR_SLOT_WEAPON]; wc++) {
-        uint8_t weapon = cand.items[GEAR_SLOT_WEAPON][wc];
+        uint16_t weapon = cand.items[GEAR_SLOT_WEAPON][wc];
         int wstyle = get_item_attack_style(weapon);
         if (wstyle < 1 || wstyle > 3) continue;
         ColoWeaponSet style_set = (ColoWeaponSet)(wstyle - 1);
@@ -1497,7 +1497,7 @@ static void col_build_best_gear_table(
         MeleeStyle melee_style = osrs_item_melee_style(weapon);
         int two_h = item_is_two_handed(weapon);
 
-        uint8_t shield_items[COLO_BEST_GEAR_MAX_CAND + 1];
+        uint16_t shield_items[COLO_BEST_GEAR_MAX_CAND + 1];
         int shield_count;
         if (two_h) {
             shield_items[0] = ITEM_NONE;
@@ -1509,7 +1509,7 @@ static void col_build_best_gear_table(
             if (shield_count == 0) shield_items[shield_count++] = ITEM_NONE;
         }
 
-        uint8_t slot_opt[16][COLO_BEST_GEAR_MAX_CAND + 1];
+        uint16_t slot_opt[16][COLO_BEST_GEAR_MAX_CAND + 1];
         int slot_opt_count[16];
         for (int d = 0; d < n_combo_slots; d++) {
             int slot = combo_slots[d];
@@ -1540,8 +1540,8 @@ static void col_build_best_gear_table(
         for (int d = 0; d < n_digits; d++) odo[d] = 0;
 
         for (;;) {
-            uint8_t equipment[NUM_GEAR_SLOTS];
-            memset(equipment, ITEM_NONE, NUM_GEAR_SLOTS);
+            uint16_t equipment[NUM_GEAR_SLOTS];
+            memset(equipment, ITEM_NONE, NUM_GEAR_SLOTS * sizeof(uint16_t));
             equipment[GEAR_SLOT_WEAPON] = weapon;
             for (int d = 0; d < n_combo_slots; d++)
                 equipment[combo_slots[d]] = slot_opt[d][odo[d]];
@@ -1560,7 +1560,7 @@ static void col_build_best_gear_table(
                     stats, effects, weapon, style, melee_style, &rep[type], ns);
                 if (dpt > best[style_set][type].dpt) {
                     best[style_set][type].dpt = dpt;
-                    memcpy(best[style_set][type].setup, equipment, NUM_GEAR_SLOTS);
+                    memcpy(best[style_set][type].setup, equipment, NUM_GEAR_SLOTS * sizeof(uint16_t));
                 }
             }
 
@@ -1581,10 +1581,10 @@ static uint64_t col_best_gear_cache_signature(const ColosseumState* s) {
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
         int count = candidates.count[slot];
         h = (h ^ (uint64_t)(uint32_t)count) * 1099511628211ULL;
-        uint8_t sorted[COLO_BEST_GEAR_MAX_CAND];
-        memcpy(sorted, candidates.items[slot], (size_t)count);
+        uint16_t sorted[COLO_BEST_GEAR_MAX_CAND];
+        memcpy(sorted, candidates.items[slot], (size_t)count * sizeof(uint16_t));
         for (int i = 1; i < count; i++) {
-            uint8_t item = sorted[i];
+            uint16_t item = sorted[i];
             int j = i;
             while (j > 0 && sorted[j - 1] > item) {
                 sorted[j] = sorted[j - 1];
@@ -1642,7 +1642,7 @@ static void col_apply_bis_gear_oracle(ColosseumState* s) {
     if (!col_npc_is_live_target(npc) || col_type_is_hazard_entity(npc->type)) return;
 
     int melee_ok = col_npc_melee_adjacent_to_player(s, npc);
-    const uint8_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
+    const uint16_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
     float best_dpt = -1.0f;
     ColoWeaponSet best_set = s->weapon_set;
     for (int set = 0; set < COLO_NUM_WEAPON_SETS; set++) {

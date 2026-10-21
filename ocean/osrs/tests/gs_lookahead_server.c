@@ -310,7 +310,7 @@ static void request_gear_priors(Request* q) {
         prior_note(q->tick, 1, 1, 5, g->shield, -1, "shield under a two-handed weapon: bare");
         g->shield = -1;
     }
-    uint8_t ammo = la_ammo_prior((uint8_t)la_item_of(g->weapon).item);
+    uint16_t ammo = la_ammo_prior((uint8_t)la_item_of(g->weapon).item);
     if (ammo != ITEM_NONE && la_item_of(g->weapon).item != ITEM_MAGIC_SHORTBOW_I)
         prior_note(q->tick, 1, 13, 13, ITEM_DATABASE[la_item_of(g->weapon).item].item_id, ITEM_DATABASE[ammo].item_id, "declared ammo prior for the ranged weapon");
     for (int i = 0; i < TAPE_WORN; i++) {

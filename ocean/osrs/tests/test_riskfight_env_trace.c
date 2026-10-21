@@ -104,8 +104,8 @@ static void check_prior_memo(void) {
     uint32_t rng = 12345;
     long checked = 0;
     for (int round = 0; round < 3; round++) for (int k = 0; k < RISKFIGHT_POOL_COUNT; k++) for (int variant = 0; variant < 6; variant++) {
-        uint8_t visible[NUM_GEAR_SLOTS];
-        memcpy(visible, RISKFIGHT_POOL[k].equipment, NUM_GEAR_SLOTS);
+        uint16_t visible[NUM_GEAR_SLOTS];
+        memcpy(visible, RISKFIGHT_POOL[k].equipment, NUM_GEAR_SLOTS * sizeof(uint16_t));
         if (variant) {
             const RiskfightKit* other = &RISKFIGHT_POOL[xorshift32(&rng) % RISKFIGHT_POOL_COUNT];
             int slot = RF_POOL_VISIBLE_SLOTS[xorshift32(&rng) % (sizeof(RF_POOL_VISIBLE_SLOTS) / sizeof(*RF_POOL_VISIBLE_SLOTS))];
@@ -113,10 +113,10 @@ static void check_prior_memo(void) {
             if (variant & 1) visible[GEAR_SLOT_WEAPON] = other->equipment[GEAR_SLOT_WEAPON];
         }
         for (int cap = 1; cap <= RF_PRIOR_MEMO_CAP; cap += 4) {
-            uint8_t i0[RF_PRIOR_MEMO_CAP], i1[RF_PRIOR_MEMO_CAP];
+            uint16_t i0[RF_PRIOR_MEMO_CAP], i1[RF_PRIOR_MEMO_CAP];
             float p0[RF_PRIOR_MEMO_CAP], p1[RF_PRIOR_MEMO_CAP];
             int n0 = riskfight_pool_prior(visible, i0, p0, cap), n1 = riskfight_pool_prior_memo(visible, i1, p1, cap);
-            assert(n0 == n1 && !memcmp(i0, i1, n0) && !memcmp(p0, p1, n0 * sizeof(float)));
+            assert(n0 == n1 && !memcmp(i0, i1, n0 * sizeof(uint16_t)) && !memcmp(p0, p1, n0 * sizeof(float)));
             checked++;
         }
     }

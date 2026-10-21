@@ -326,7 +326,7 @@ static void reset_tick_flags(Player* p) {
 }
 
 static void pvp_refresh_visible_gear(Player* p) {
-    uint8_t weapon = p->equipped[GEAR_SLOT_WEAPON];
+    uint16_t weapon = p->equipped[GEAR_SLOT_WEAPON];
     update_spec_weapons_for_weapon(p, weapon);
     AttackStyle style = (AttackStyle)get_item_attack_style(weapon);
     if (item_is_spec_weapon(weapon)) p->current_gear = GEAR_SPEC;

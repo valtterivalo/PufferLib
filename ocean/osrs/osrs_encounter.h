@@ -321,7 +321,7 @@ static inline EncounterProjectileDelayKind encounter_projectile_delay_kind_for_s
 
 /** Damage and visual timing of a player attack with `weapon` at `distance`. */
 static inline EncounterProjectileTiming encounter_player_projectile_timing(
-    AttackStyle style, uint8_t weapon, int is_special, int distance
+    AttackStyle style, uint16_t weapon, int is_special, int distance
 ) {
     EncounterProjectileDelayKind kind = encounter_projectile_delay_kind_for_style(style);
     EncounterProjectileDelayOptions options = {0};
@@ -616,7 +616,7 @@ typedef struct {
     int just_attacked;
     int last_queued_hit_damage;
     int teleported_this_tick;
-    uint8_t equipped[NUM_GEAR_SLOTS];
+    uint16_t equipped[NUM_GEAR_SLOTS];
     int npc_slot;
     uint32_t npc_instance_id;
     RenderMovementKind render_movement_kind;
@@ -723,7 +723,7 @@ static inline void render_entity_from_player(const Player* p, RenderEntity* out)
     out->used_special_this_tick = p->used_special_this_tick;
     out->just_attacked = p->just_attacked;
     out->last_queued_hit_damage = p->last_queued_hit_damage;
-    memcpy(out->equipped, p->equipped, NUM_GEAR_SLOTS);
+    memcpy(out->equipped, p->equipped, NUM_GEAR_SLOTS * sizeof(uint16_t));
     out->npc_slot = -1;
     out->npc_instance_id = 0;
     out->render_movement_kind = RENDER_MOVEMENT_NORMAL;
@@ -1227,19 +1227,19 @@ typedef struct {
 } EncounterLoadoutStats;
 
 static inline void encounter_effective_loadout_for_equipment(
-    const uint8_t loadout[NUM_GEAR_SLOTS],
-    uint8_t out[NUM_GEAR_SLOTS]
+    const uint16_t loadout[NUM_GEAR_SLOTS],
+    uint16_t out[NUM_GEAR_SLOTS]
 ) {
-    memcpy(out, loadout, NUM_GEAR_SLOTS);
+    memcpy(out, loadout, NUM_GEAR_SLOTS * sizeof(uint16_t));
     out[GEAR_SLOT_SHIELD] = osrs_suppress_shield_for_two_handed_weapon(
         out[GEAR_SLOT_WEAPON], out[GEAR_SLOT_SHIELD]);
 }
 
 static inline void encounter_derive_loadout_effect_profile(
-    const uint8_t loadout[NUM_GEAR_SLOTS],
+    const uint16_t loadout[NUM_GEAR_SLOTS],
     OsrsEquipmentEffectProfile* out
 ) {
-    uint8_t effective_loadout[NUM_GEAR_SLOTS];
+    uint16_t effective_loadout[NUM_GEAR_SLOTS];
     encounter_effective_loadout_for_equipment(loadout, effective_loadout);
     osrs_derive_equipment_effect_profile(effective_loadout, out);
 }
@@ -1281,7 +1281,7 @@ static inline void encounter_offensive_prayer_mults(
 }
 
 static inline void encounter_compute_loadout_stats(
-    const uint8_t loadout[NUM_GEAR_SLOTS],
+    const uint16_t loadout[NUM_GEAR_SLOTS],
     AttackStyle style,
     OffensivePrayer offensive_prayer,
     int base_level,
@@ -1293,7 +1293,7 @@ static inline void encounter_compute_loadout_stats(
     out->style = style;
     out->fight_style = fight_style;
 
-    uint8_t effective_loadout[NUM_GEAR_SLOTS];
+    uint16_t effective_loadout[NUM_GEAR_SLOTS];
     encounter_effective_loadout_for_equipment(loadout, effective_loadout);
 
     EquipmentBonuses eb;
@@ -1840,7 +1840,7 @@ static inline int encounter_use_spec(Player* p, int cost) {
 }
 
 static inline void encounter_apply_loadout(
-    Player* p, const uint8_t loadout[NUM_GEAR_SLOTS], GearSet gear_set
+    Player* p, const uint16_t loadout[NUM_GEAR_SLOTS], GearSet gear_set
 ) {
     encounter_effective_loadout_for_equipment(loadout, p->equipped);
     p->current_gear = gear_set;
@@ -1850,15 +1850,15 @@ static inline void encounter_apply_loadout(
 
 static void encounter_populate_inventory(
     Player* p,
-    const uint8_t* const* loadouts, int num_loadouts,
-    const uint8_t extra_items[NUM_GEAR_SLOTS]
+    const uint16_t* const* loadouts, int num_loadouts,
+    const uint16_t extra_items[NUM_GEAR_SLOTS]
 ) {
     for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++)
         p->inventory_cells[cell] = osrs_inventory_cell_empty();
     int cell = 0;
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
         for (int loadout = 0; loadout < num_loadouts; loadout++) {
-            uint8_t item = loadouts[loadout][slot];
+            uint16_t item = loadouts[loadout][slot];
             if (item == ITEM_NONE || item == p->equipped[slot]) continue;
             int duplicate = 0;
             for (int previous = 0; previous < cell; previous++) {

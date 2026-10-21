@@ -36,7 +36,7 @@ static void reset(void) {
     assert(us()->equipped[GEAR_SLOT_WEAPON] == ITEM_VOIDWAKER && us()->equipped[GEAR_SLOT_SHIELD] != ITEM_NONE);
 }
 
-static int first_slot_of(uint8_t item) {
+static int first_slot_of(uint16_t item) {
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
         if (!osrs_inventory_cell_is_empty(&us()->inventory_cells[slot]) && osrs_inventory_cell_metadata(&us()->inventory_cells[slot])->item_idx == item) return slot;
     return -1;
@@ -49,7 +49,7 @@ static int first_slot_of_kind(OsrsConsumableKind kind) {
 }
 
 /** The OURS row of `item` in an observation (row 0 the wielded weapon, then the bag's by item index). */
-static const float* ours_row(const float* obs, uint8_t item) {
+static const float* ours_row(const float* obs, uint16_t item) {
     const float* t = obs + RF_TACTICS_START;
     int kind = item == ITEM_VOIDWAKER ? 0 : pvp_is_maul(item) ? 1 : 2;
     for (int row = 0; row < RF_THREAT_OURS_SLOTS; row++)

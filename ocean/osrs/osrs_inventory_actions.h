@@ -22,7 +22,7 @@ static inline int osrs_can_equip_metadata(
     const OsrsItemContentMetadata* metadata,
     int inventory_has_empty_cell
 ) {
-    uint8_t item_idx = metadata->item_idx;
+    uint16_t item_idx = metadata->item_idx;
     int gear_slot = metadata->gear_slot;
     if (item_idx == ITEM_NONE || gear_slot < 0) return 0;
     if (p->equipped[gear_slot] == item_idx) return 0;
@@ -43,7 +43,7 @@ static inline int osrs_can_equip_from_cell(
 ) {
     const OsrsItemContentMetadata* metadata =
         osrs_inventory_cell_metadata(&cells[cell_idx]);
-    uint8_t item_idx = metadata->item_idx;
+    uint16_t item_idx = metadata->item_idx;
     if (item_idx == ITEM_NONE || metadata->gear_slot < 0) return 0;
 
     int gear_slot = metadata->gear_slot;
@@ -68,12 +68,12 @@ static inline int osrs_equip_from_cell(
     OsrsInventoryCell* cell = &cells[cell_idx];
     const OsrsItemContentMetadata* metadata =
         osrs_inventory_cell_metadata(cell);
-    uint8_t item_idx = metadata->item_idx;
+    uint16_t item_idx = metadata->item_idx;
     int gear_slot = metadata->gear_slot;
-    uint8_t displaced = p->equipped[gear_slot];
+    uint16_t displaced = p->equipped[gear_slot];
 
     if (gear_slot == GEAR_SLOT_WEAPON && item_is_two_handed(item_idx)) {
-        uint8_t shield = p->equipped[GEAR_SLOT_SHIELD];
+        uint16_t shield = p->equipped[GEAR_SLOT_SHIELD];
         if (shield != ITEM_NONE) {
             if (displaced == ITEM_NONE) {
                 displaced = shield;
@@ -108,7 +108,7 @@ static inline OsrsUnequipResult osrs_unequip_to_inventory(
     Player* p, OsrsInventoryCell* cells, int gear_slot
 ) {
     assert(gear_slot >= 0 && gear_slot < NUM_GEAR_SLOTS);
-    uint8_t item = p->equipped[gear_slot];
+    uint16_t item = p->equipped[gear_slot];
     if (item == ITEM_NONE) return OSRS_UNEQUIP_EMPTY;
     int cell = osrs_first_empty_inventory_cell(cells, -1);
     if (cell < 0) return OSRS_UNEQUIP_FULL;

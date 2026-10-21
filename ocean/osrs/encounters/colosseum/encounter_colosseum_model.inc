@@ -827,7 +827,7 @@ typedef enum {
 
 typedef struct {
     float dpt;
-    uint8_t setup[NUM_GEAR_SLOTS];
+    uint16_t setup[NUM_GEAR_SLOTS];
 } ColoBestGear;
 
 #define COLO_BEST_GEAR_CACHE_WAYS 12
@@ -859,7 +859,7 @@ typedef enum {
     COLO_RESTORE_SANFEW,
 } ColoRestoreKind;
 
-static const uint8_t COLO_BEGINNER_MELEE_LOADOUT[NUM_GEAR_SLOTS] = {
+static const uint16_t COLO_BEGINNER_MELEE_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HEAD]   = ITEM_SERPENTINE_HELM,
     [GEAR_SLOT_CAPE]   = ITEM_INFERNAL_CAPE,
     [GEAR_SLOT_NECK]   = ITEM_AMULET_OF_BLOOD_FURY,
@@ -873,7 +873,7 @@ static const uint8_t COLO_BEGINNER_MELEE_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_RING]   = ITEM_BERSERKER_RING_I,
 };
 
-static const uint8_t COLO_BEGINNER_RANGED_LOADOUT[NUM_GEAR_SLOTS] = {
+static const uint16_t COLO_BEGINNER_RANGED_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HEAD]   = ITEM_CRYSTAL_HELM,
     [GEAR_SLOT_CAPE]   = ITEM_INFERNAL_CAPE,
     [GEAR_SLOT_NECK]   = ITEM_NECKLACE_OF_ANGUISH,
@@ -887,7 +887,7 @@ static const uint8_t COLO_BEGINNER_RANGED_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_RING]   = ITEM_BERSERKER_RING_I,
 };
 
-static const uint8_t COLO_BEGINNER_MAGIC_LOADOUT[NUM_GEAR_SLOTS] = {
+static const uint16_t COLO_BEGINNER_MAGIC_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HEAD]   = ITEM_SERPENTINE_HELM,
     [GEAR_SLOT_CAPE]   = ITEM_INFERNAL_CAPE,
     [GEAR_SLOT_NECK]   = ITEM_AMULET_OF_BLOOD_FURY,
@@ -901,7 +901,7 @@ static const uint8_t COLO_BEGINNER_MAGIC_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_RING]   = ITEM_BERSERKER_RING_I,
 };
 
-static const uint8_t COLO_SPEEDRUN_MELEE_LOADOUT[NUM_GEAR_SLOTS] = {
+static const uint16_t COLO_SPEEDRUN_MELEE_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HEAD]   = ITEM_TORVA_FULL_HELM,
     [GEAR_SLOT_CAPE]   = ITEM_INFERNAL_CAPE,
     [GEAR_SLOT_NECK]   = ITEM_AMULET_OF_RANCOUR,
@@ -915,7 +915,7 @@ static const uint8_t COLO_SPEEDRUN_MELEE_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_RING]   = ITEM_ULTOR_RING,
 };
 
-static const uint8_t COLO_SPEEDRUN_RANGED_LOADOUT[NUM_GEAR_SLOTS] = {
+static const uint16_t COLO_SPEEDRUN_RANGED_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HEAD]   = ITEM_MASORI_MASK_F,
     [GEAR_SLOT_CAPE]   = ITEM_DIZANAS_QUIVER,
     [GEAR_SLOT_NECK]   = ITEM_NECKLACE_OF_ANGUISH,
@@ -929,7 +929,7 @@ static const uint8_t COLO_SPEEDRUN_RANGED_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_RING]   = ITEM_ULTOR_RING,
 };
 
-static const uint8_t COLO_SPEEDRUN_MAGIC_LOADOUT[NUM_GEAR_SLOTS] = {
+static const uint16_t COLO_SPEEDRUN_MAGIC_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HEAD]   = ITEM_TORVA_FULL_HELM,
     [GEAR_SLOT_CAPE]   = ITEM_INFERNAL_CAPE,
     [GEAR_SLOT_NECK]   = ITEM_OCCULT_NECKLACE,
@@ -943,13 +943,13 @@ static const uint8_t COLO_SPEEDRUN_MAGIC_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_RING]   = ITEM_ULTOR_RING,
 };
 
-static const uint8_t* const COLO_SPEEDRUN_LOADOUTS[COLO_NUM_WEAPON_SETS] = {
+static const uint16_t* const COLO_SPEEDRUN_LOADOUTS[COLO_NUM_WEAPON_SETS] = {
     COLO_SPEEDRUN_MELEE_LOADOUT,
     COLO_SPEEDRUN_RANGED_LOADOUT,
     COLO_SPEEDRUN_MAGIC_LOADOUT,
 };
 
-static const uint8_t* const COLO_BEGINNER_LOADOUTS[COLO_NUM_WEAPON_SETS] = {
+static const uint16_t* const COLO_BEGINNER_LOADOUTS[COLO_NUM_WEAPON_SETS] = {
     COLO_BEGINNER_MELEE_LOADOUT,
     COLO_BEGINNER_RANGED_LOADOUT,
     COLO_BEGINNER_MAGIC_LOADOUT,
@@ -960,7 +960,7 @@ static const int COLO_MAGIC_SPELL_BASE_DAMAGE[COLO_NUM_LOADOUT_PROFILES] = {
     [COLO_LOADOUT_PROFILE_BEGINNER] = 31,
 };
 
-static const uint8_t* const* const COLO_LOADOUT_PROFILES[COLO_NUM_LOADOUT_PROFILES] = {
+static const uint16_t* const* const COLO_LOADOUT_PROFILES[COLO_NUM_LOADOUT_PROFILES] = {
     [COLO_LOADOUT_PROFILE_SPEEDRUN] = COLO_SPEEDRUN_LOADOUTS,
     [COLO_LOADOUT_PROFILE_BEGINNER] = COLO_BEGINNER_LOADOUTS,
 };
@@ -987,7 +987,7 @@ static const ColoSupplyLoadout COLO_SUPPLY_LOADOUTS[COLO_NUM_LOADOUT_PROFILES] =
     },
 };
 
-static const uint8_t* const* col_loadouts_for_profile(int profile) {
+static const uint16_t* const* col_loadouts_for_profile(int profile) {
     if (profile < 0 || profile >= COLO_NUM_LOADOUT_PROFILES) {
         fprintf(stderr, "colosseum: invalid loadout profile %d\n", profile);
         abort();
@@ -1485,7 +1485,7 @@ typedef struct {
     ColosseumLog log;
     ColoObsMemoCaches obs_memos;
 } ColosseumState;
-static_assert(sizeof(ColosseumState) == 26776, "ColosseumState serialized layout");
+static_assert(sizeof(ColosseumState) == 31984, "ColosseumState serialized layout");
 
 typedef enum {
     COLO_DMG_OFFPRAY = 0,

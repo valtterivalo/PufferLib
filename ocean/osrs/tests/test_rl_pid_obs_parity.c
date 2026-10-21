@@ -9,7 +9,7 @@
 static RiskfightState sim, live;
 static RiskfightContext ctx;
 
-static void fight(uint8_t weapon, int spec, uint32_t seed) {
+static void fight(uint16_t weapon, int spec, uint32_t seed) {
     riskfight_reset((EncounterState*)&sim, (EncounterContext*)&ctx, seed);
     for (int side = 0; side < 2; side++) {
         Player* p = &sim.env.players[side];

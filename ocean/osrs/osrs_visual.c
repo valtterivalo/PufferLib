@@ -1894,7 +1894,7 @@ static void run_metrics(
 
         if (cs->tick_scratch.player_attacked) {
             int slot = cs->player_attack_npc_idx;
-            uint8_t w = cs->player.equipped[GEAR_SLOT_WEAPON];
+            int w = osrs_item_byte_code(cs->player.equipped[GEAR_SLOT_WEAPON]);
             if (slot >= 0 && slot < COLO_MAX_NPCS) {
                 int t = (int)cs->npcs[slot].type;
                 if (t >= 0 && t < COLO_NUM_NPC_TYPES) {
@@ -1986,7 +1986,7 @@ static void run_metrics(
     printf("weapon,total_attacks,per_episode,pct,spec_pct,mean_dpt_eff\n");
     for (int w = 0; w < 256; w++) {
         if (wpn_total[w] == 0) continue;
-        const Item* it = get_item((uint8_t)w);
+        const Item* it = get_item(osrs_item_from_byte_code(w));
         const char* wn = (it && it->name[0]) ? it->name : "unknown";
         printf("%s,%llu,%.1f,%.1f%%,%.1f%%,%.2f\n", wn,
             (unsigned long long)wpn_total[w],
@@ -2094,7 +2094,7 @@ static void run_metrics(
     printf("\n");
     for (int w = 0; w < 256; w++) {
         if (wpn_total[w] == 0) continue;
-        const Item* it = get_item((uint8_t)w);
+        const Item* it = get_item(osrs_item_from_byte_code(w));
         const char* wn = (it && it->name[0]) ? it->name : "unknown";
         printf("%s", wn);
         for (int t = 0; t < COLO_NUM_NPC_TYPES; t++)

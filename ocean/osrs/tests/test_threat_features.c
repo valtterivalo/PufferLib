@@ -11,11 +11,11 @@
 
 static int near(float a, float b, float eps) { return fabsf(a - b) <= eps; }
 
-static void bare(uint8_t equipment[NUM_GEAR_SLOTS]) { memset(equipment, ITEM_NONE, NUM_GEAR_SLOTS); }
+static void bare(uint16_t equipment[NUM_GEAR_SLOTS]) { memset(equipment, ITEM_NONE, NUM_GEAR_SLOTS * sizeof(uint16_t)); }
 
 /* The defender of the hand examples: defence 99 on Piety (x1.25), a Fighter torso (slash 85, crush 62, ranged 67), nothing else. */
 static OsrsDefenceRolls torso_defender(void) {
-    uint8_t eq[NUM_GEAR_SLOTS];
+    uint16_t eq[NUM_GEAR_SLOTS];
     bare(eq);
     eq[GEAR_SLOT_BODY] = ITEM_FIGHTER_TORSO;
     OsrsThreatActor d = {99, 99, 99, 99, 99, OFFENSIVE_PRAYER_PIETY, FIGHT_STYLE_AGGRESSIVE};
@@ -30,7 +30,7 @@ static void test_hand_numbers(void) {
     /* Abyssal whip (wiki: slash +82, strength +82, speed 4) with an Amulet of strength (+10), attack and strength 118 on Piety, aggressive.
      * Strength: floor(118 * 1.23) = 145, + 3 + 8 = 156; max = floor(0.5 + 156 * (82 + 10 + 64) / 640) = floor(38.525) = 38.
      * Attack: floor(118 * 1.20) = 141, + 0 + 8 = 149; roll 149 * (82 + 64) = 21754; hit = 1 - (19519 + 2) / (2 * 21755) = 0.55134. */
-    uint8_t eq[NUM_GEAR_SLOTS];
+    uint16_t eq[NUM_GEAR_SLOTS];
     bare(eq);
     eq[GEAR_SLOT_NECK] = ITEM_AMULET_OF_STRENGTH;
     OsrsThreatActor melee = osrs_threat_actor_assumed(ATTACK_STYLE_MELEE);
@@ -63,7 +63,7 @@ static void test_hand_numbers(void) {
     assert(vw.max_hit == 38 && vw.spec_cost == 50 && vw.spec_max == 57 && osrs_threat_spec_hit_chance(&vw, &d) == 1.0f);
 
     /* A Dharok's set at 1 hitpoint: max * (10000 + 99 * 98) / 10000. */
-    uint8_t dh[NUM_GEAR_SLOTS];
+    uint16_t dh[NUM_GEAR_SLOTS];
     bare(dh);
     dh[GEAR_SLOT_HEAD] = ITEM_DHAROKS_HELM; dh[GEAR_SLOT_BODY] = ITEM_DHAROKS_PLATEBODY; dh[GEAR_SLOT_LEGS] = ITEM_DHAROKS_PLATELEGS;
     OsrsThreatWeapon axe = osrs_threat_weapon(dh, ITEM_DHAROKS_GREATAXE, &melee);
@@ -73,10 +73,10 @@ static void test_hand_numbers(void) {
     assert(!naked_axe.dharok);
 }
 
-static Player make_player(const uint8_t eq[NUM_GEAR_SLOTS], const OsrsThreatActor* a) {
+static Player make_player(const uint16_t eq[NUM_GEAR_SLOTS], const OsrsThreatActor* a) {
     Player p;
     init_player(&p);
-    memcpy(p.equipped, eq, NUM_GEAR_SLOTS);
+    memcpy(p.equipped, eq, NUM_GEAR_SLOTS * sizeof(uint16_t));
     p.current_attack = a->attack; p.current_strength = a->strength; p.current_ranged = a->ranged;
     p.current_magic = a->magic; p.current_defence = a->defence;
     p.offensive_prayer = a->prayer; p.fight_style = a->stance;
@@ -102,14 +102,14 @@ static void test_equals_sim(void) {
         if (ITEM_DATABASE[i].slot == SLOT_WEAPON && get_item_attack_style((uint8_t)i) != ATTACK_STYLE_NONE) weapons[weapon_count++] = i;
     int checked[4] = {0};
     for (int trial = 0; trial < 4000; trial++) {
-        uint8_t eq[NUM_GEAR_SLOTS];
+        uint16_t eq[NUM_GEAR_SLOTS];
         for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
             int pick, tries = 0;
             do { pick = (int)(xorshift32(&rng) % (NUM_ITEMS + 8)); } while (pick < NUM_ITEMS && ++tries < 1000 &&
                 (ITEM_DATABASE[pick].slot == SLOT_WEAPON || gear_slot_of(ITEM_DATABASE[pick].slot) != slot));
             eq[slot] = pick >= NUM_ITEMS || tries >= 1000 ? ITEM_NONE : (uint8_t)pick;
         }
-        uint8_t weapon = (uint8_t)weapons[xorshift32(&rng) % (unsigned)weapon_count];
+        uint16_t weapon = (uint8_t)weapons[xorshift32(&rng) % (unsigned)weapon_count];
         eq[GEAR_SLOT_WEAPON] = weapon;
         int style = get_item_attack_style(weapon);
         OsrsThreatActor a = osrs_threat_actor_assumed(style);
@@ -118,11 +118,11 @@ static void test_equals_sim(void) {
         a.prayer = (OffensivePrayer)(xorshift32(&rng) % 7); a.stance = (FightStyle)(xorshift32(&rng) % 5);
         if (style == ATTACK_STYLE_MAGIC) a.stance = FIGHT_STYLE_ACCURATE;
         OsrsThreatActor d = {99, 99, 99, 99, 80 + (int)(xorshift32(&rng) % 40), (OffensivePrayer)(xorshift32(&rng) % 7), (FightStyle)(xorshift32(&rng) % 4)};
-        uint8_t deq[NUM_GEAR_SLOTS];
+        uint16_t deq[NUM_GEAR_SLOTS];
         for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) deq[slot] = (xorshift32(&rng) % 3) ? eq[slot] : ITEM_NONE;
         deq[GEAR_SLOT_WEAPON] = ITEM_NONE;
         /* The sim wields what the loadout says: the loadout the pure code builds (ammunition, no shield under a two-hander). */
-        uint8_t wielded[NUM_GEAR_SLOTS];
+        uint16_t wielded[NUM_GEAR_SLOTS];
         osrs_threat_loadout(eq, weapon, wielded);
         Player attacker = make_player(wielded, &a), defender = make_player(deq, &d);
         attacker.current_gear = style == ATTACK_STYLE_MELEE ? GEAR_MELEE : style == ATTACK_STYLE_RANGED ? GEAR_RANGED : GEAR_MAGE;
@@ -137,8 +137,8 @@ static void test_equals_sim(void) {
         }
         assert(w.speed == get_slot_gear_bonuses(&attacker)->attack_speed + osrs_stance_speed_mod(a.stance));
         /* The cheap route of the observation, swapping the weapon into the bonuses of what is worn, equals summing the loadout again, byte for byte. */
-        uint8_t worn[NUM_GEAR_SLOTS];
-        memcpy(worn, eq, NUM_GEAR_SLOTS);
+        uint16_t worn[NUM_GEAR_SLOTS];
+        memcpy(worn, eq, NUM_GEAR_SLOTS * sizeof(uint16_t));
         worn[GEAR_SLOT_WEAPON] = (xorshift32(&rng) & 3) == 0 ? ITEM_NONE : (uint8_t)weapons[xorshift32(&rng) % (unsigned)weapon_count];
         if (worn[GEAR_SLOT_WEAPON] != ITEM_NONE && item_is_two_handed(worn[GEAR_SLOT_WEAPON])) worn[GEAR_SLOT_SHIELD] = ITEM_NONE;
         EquipmentBonuses worn_sum;
@@ -234,7 +234,7 @@ static void test_observation_block(void) {
 static void test_more_weapons_than_slots(void) {
     riskfight_reset((EncounterState*)&state, (EncounterContext*)&context, 4243);
     RiskfightThreat* t = &state.visible[0].threat;
-    const uint8_t swung[5] = {ITEM_DHAROKS_GREATAXE, ITEM_VOIDWAKER, ITEM_GRANITE_MAUL, ITEM_DRAGON_CLAWS, ITEM_ELDER_MAUL};
+    const uint16_t swung[5] = {ITEM_DHAROKS_GREATAXE, ITEM_VOIDWAKER, ITEM_GRANITE_MAUL, ITEM_DRAGON_CLAWS, ITEM_ELDER_MAUL};
     for (int i = 0; i < 5; i++) riskfight_threat_note_swing(t, swung[i], state.env.tick, 0);
     state.visible[0].equipment[GEAR_SLOT_WEAPON] = ITEM_ABYSSAL_TENTACLE;
     riskfight_threat_refresh(t, state.visible[0].equipment, state.env.tick);
@@ -244,7 +244,7 @@ static void test_more_weapons_than_slots(void) {
     /* Wielding one he swung: that one is slot 0, shown, and the other four follow. */
     state.visible[0].equipment[GEAR_SLOT_WEAPON] = ITEM_VOIDWAKER;
     riskfight_threat_refresh(t, state.visible[0].equipment, state.env.tick);
-    const uint8_t rest[4] = {ITEM_DHAROKS_GREATAXE, ITEM_GRANITE_MAUL, ITEM_DRAGON_CLAWS, ITEM_ELDER_MAUL};
+    const uint16_t rest[4] = {ITEM_DHAROKS_GREATAXE, ITEM_GRANITE_MAUL, ITEM_DRAGON_CLAWS, ITEM_ELDER_MAUL};
     assert(t->count == RF_THREAT_HIS_SLOTS && t->slots[0].item == ITEM_VOIDWAKER && t->slots[0].shown == 1);
     for (int i = 1; i < RF_THREAT_HIS_SLOTS; i++) assert(t->slots[i].item == rest[i - 1] && t->slots[i].shown == 1);
     float obs[RF_OBS_SIZE + 64];

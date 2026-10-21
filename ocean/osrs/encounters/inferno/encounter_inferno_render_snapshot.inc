@@ -516,7 +516,7 @@ static void inf_render_post_tick_ctx(
             int p_end_h = (int)(target_size * 0.5f * 128);
             int p_duration = s->player_attack_timing.visual_duration_ticks * 30;
             int p_start_delay = s->player_attack_timing.visual_start_delay_ticks * 30;
-            uint8_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
+            uint16_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
 
             if (s->player_attack_style_id != ATTACK_STYLE_MAGIC) {
                 const OsrsCombatProjectileProfile* base_profile =
@@ -587,11 +587,11 @@ static void inf_translate_drink(const InfernoState* s, int* actions, OsrsConsuma
 }
 
 static void inf_translate_gear_swap(const InfernoState* s, int* actions, InfWeaponSet want) {
-    const uint8_t* const* loadouts =
+    const uint16_t* const* loadouts =
         inf_loadouts_for_profile(s->active_loadout_profile);
-    const uint8_t* want_loadout = loadouts[want];
+    const uint16_t* want_loadout = loadouts[want];
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        uint8_t item = want_loadout[slot];
+        uint16_t item = want_loadout[slot];
         if (item == ITEM_NONE || s->player.equipped[slot] == item) continue;
         for (int c = 0; c < OSRS_INVENTORY_SIZE; c++) {
             if (osrs_inventory_cell_item_index(
@@ -845,7 +845,7 @@ static void inf_refresh_after_state_load(InfernoState* s, InfernoContext* ctx) {
     osrs_interaction_zero_serialized_route_padding(&s->interaction);
     osrs_actor_route_cache_clear(&ctx->player_route_cache);
     inf_build_npc_stats();
-    const uint8_t* const* loadouts =
+    const uint16_t* const* loadouts =
         inf_loadouts_for_profile(s->active_loadout_profile);
     encounter_compute_loadout_stats(loadouts[INF_GEAR_MAGE], ATTACK_STYLE_MAGIC,
         s->player.offensive_prayer, s->player.current_magic,

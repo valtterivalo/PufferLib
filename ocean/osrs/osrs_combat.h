@@ -10,7 +10,7 @@
 #include "osrs_items.h"
 
 /** The melee style a weapon attacks with: its highest attack bonus, stab on ties. */
-static inline MeleeStyle osrs_item_melee_style(uint8_t weapon_item) {
+static inline MeleeStyle osrs_item_melee_style(uint16_t weapon_item) {
     const Item* weapon = get_item(weapon_item);
     if (!weapon) return MELEE_STYLE_STAB;
     MeleeStyle style = MELEE_STYLE_STAB;
@@ -21,7 +21,7 @@ static inline MeleeStyle osrs_item_melee_style(uint8_t weapon_item) {
 }
 
 /** Thrown weapons fire themselves (the blowpipe its loaded darts): worn ammunition adds nothing, and the hit lands on the thrown delay. */
-static inline int osrs_weapon_is_thrown(uint8_t weapon_item) {
+static inline int osrs_weapon_is_thrown(uint16_t weapon_item) {
     switch (weapon_item) {
         case ITEM_TOXIC_BLOWPIPE:
         case ITEM_DRAGON_DART:
@@ -35,7 +35,7 @@ static inline int osrs_weapon_is_thrown(uint8_t weapon_item) {
 
 /** NPC ranged defence bonus a weapon's ammunition rolls against (wiki Ranged defence: light for darts, knives, thrownaxes and throwing weapons,
     heavy for bolts and javelins, standard for arrows and everything else). */
-static inline int osrs_ranged_def_bonus_for_weapon(uint8_t weapon_item, int light_def, int standard_def, int heavy_def) {
+static inline int osrs_ranged_def_bonus_for_weapon(uint16_t weapon_item, int light_def, int standard_def, int heavy_def) {
     if (osrs_weapon_is_thrown(weapon_item)) return light_def;
     switch (weapon_item) {
         case ITEM_RUNE_CROSSBOW:
@@ -50,7 +50,7 @@ static inline int osrs_ranged_def_bonus_for_weapon(uint8_t weapon_item, int ligh
 }
 
 /** A staff with a built-in spell; any other magic weapon attacks in melee unless a spell is cast. */
-static inline int osrs_item_is_powered_staff(uint8_t weapon_item) {
+static inline int osrs_item_is_powered_staff(uint16_t weapon_item) {
     switch (weapon_item) {
         case ITEM_TRIDENT_OF_SWAMP:
         case ITEM_SANGUINESTI_STAFF:
@@ -63,7 +63,7 @@ static inline int osrs_item_is_powered_staff(uint8_t weapon_item) {
 
 /** Built-in spell max hit of a powered staff at the given Magic level, before magic damage bonuses
     (osrs-dps-calc PlayerVsNPCCalc: trident of the swamp m/3-2, sanguinesti m/3-1, shadow m/3+1, eye of ayak m/3-6). */
-static inline int osrs_powered_staff_base_damage(uint8_t weapon_item, int magic_level) {
+static inline int osrs_powered_staff_base_damage(uint16_t weapon_item, int magic_level) {
     int third = magic_level / 3;
     switch (weapon_item) {
         case ITEM_TRIDENT_OF_SWAMP: return third - 2 > 1 ? third - 2 : 1;
@@ -656,14 +656,14 @@ typedef struct {
 
 /** Sum ITEM_DATABASE bonuses over a loadout; attack_speed and attack_range come
     from the weapon slot only. */
-static inline void osrs_sum_equipment_bonuses(const uint8_t loadout[NUM_GEAR_SLOTS],
+static inline void osrs_sum_equipment_bonuses(const uint16_t loadout[NUM_GEAR_SLOTS],
                                                EquipmentBonuses* out) {
     memset(out, 0, sizeof(*out));
     out->attack_speed = 4;
     out->attack_range = 1;
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        uint8_t idx = loadout[slot];
-        if (idx == 255) continue;
+        uint16_t idx = loadout[slot];
+        if (idx == ITEM_NONE) continue;
         const Item* item = &ITEM_DATABASE[idx];
         out->attack_stab += item->attack_stab;
         out->attack_slash += item->attack_slash;
@@ -680,12 +680,12 @@ static inline void osrs_sum_equipment_bonuses(const uint8_t loadout[NUM_GEAR_SLO
         out->magic_damage += item->magic_damage;
         out->prayer += item->prayer;
     }
-    uint8_t weapon = loadout[GEAR_SLOT_WEAPON];
+    uint16_t weapon = loadout[GEAR_SLOT_WEAPON];
     if (osrs_weapon_is_thrown(weapon) && loadout[GEAR_SLOT_AMMO] != ITEM_NONE)
         out->ranged_strength -= ITEM_DATABASE[loadout[GEAR_SLOT_AMMO]].ranged_strength;
     if (weapon == ITEM_TOXIC_BLOWPIPE)
         out->ranged_strength += ITEM_DATABASE[ITEM_DRAGON_DART].ranged_strength;
-    if (weapon != 255) {
+    if (weapon != ITEM_NONE) {
         out->attack_speed = ITEM_DATABASE[weapon].attack_speed;
         out->attack_range = ITEM_DATABASE[weapon].attack_range;
     }

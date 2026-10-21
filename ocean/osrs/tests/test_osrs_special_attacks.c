@@ -302,10 +302,10 @@ static void test_saradomin_sword_special(void) {
 static void test_two_handed_loadout_shield_suppression(void) {
     printf("test_two_handed_loadout_shield_suppression\n");
 
-    uint8_t two_handed_with_shield[NUM_GEAR_SLOTS];
-    uint8_t two_handed_without_shield[NUM_GEAR_SLOTS];
-    uint8_t one_handed_with_shield[NUM_GEAR_SLOTS];
-    uint8_t one_handed_without_shield[NUM_GEAR_SLOTS];
+    uint16_t two_handed_with_shield[NUM_GEAR_SLOTS];
+    uint16_t two_handed_without_shield[NUM_GEAR_SLOTS];
+    uint16_t one_handed_with_shield[NUM_GEAR_SLOTS];
+    uint16_t one_handed_without_shield[NUM_GEAR_SLOTS];
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
         two_handed_with_shield[slot] = ITEM_NONE;
         two_handed_without_shield[slot] = ITEM_NONE;
@@ -344,8 +344,8 @@ static void test_two_handed_loadout_shield_suppression(void) {
             claws_without_shield.strength_bonus +
             ITEM_DATABASE[ITEM_DRAGON_DEFENDER].melee_strength);
 
-    uint8_t two_handed_with_effect_shield[NUM_GEAR_SLOTS];
-    uint8_t one_handed_with_effect_shield[NUM_GEAR_SLOTS];
+    uint16_t two_handed_with_effect_shield[NUM_GEAR_SLOTS];
+    uint16_t one_handed_with_effect_shield[NUM_GEAR_SLOTS];
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
         two_handed_with_effect_shield[slot] = ITEM_NONE;
         one_handed_with_effect_shield[slot] = ITEM_NONE;
@@ -372,7 +372,7 @@ static void test_two_handed_loadout_shield_suppression(void) {
 static void test_magic_effective_attack_level_law(void) {
     printf("test_magic_effective_attack_level_law\n");
 
-    uint8_t powered_staff_loadout[NUM_GEAR_SLOTS];
+    uint16_t powered_staff_loadout[NUM_GEAR_SLOTS];
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
         powered_staff_loadout[slot] = ITEM_NONE;
     }

@@ -496,7 +496,7 @@ typedef enum {
     INF_LOADOUT_PROFILE_MODE_MIXED_MAX_BUDGET,
 } InfLoadoutProfileMode;
 
-static const uint8_t INF_MAX_MAGE_LOADOUT[NUM_GEAR_SLOTS] = {
+static const uint16_t INF_MAX_MAGE_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HEAD]   = ITEM_MASORI_MASK_F,
     [GEAR_SLOT_CAPE]   = ITEM_DIZANAS_QUIVER,
     [GEAR_SLOT_NECK]   = ITEM_OCCULT_NECKLACE,
@@ -510,7 +510,7 @@ static const uint8_t INF_MAX_MAGE_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_RING]   = ITEM_VENATOR_RING,
 };
 
-static const uint8_t INF_MAX_RANGE_LONG_LOADOUT[NUM_GEAR_SLOTS] = {
+static const uint16_t INF_MAX_RANGE_LONG_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HEAD]   = ITEM_MASORI_MASK_F,
     [GEAR_SLOT_CAPE]   = ITEM_DIZANAS_QUIVER,
     [GEAR_SLOT_NECK]   = ITEM_NECKLACE_OF_ANGUISH,
@@ -524,7 +524,7 @@ static const uint8_t INF_MAX_RANGE_LONG_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_RING]   = ITEM_VENATOR_RING,
 };
 
-static const uint8_t INF_MAX_RANGE_FAST_LOADOUT[NUM_GEAR_SLOTS] = {
+static const uint16_t INF_MAX_RANGE_FAST_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HEAD]   = ITEM_MASORI_MASK_F,
     [GEAR_SLOT_CAPE]   = ITEM_DIZANAS_QUIVER,
     [GEAR_SLOT_NECK]   = ITEM_NECKLACE_OF_ANGUISH,
@@ -538,7 +538,7 @@ static const uint8_t INF_MAX_RANGE_FAST_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_RING]   = ITEM_VENATOR_RING,
 };
 
-static const uint8_t INF_BUDGET_MAGE_LOADOUT[NUM_GEAR_SLOTS] = {
+static const uint16_t INF_BUDGET_MAGE_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HEAD]   = ITEM_CRYSTAL_HELM,
     [GEAR_SLOT_CAPE]   = ITEM_DIZANAS_QUIVER,
     [GEAR_SLOT_NECK]   = ITEM_OCCULT_NECKLACE,
@@ -552,7 +552,7 @@ static const uint8_t INF_BUDGET_MAGE_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_RING]   = ITEM_VENATOR_RING,
 };
 
-static const uint8_t INF_BUDGET_RANGE_LONG_LOADOUT[NUM_GEAR_SLOTS] = {
+static const uint16_t INF_BUDGET_RANGE_LONG_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HEAD]   = ITEM_CRYSTAL_HELM,
     [GEAR_SLOT_CAPE]   = ITEM_DIZANAS_QUIVER,
     [GEAR_SLOT_NECK]   = ITEM_NECKLACE_OF_ANGUISH,
@@ -566,7 +566,7 @@ static const uint8_t INF_BUDGET_RANGE_LONG_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_RING]   = ITEM_VENATOR_RING,
 };
 
-static const uint8_t INF_BUDGET_RANGE_FAST_LOADOUT[NUM_GEAR_SLOTS] = {
+static const uint16_t INF_BUDGET_RANGE_FAST_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HEAD]   = ITEM_CRYSTAL_HELM,
     [GEAR_SLOT_CAPE]   = ITEM_DIZANAS_QUIVER,
     [GEAR_SLOT_NECK]   = ITEM_NECKLACE_OF_ANGUISH,
@@ -580,24 +580,24 @@ static const uint8_t INF_BUDGET_RANGE_FAST_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_RING]   = ITEM_VENATOR_RING,
 };
 
-static const uint8_t* const INF_MAX_LOADOUTS[INF_NUM_WEAPON_SETS] = {
+static const uint16_t* const INF_MAX_LOADOUTS[INF_NUM_WEAPON_SETS] = {
     INF_MAX_MAGE_LOADOUT,
     INF_MAX_RANGE_LONG_LOADOUT,
     INF_MAX_RANGE_FAST_LOADOUT,
 };
 
-static const uint8_t* const INF_BUDGET_LOADOUTS[INF_NUM_WEAPON_SETS] = {
+static const uint16_t* const INF_BUDGET_LOADOUTS[INF_NUM_WEAPON_SETS] = {
     INF_BUDGET_MAGE_LOADOUT,
     INF_BUDGET_RANGE_LONG_LOADOUT,
     INF_BUDGET_RANGE_FAST_LOADOUT,
 };
 
-static const uint8_t* const* const INF_LOADOUT_PROFILES[INF_NUM_LOADOUT_PROFILES] = {
+static const uint16_t* const* const INF_LOADOUT_PROFILES[INF_NUM_LOADOUT_PROFILES] = {
     [INF_LOADOUT_PROFILE_MAX] = INF_MAX_LOADOUTS,
     [INF_LOADOUT_PROFILE_BUDGET] = INF_BUDGET_LOADOUTS,
 };
 
-static const uint8_t* const* inf_loadouts_for_profile(int profile) {
+static const uint16_t* const* inf_loadouts_for_profile(int profile) {
     if (profile < 0 || profile >= INF_NUM_LOADOUT_PROFILES) {
         fprintf(stderr, "inferno: invalid active_loadout_profile %d\n", profile);
         abort();
@@ -913,4 +913,4 @@ typedef struct {
     float total_hp_restored_jad;
     float total_hp_restored_zuk;
 } InfernoState;
-static_assert(sizeof(InfernoState) == 27148, "InfernoState serialized layout");
+static_assert(sizeof(InfernoState) == 27168, "InfernoState serialized layout");

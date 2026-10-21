@@ -391,9 +391,9 @@ typedef enum {
 
 typedef struct {
     uint32_t effect_mask;
-    uint8_t weapon_item;
-    uint8_t ring_item;
-    uint8_t shield_item;
+    uint16_t weapon_item;
+    uint16_t ring_item;
+    uint16_t shield_item;
     uint8_t virtus_piece_count;
     uint8_t dharok_piece_count;
     uint8_t crystal_armour_points;
@@ -406,7 +406,7 @@ typedef struct {
     int recoil_charges;
     int echo_boot_charges;
     uint8_t confliction_is_primed;
-    uint8_t confliction_weapon_item;
+    uint16_t confliction_weapon_item;
     uint8_t recoil_damage_used;
     OsrsMagicAttackKind confliction_magic_kind;
     OsrsTargetRef confliction_target;
@@ -625,7 +625,7 @@ typedef struct {
 
     int soul_stacks, soul_decay_ticks; /* Soulreaper axe: stacks held (0..5) and ticks until one decays; they stay across weapon switches (osrs_soul_*) */
 
-    uint8_t equipped[NUM_GEAR_SLOTS];
+    uint16_t equipped[NUM_GEAR_SLOTS];
     OsrsInventoryCell inventory_cells[OSRS_INVENTORY_SIZE];
 
 

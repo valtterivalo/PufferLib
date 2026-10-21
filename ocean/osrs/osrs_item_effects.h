@@ -95,7 +95,7 @@ static inline void osrs_write_equipment_effect_aggregate(
     out[9] = profile->shield_item != ITEM_NONE ? 1.0f : 0.0f;
 }
 
-static inline OsrsRecoilSource osrs_recoil_source_from_ring(uint8_t ring_item) {
+static inline OsrsRecoilSource osrs_recoil_source_from_ring(uint16_t ring_item) {
     if (ring_item == ITEM_RING_OF_RECOIL) {
         return OSRS_RECOIL_SOURCE_RING_OF_RECOIL;
     }
@@ -105,7 +105,7 @@ static inline OsrsRecoilSource osrs_recoil_source_from_ring(uint8_t ring_item) {
     return OSRS_RECOIL_SOURCE_NONE;
 }
 
-static inline OsrsSpecRegenMode osrs_spec_regen_mode_from_ring(uint8_t ring_item) {
+static inline OsrsSpecRegenMode osrs_spec_regen_mode_from_ring(uint16_t ring_item) {
     if (ring_item == ITEM_LIGHTBEARER) {
         return OSRS_SPEC_REGEN_MODE_LIGHTBEARER;
     }
@@ -116,7 +116,7 @@ static inline int osrs_scythe_splats_for_target_size(int target_size) {
     return target_size >= 3 ? 3 : target_size == 2 ? 2 : 1;
 }
 
-static inline uint8_t osrs_crystal_armour_points(uint8_t item_index) {
+static inline uint8_t osrs_crystal_armour_points(uint16_t item_index) {
     switch (item_index) {
         case ITEM_CRYSTAL_HELM: return 1;
         case ITEM_CRYSTAL_LEGS: return 2;
@@ -161,7 +161,7 @@ static inline GearBonuses osrs_gear_bonuses_from_equipment_bonuses(
 }
 
 static inline void osrs_derive_equipment_effect_profile(
-    const uint8_t equipped[NUM_GEAR_SLOTS],
+    const uint16_t equipped[NUM_GEAR_SLOTS],
     OsrsEquipmentEffectProfile* out
 ) {
     memset(out, 0, sizeof(*out));
@@ -172,7 +172,7 @@ static inline void osrs_derive_equipment_effect_profile(
     out->spec_regen_mode = osrs_spec_regen_mode_from_ring(out->ring_item);
 
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        uint8_t item_index = equipped[slot];
+        uint16_t item_index = equipped[slot];
         if (item_index >= NUM_ITEMS) {
             continue;
         }
@@ -255,7 +255,7 @@ static inline void osrs_ensure_player_equipment(Player* player) {
 static inline int osrs_confliction_can_apply(
     const OsrsEquipmentEffectProfile* profile,
     AttackStyle style,
-    uint8_t weapon_item,
+    uint16_t weapon_item,
     int is_primary_target
 ) {
     return style == ATTACK_STYLE_MAGIC &&
@@ -266,7 +266,7 @@ static inline int osrs_confliction_can_apply(
 
 static inline int osrs_confliction_is_match(
     const OsrsItemEffectState* state,
-    uint8_t weapon_item,
+    uint16_t weapon_item,
     OsrsMagicAttackKind magic_kind,
     OsrsTargetRef target_ref
 ) {
@@ -283,7 +283,7 @@ static inline int osrs_fang_hit_bound_shrink(int max_hit) {
 static inline OsrsPreparedAttackEffects osrs_prepare_attack_effects_for_melee_style(
     const OsrsEquipmentEffectProfile* profile,
     const OsrsItemEffectState* state,
-    uint8_t weapon_item,
+    uint16_t weapon_item,
     AttackStyle style,
     MeleeStyle melee_style,
     OsrsMagicAttackKind magic_kind,
@@ -362,7 +362,7 @@ static inline OsrsPreparedAttackEffects osrs_prepare_attack_effects_for_melee_st
 static inline OsrsPreparedAttackEffects osrs_prepare_attack_effects(
     const OsrsEquipmentEffectProfile* profile,
     const OsrsItemEffectState* state,
-    uint8_t weapon_item,
+    uint16_t weapon_item,
     AttackStyle style,
     OsrsMagicAttackKind magic_kind,
     OsrsTargetRef target_ref,
@@ -412,7 +412,7 @@ static inline int osrs_blood_fury_heal_amount(
 static inline OsrsPostAttackEffects osrs_finalize_attack_effects(
     const OsrsEquipmentEffectProfile* profile,
     OsrsItemEffectState* state,
-    uint8_t weapon_item,
+    uint16_t weapon_item,
     AttackStyle style,
     OsrsMagicAttackKind magic_kind,
     OsrsTargetRef target_ref,

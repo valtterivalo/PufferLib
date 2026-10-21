@@ -168,7 +168,7 @@ int main(void) {
         EquipmentBonuses bonuses;
         osrs_sum_equipment_bonuses(p->equipped, &bonuses);
         CHECK("forecast equipment refreshes derived bonuses", p->slot_cached_bonuses.melee_strength == bonuses.melee_strength && p->slot_cached_bonuses.attack_speed == bonuses.attack_speed);
-        uint8_t shield = p->equipped[GEAR_SLOT_SHIELD];
+        uint16_t shield = p->equipped[GEAR_SLOT_SHIELD];
         p->equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
         EquipmentBonuses without_defender;
         osrs_sum_equipment_bonuses(p->equipped, &without_defender);

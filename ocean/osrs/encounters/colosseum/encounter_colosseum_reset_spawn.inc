@@ -656,7 +656,7 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     }
     if (ctx->config.episode_max_ticks_override > 0)
         s->episode_max_ticks = ctx->config.episode_max_ticks_override;
-    const uint8_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
+    const uint16_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
     encounter_apply_loadout(&s->player, loadouts[COLO_GEAR_MELEE], GEAR_MELEE);
     col_seed_inventory_cells_from_gameplay_loadout(s);
 

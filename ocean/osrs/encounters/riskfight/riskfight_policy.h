@@ -173,7 +173,7 @@ static void riskfight_write_tactics_observation(const RiskfightState* s, int age
     /* Our bag: the greataxe, the stripped Dharok's pieces, the orb, a two-hander we could wield. */
     int has_empty = osrs_first_empty_inventory_cell(p->inventory_cells, -1) >= 0;
     int axe = p->equipped[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE, orb = 0, can_wield_2h = 0;
-    uint8_t stripped[NUM_GEAR_SLOTS];
+    uint16_t stripped[NUM_GEAR_SLOTS];
     memset(stripped, ITEM_NONE, sizeof(stripped));
     for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++) {
         const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[cell]);
@@ -181,7 +181,7 @@ static void riskfight_write_tactics_observation(const RiskfightState* s, int age
         if (m->gear_slot < 0) continue;
         axe |= m->item_idx == ITEM_DHAROKS_GREATAXE;
         if (m->gear_slot == GEAR_SLOT_WEAPON && item_is_two_handed(m->item_idx)) can_wield_2h |= osrs_can_equip_metadata(p, m, has_empty);
-        uint8_t worn_piece = p->equipped[m->gear_slot];
+        uint16_t worn_piece = p->equipped[m->gear_slot];
         if ((m->gear_slot == GEAR_SLOT_BODY || m->gear_slot == GEAR_SLOT_LEGS) && (ITEM_DATABASE[m->item_idx].effect_mask & OSRS_ITEM_EFFECT_DHAROK_PIECE) &&
             (worn_piece == ITEM_NONE || !(ITEM_DATABASE[worn_piece].effect_mask & OSRS_ITEM_EFFECT_DHAROK_PIECE)))
             stripped[m->gear_slot] = m->item_idx;
@@ -193,7 +193,7 @@ static void riskfight_write_tactics_observation(const RiskfightState* s, int age
         EquipmentBonuses worn;
         int dharok_armour;
         riskfight_threat_worn(p, &worn, &dharok_armour);
-        uint8_t equipment[NUM_GEAR_SLOTS];
+        uint16_t equipment[NUM_GEAR_SLOTS];
         memcpy(equipment, p->equipped, sizeof(equipment));
         const int pieces[2] = {GEAR_SLOT_BODY, GEAR_SLOT_LEGS};
         for (int i = 0; i < 2; i++) {
@@ -216,7 +216,7 @@ static void riskfight_write_tactics_observation(const RiskfightState* s, int age
     const float *vw = NULL, *maul = NULL, *axe_row = NULL, *ags = NULL;
     const float* rows = obs + RF_THREAT_START + RF_THREAT_OURS_OFFSET;
     for (int i = 0; i <= bag->count; i++) {
-        uint8_t item = i == 0 ? p->equipped[GEAR_SLOT_WEAPON] : bag->item[i - 1];
+        uint16_t item = i == 0 ? p->equipped[GEAR_SLOT_WEAPON] : bag->item[i - 1];
         const float* row = rows + i * RF_THREAT_OURS_WIDTH;
         int kind = item == ITEM_VOIDWAKER ? 0 : pvp_is_maul(item) ? 1 : item == ITEM_DHAROKS_GREATAXE ? 2 : 3;
         out[RF_TACTICS_IDENTITY + i * RF_TACTICS_KINDS + kind] = 1;
@@ -268,7 +268,7 @@ static void riskfight_write_pid_observation(const RiskfightState* s, int agent, 
     const float ours = riskfight_pid_ours(v);
     out[RF_PID_OURS] = ours;
     const int played = s->env.tick - 1;
-    const uint8_t item = (uint8_t)v->last_swing_item;
+    const uint16_t item = (uint16_t)v->last_swing_item;
     if (v->last_attack_tick != played || v->last_swing_tick != played || osrs_threat_style_of_weapon(item) != ATTACK_STYLE_MELEE) return;
     int slot = 0;
     while (slot < v->threat.count && v->threat.slots[slot].item != item) slot++;
@@ -315,8 +315,8 @@ static void riskfight_write_observation_core(const RiskfightState* s, int agent,
         if (bag_weapons && m->gear_slot == GEAR_SLOT_WEAPON && m->item_idx != p->equipped[GEAR_SLOT_WEAPON]) riskfight_threat_note_bag_weapon(bag_weapons, m->item_idx);
     }
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        obs[RF_EQUIPPED_START + slot] = (float)p->equipped[slot] / RF_OBSERVATION_ITEM_SCALE;
-        obs[RF_OPPONENT_START + slot] = (float)v->equipment[slot] / RF_OBSERVATION_ITEM_SCALE;
+        obs[RF_EQUIPPED_START + slot] = (float)osrs_item_byte_code(p->equipped[slot]) / RF_OBSERVATION_ITEM_SCALE;
+        obs[RF_OPPONENT_START + slot] = (float)osrs_item_byte_code(v->equipment[slot]) / RF_OBSERVATION_ITEM_SCALE;
     }
     float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
     opponent[0] = v->health_bar / 30.0f;
@@ -441,10 +441,10 @@ static int riskfight_consumable_useful(const Player* p, OsrsConsumableKind kind)
 
 /** The weapon a special-attack action spends energy on, and its cost: the wielded weapon when its special costs energy, else the cheapest spec weapon of the bag (the plain
  * granite maul costs 60, the ornate 50; the lower item index on a tie), else the wielded weapon at 50. */
-typedef struct { uint8_t item; int cost; } RiskfightSpecWeapon;
+typedef struct { uint16_t item; int cost; } RiskfightSpecWeapon;
 
 static RiskfightSpecWeapon riskfight_spec_weapon(const Player* p) {
-    uint8_t wielded = p->equipped[GEAR_SLOT_WEAPON];
+    uint16_t wielded = p->equipped[GEAR_SLOT_WEAPON];
     int wielded_cost = osrs_spec_cost(wielded);
     if (wielded_cost > 0) return (RiskfightSpecWeapon){wielded, wielded_cost};
     RiskfightSpecWeapon bag = {wielded, 0};
@@ -518,7 +518,7 @@ static int riskfight_spec_clicks(const RiskfightState* s, int agent, const int* 
     int k = actions[RF_SPECIAL], wield = actions[RF_WEAPON];
     if (!k || !wield || wield == RF_UNEQUIP) return k;
     const Player* p = &s->env.players[agent];
-    uint8_t item = osrs_inventory_cell_metadata(&p->inventory_cells[wield - 1])->item_idx;
+    uint16_t item = osrs_inventory_cell_metadata(&p->inventory_cells[wield - 1])->item_idx;
     if (!pvp_is_maul(item)) return k;
     const RiskfightVisibleOpponent* v = &s->visible[agent];
     int spec_max = riskfight_threat_our_maxes(p, item, v->health_bar).spec_max;
@@ -655,7 +655,7 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
  * ADD EVERY NEW INPUT OF riskfight_write_action_mask HERE: test_riskfight_env_trace.c compares the buffer with a fresh mask every step. */
 typedef struct {
     uint16_t cells[OSRS_INVENTORY_SIZE];
-    uint8_t equipped[NUM_GEAR_SLOTS];
+    uint16_t equipped[NUM_GEAR_SLOTS];
     uint8_t below_full, above_divine, food_ready, karambwan_ready, potion_ready, prayer, magic_ok, veng_active, veng_cooled, has_sacks,
         teleport_ok, orb_ok, deployable, hand_busy, data_escape, valid;
     RiskfightThreatGates gates;
@@ -676,7 +676,7 @@ static inline void riskfight_mask_key(const RiskfightState* s, int agent, const 
         has_orb |= m->click_action == OSRS_CLICK_SELF_DAMAGE;
     }
     key->orb_ok = has_orb && p->current_hitpoints > 1; /* the RF_ORB bit */
-    memcpy(key->equipped, p->equipped, NUM_GEAR_SLOTS);
+    memcpy(key->equipped, p->equipped, NUM_GEAR_SLOTS * sizeof(uint16_t));
     key->gates = riskfight_threat_gates(s, agent, riskfight_spec_weapon(p));
     key->below_full = p->current_hitpoints < p->base_hitpoints;
     key->above_divine = p->current_hitpoints > OSRS_DIVINE_DAMAGE;
@@ -709,14 +709,18 @@ static inline void riskfight_write_action_mask_keyed(const RiskfightState* s, in
 /** First inventory slot (1-based, 0 when absent) per consumable kind and per item. */
 typedef struct {
     int kind_slot[OSRS_CONSUMABLE_COUNT];
-    uint8_t item_slot[ITEM_NONE + 1];
-    uint8_t main_weapon, shield;
-    uint8_t weapons[RF_KIT_WEAPONS + 1]; /* every weapon in the bag, in slot order */
+    uint8_t item_slot[NUM_ITEMS + OSRS_STAT_ITEM_SLOTS + 1]; /* ITEM_NONE at the last index (riskfight_item_slot) */
+    uint16_t main_weapon, shield;
+    uint16_t weapons[RF_KIT_WEAPONS + 1]; /* every weapon in the bag, in slot order */
     int weapon_count;
 } RiskfightObservedInventory;
 
-static int riskfight_is_switch_weapon(uint8_t weapon) {
+static int riskfight_is_switch_weapon(uint16_t weapon) {
     return weapon == ITEM_VOIDWAKER || weapon == ITEM_DHAROKS_GREATAXE || pvp_is_maul(weapon);
+}
+
+static int riskfight_item_slot(uint16_t item) {
+    return item == ITEM_NONE ? NUM_ITEMS + OSRS_STAT_ITEM_SLOTS : item;
 }
 
 static RiskfightObservedInventory riskfight_observed_inventory(const float* obs) {
@@ -725,7 +729,7 @@ static RiskfightObservedInventory riskfight_observed_inventory(const float* obs)
         const OsrsItemContentMetadata* m = osrs_item_content_metadata(
             osrs_inventory_cell_obs_code_decode(obs[RF_INVENTORY_START + slot * RF_INVENTORY_WIDTH]));
         inventory.kind_slot[m->consumable_kind] = slot + 1;
-        inventory.item_slot[m->item_idx] = slot + 1;
+        inventory.item_slot[riskfight_item_slot(m->item_idx)] = slot + 1;
         if (m->gear_slot == GEAR_SLOT_WEAPON && !riskfight_is_switch_weapon(m->item_idx))
             inventory.main_weapon = m->item_idx;
         if (m->gear_slot == GEAR_SLOT_WEAPON && inventory.weapon_count <= RF_KIT_WEAPONS) inventory.weapons[inventory.weapon_count++] = m->item_idx;
@@ -738,13 +742,13 @@ typedef struct {
     int hitpoints, prayer, attack, strength, defence, magic;
     int attack_timer, food_timer, potion_timer, karambwan_timer;
     int base_defence; /* 99, or RF_DHAROK_KIT_BASE_DEFENCE when he carries RF_DHAROK_KIT_PIECES Dharok pieces (riskfight_base_defence's kit rule) */
-    uint8_t weapon;
+    uint16_t weapon;
 } RiskfightObservedSelf;
 
 static RiskfightObservedSelf riskfight_observed_self(const float* obs) {
     int dharok_pieces = 0;
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
-        dharok_pieces += riskfight_is_dharok_piece((int)lroundf(obs[RF_EQUIPPED_START + slot] * RF_OBSERVATION_ITEM_SCALE));
+        dharok_pieces += riskfight_is_dharok_piece(osrs_item_from_byte_code((int)lroundf(obs[RF_EQUIPPED_START + slot] * RF_OBSERVATION_ITEM_SCALE)));
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
         dharok_pieces += riskfight_is_dharok_piece(osrs_item_content_metadata(
             osrs_inventory_cell_obs_code_decode(obs[RF_INVENTORY_START + slot * RF_INVENTORY_WIDTH]))->item_idx);
@@ -755,7 +759,7 @@ static RiskfightObservedSelf riskfight_observed_self(const float* obs) {
         .attack_timer = (int)lroundf(obs[7] * 10), .food_timer = (int)lroundf(obs[8] * 3),
         .potion_timer = (int)lroundf(obs[9] * 3), .karambwan_timer = (int)lroundf(obs[10] * 3),
         .base_defence = dharok_pieces >= RF_DHAROK_KIT_PIECES ? RF_DHAROK_KIT_BASE_DEFENCE : MAXED_BASE_DEFENCE,
-        .weapon = (uint8_t)lroundf(obs[RF_EQUIPPED_START + GEAR_SLOT_WEAPON] * RF_OBSERVATION_ITEM_SCALE),
+        .weapon = osrs_item_from_byte_code((int)lroundf(obs[RF_EQUIPPED_START + GEAR_SLOT_WEAPON] * RF_OBSERVATION_ITEM_SCALE)),
     };
 }
 
@@ -914,7 +918,7 @@ static void riskfight_script_dharok_meal(const float* obs, const RiskfightObserv
             exponent = clock < 3 ? exponent * persona[RF_PERSONA_EAT_FIRST] / 1000 : 4000 - pre * persona[RF_PERSONA_EAT_FIRST] / 1000;
         }
         meal_pm = riskfight_hazard_power(meal_pm, exponent);
-        if ((int)lroundf(obs[RF_OPPONENT_START + GEAR_SLOT_WEAPON] * RF_OBSERVATION_ITEM_SCALE) == ITEM_VOIDWAKER)
+        if (osrs_item_from_byte_code((int)lroundf(obs[RF_OPPONENT_START + GEAR_SLOT_WEAPON] * RF_OBSERVATION_ITEM_SCALE)) == ITEM_VOIDWAKER)
             meal_pm = riskfight_hazard_power(meal_pm, RF_DHAROK_MEAL_VW_THREAT[band]);
     }
     if (persona && band <= 4) meal_pm = riskfight_hazard_power(meal_pm, persona[RF_PERSONA_EAT]);
@@ -955,7 +959,7 @@ static void riskfight_script_dharok_meal(const float* obs, const RiskfightObserv
 static const int RF_COMBO_PM_DEEP = 72, RF_COMBO_PM_NEAR = 21, RF_COMBO_DEEP_MARGIN = -40;
 
 /** Specials of the maul combo this tick (0: none), see RF_COMBO_PM_DEEP. `maul` the maul in his kit, ITEM_NONE without one. */
-static int riskfight_script_combo(const float* obs, const RiskfightObservedSelf* self, uint8_t maul, uint32_t seed, uint32_t tick) {
+static int riskfight_script_combo(const float* obs, const RiskfightObservedSelf* self, uint16_t maul, uint32_t seed, uint32_t tick) {
     if (maul == ITEM_NONE || self->weapon == ITEM_NONE || pvp_is_maul(self->weapon) || tick < 2) return 0;
     int speed = ITEM_DATABASE[self->weapon].attack_speed + osrs_stance_speed_mod((FightStyle)lroundf(obs[16] * 3));
     if (self->attack_timer != speed - 1 || self->food_timer || self->karambwan_timer) return 0;
@@ -964,8 +968,8 @@ static int riskfight_script_combo(const float* obs, const RiskfightObservedSelf*
     int bar_before = (int)lroundf(obs[RF_HISTORY_START + RF_EVENT_WIDTH + 7] * RF_OBSERVATION_HEALTH_BAR_SCALE);
     OsrsHealthBarRange before = osrs_health_bar_range(bar_before, OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121);
     int our_hp = before.kind == OSRS_HEALTH_BAR_KNOWN ? before.upper : 121;
-    uint8_t equipment[NUM_GEAR_SLOTS];
-    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) equipment[slot] = (uint8_t)lroundf(obs[RF_EQUIPPED_START + slot] * RF_OBSERVATION_ITEM_SCALE);
+    uint16_t equipment[NUM_GEAR_SLOTS];
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) equipment[slot] = osrs_item_from_byte_code((int)lroundf(obs[RF_EQUIPPED_START + slot] * RF_OBSERVATION_ITEM_SCALE));
     OsrsThreatActor opener = osrs_threat_actor_assumed(osrs_threat_style_of_weapon(self->weapon)), melee = osrs_threat_actor_assumed(ATTACK_STYLE_MELEE);
     OsrsThreatWeapon opening = osrs_threat_weapon(equipment, self->weapon, &opener);
     int opening_max = osrs_threat_effect_max(&opening, osrs_threat_max_hit_at(&opening, 99, self->hitpoints), our_hp);
@@ -992,9 +996,9 @@ static int riskfight_script_strip_roll(uint32_t seed, uint32_t tick, int bar) {
  * strips then, and a stripped fighter puts both pieces back on at once. `switching`: another weapon goes in hand this tick, no strip on it (the measurement's
  * rule). Returns 1 while stripped: the axe waits for the re-equip, so the set is whole at the swing. */
 static int riskfight_script_dharok_armour(const float* obs, uint32_t seed, uint32_t tick, int hp, int axe, int switching, int* actions) {
-    uint8_t head = (uint8_t)lroundf(obs[RF_EQUIPPED_START + GEAR_SLOT_HEAD] * RF_OBSERVATION_ITEM_SCALE);
-    uint8_t body = (uint8_t)lroundf(obs[RF_EQUIPPED_START + GEAR_SLOT_BODY] * RF_OBSERVATION_ITEM_SCALE);
-    uint8_t legs = (uint8_t)lroundf(obs[RF_EQUIPPED_START + GEAR_SLOT_LEGS] * RF_OBSERVATION_ITEM_SCALE);
+    uint16_t head = osrs_item_from_byte_code((int)lroundf(obs[RF_EQUIPPED_START + GEAR_SLOT_HEAD] * RF_OBSERVATION_ITEM_SCALE));
+    uint16_t body = osrs_item_from_byte_code((int)lroundf(obs[RF_EQUIPPED_START + GEAR_SLOT_BODY] * RF_OBSERVATION_ITEM_SCALE));
+    uint16_t legs = osrs_item_from_byte_code((int)lroundf(obs[RF_EQUIPPED_START + GEAR_SLOT_LEGS] * RF_OBSERVATION_ITEM_SCALE));
     if (!riskfight_is_dharok_piece(head)) return 0;
     int body_slot = 0, legs_slot = 0, empty = 0;
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
@@ -1075,13 +1079,13 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     /* What his kit holds, read off what he wields and carries. Voidwaker, the mauls and the axe have plans of their own (below); every other weapon is a plain one:
      * the main weapon is the plain weapon with the cheapest special (a whip, else the crossbow whose own special is the lower), another plain weapon with a
      * special is the one he switches to for it. A kit of Voidwaker, mauls and axe alone keeps the old plan: Voidwaker main, the others for their specials. */
-    uint8_t kit_weapons[RF_KIT_WEAPONS + 2];
+    uint16_t kit_weapons[RF_KIT_WEAPONS + 2];
     int kit_count = 0, has_vw = 0, has_axe = 0;
-    uint8_t maul_item = ITEM_NONE, plain_main = ITEM_NONE, plain_spec = ITEM_NONE;
+    uint16_t maul_item = ITEM_NONE, plain_main = ITEM_NONE, plain_spec = ITEM_NONE;
     kit_weapons[kit_count++] = self.weapon;
     for (int i = 0; i < inventory.weapon_count; i++) kit_weapons[kit_count++] = inventory.weapons[i];
     for (int i = 0; i < kit_count; i++) {
-        uint8_t w = kit_weapons[i];
+        uint16_t w = kit_weapons[i];
         if (w == ITEM_NONE) continue;
         has_vw |= w == ITEM_VOIDWAKER;
         has_axe |= w == ITEM_DHAROKS_GREATAXE;
@@ -1101,7 +1105,7 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     const uint32_t* persona = profile->dharok_eating && profile->dharok_persona ? RF_DHAROK_PERSONA[profile->dharok_persona - 1] : NULL;
     if (!combo_specs && profile->dharok_eating) riskfight_script_dharok_meal(obs, &self, &inventory, persona, seed, tick, actions);
     if (actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO]) actions[RF_PRIMARY] = RF_STOP;
-    uint8_t generic_spec = plain_spec != ITEM_NONE ? plain_spec : plain_main != ITEM_NONE && osrs_spec_cost(plain_main) > 0 ? plain_main : ITEM_NONE;
+    uint16_t generic_spec = plain_spec != ITEM_NONE ? plain_spec : plain_main != ITEM_NONE && osrs_spec_cost(plain_main) > 0 ? plain_main : ITEM_NONE;
     int generic_cost = generic_spec == ITEM_NONE ? 100 : osrs_spec_cost(generic_spec);
     const float spent_ago = obs[RF_SCRIPT_VENG_PROC_AGO];
     const int veng_state = spent_ago >= 1 && spent_ago <= 2 ? 2 : obs[11] > 0.5f;
@@ -1115,8 +1119,8 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
         riskfight_sample_event(seed, tick, 22, profile->maul_pm));
     int generic_roll = generic_spec != ITEM_NONE && !vw_spec && !maul_spec && obs[6] * 100 >= generic_cost - 0.5f && opponent[0] < 0.65f &&
         riskfight_sample_event(seed, attack_tick, 25, profile->vw_pm);
-    int voidwaker_main = plain_main == ITEM_NONE && inventory.main_weapon == ITEM_NONE && (self.weapon == ITEM_VOIDWAKER || inventory.item_slot[ITEM_VOIDWAKER]);
-    uint8_t main_weapon = plain_main != ITEM_NONE ? plain_main : !riskfight_is_switch_weapon(self.weapon) ? self.weapon :
+    int voidwaker_main = plain_main == ITEM_NONE && inventory.main_weapon == ITEM_NONE && (self.weapon == ITEM_VOIDWAKER || inventory.item_slot[riskfight_item_slot(ITEM_VOIDWAKER)]);
+    uint16_t main_weapon = plain_main != ITEM_NONE ? plain_main : !riskfight_is_switch_weapon(self.weapon) ? self.weapon :
         voidwaker_main ? ITEM_VOIDWAKER : inventory.main_weapon != ITEM_NONE ? inventory.main_weapon : self.weapon;
     /* The greataxe swing: one roll per attack (keyed on attack_tick), RF_AXE_SWING_PM by his own hitpoints, his Vengeance up and the other side's bar, its odds
      * times the profile's own axe propensity in his hitpoints' band (profile->axe_pm over the training profiles' mean RF_AXE_WIELD_MEAN,
@@ -1128,7 +1132,7 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
         profile->axe_pm[profile_band] * 1000 / RF_AXE_WIELD_MEAN[profile_band]);
     if (persona) axe_pm = riskfight_persona_odds(axe_pm, persona[RF_PERSONA_AXE]);
     int axe_swing = has_axe && riskfight_sample_event(seed, attack_tick, 23, axe_pm);
-    uint8_t weapon = vw_spec ? ITEM_VOIDWAKER : maul_spec ? maul_item : generic_roll ? generic_spec :
+    uint16_t weapon = vw_spec ? ITEM_VOIDWAKER : maul_spec ? maul_item : generic_roll ? generic_spec :
         axe_swing ? ITEM_DHAROKS_GREATAXE : main_weapon;
     /* A stripped Dharok fighter puts body and legs back on before he takes the axe: the wield waits for the tick after (its roll is keyed on attack_tick). */
     int axe = weapon == ITEM_DHAROKS_GREATAXE || self.weapon == ITEM_DHAROKS_GREATAXE;
@@ -1147,13 +1151,13 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     actions[RF_PRAYER] = ranged_weapon ? OFFENSIVE_PRAYER_RIGOUR : OFFENSIVE_PRAYER_PIETY;
     actions[RF_OVERHEAD] = ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE;
     actions[RF_STYLE] = ranged_weapon ? FIGHT_STYLE_RAPID : FIGHT_STYLE_AGGRESSIVE;
-    actions[RF_WEAPON] = inventory.item_slot[weapon];
+    actions[RF_WEAPON] = inventory.item_slot[riskfight_item_slot(weapon)];
     if (!item_is_two_handed(weapon) && inventory.shield != ITEM_NONE)
-        actions[RF_SHIELD] = inventory.item_slot[inventory.shield];
+        actions[RF_SHIELD] = inventory.item_slot[riskfight_item_slot(inventory.shield)];
     int orb_pm = profile->dharok_eating ? RF_DHAROK_ORB_PM[self.weapon == ITEM_DHAROKS_GREATAXE][min_int(4, hp / 20)] :
         (weapon == ITEM_DHAROKS_GREATAXE && self.attack_timer == 1 && hp > 20 ? profile->orb_axe_pm : 0);
     actions[RF_ORB] = orb_pm && riskfight_sample_event(seed, profile->dharok_eating ? tick : attack_tick, 24, orb_pm);
-    actions[RF_RING] = inventory.item_slot[obs[7] > 0.1f ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING];
+    actions[RF_RING] = inventory.item_slot[riskfight_item_slot(obs[7] > 0.1f ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING)];
     if (obs[RF_SELF_TELEPORT_LOCK] > 0) return;
     int out_of_heals = !inventory.kind_slot[OSRS_CONSUMABLE_ANGLERFISH] && !inventory.kind_slot[OSRS_CONSUMABLE_KARAMBWAN] &&
         !inventory.kind_slot[OSRS_CONSUMABLE_MARLIN] &&

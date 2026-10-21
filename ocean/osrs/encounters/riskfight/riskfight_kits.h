@@ -87,7 +87,7 @@ static int riskfight_gear_slot_of_item(const Item* item) {
 
 /** A weapon the riskfight sim can swing: bare hands, or a melee or ranged weapon (riskfight_attack has no spell choice, so a staff would swing as melee), and not
  * the poisoning dagger, whose application riskfight_attack aborts on until its immunity timing is verified. */
-static int riskfight_kit_weapon_ok(uint8_t weapon) {
+static int riskfight_kit_weapon_ok(uint16_t weapon) {
     if (weapon == ITEM_NONE) return 1;
     int style = get_item_attack_style(weapon);
     return weapon < NUM_ITEMS && weapon != ITEM_ABYSSAL_DAGGER_BH_P_PLUS_PLUS && (style == ATTACK_STYLE_MELEE || style == ATTACK_STYLE_RANGED);
@@ -98,7 +98,7 @@ static void riskfight_kit_finish(RiskfightKit* k) {
     assert(k->weapons[0] == k->equipment[GEAR_SLOT_WEAPON]);
     int ranged = 0, fit_ok = 1;
     for (int i = 0; i < k->weapon_count; i++) {
-        uint8_t w = k->weapons[i];
+        uint16_t w = k->weapons[i];
         if (!riskfight_kit_weapon_ok(w)) { fprintf(stderr, "kit %s: weapon %d cannot be swung in riskfight\n", k->name, w); abort(); }
         int style = w == ITEM_NONE ? ATTACK_STYLE_MELEE : get_item_attack_style(w);
         ranged |= style == ATTACK_STYLE_RANGED;
@@ -107,7 +107,7 @@ static void riskfight_kit_finish(RiskfightKit* k) {
         fit_ok &= kind_ok;
     }
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        uint8_t item = k->equipment[slot];
+        uint16_t item = k->equipment[slot];
         if (item == ITEM_NONE || slot == GEAR_SLOT_WEAPON) continue;
         if (riskfight_gear_slot_of_item(&ITEM_DATABASE[item]) != slot) { fprintf(stderr, "kit %s: %s is not a %d item\n", k->name, ITEM_DATABASE[item].name, slot); abort(); }
     }
@@ -115,7 +115,7 @@ static void riskfight_kit_finish(RiskfightKit* k) {
         fprintf(stderr, "kit %s: a shield under a two-handed weapon\n", k->name);
         abort();
     }
-    uint8_t ammo = osrs_ammo_assumption(k->equipment[GEAR_SLOT_WEAPON]);
+    uint16_t ammo = osrs_ammo_assumption(k->equipment[GEAR_SLOT_WEAPON]);
     if (ammo != ITEM_NONE && k->equipment[GEAR_SLOT_AMMO] == ITEM_NONE) k->equipment[GEAR_SLOT_AMMO] = ammo;
     if (k->ranged_level == 0 && ranged) k->ranged_level = OSRS_THREAT_ASSUMED_RANGED;
     if (ranged && k->start_offset == 1) k->start_offset = RF_KIT_RANGED_START;
@@ -136,7 +136,7 @@ enum { RF_KIT_DHAROK_EXTRA_POTIONS = 1 };
  * of a greataxe kit then trades one anglerfish for the locator orb (RF_KIT_ORB_PM). */
 static void riskfight_kit_loadout(const RiskfightKit* k, RiskfightLoadout* out) {
     memset(out, 0, sizeof(*out));
-    memcpy(out->equipment, k->equipment, NUM_GEAR_SLOTS);
+    memcpy(out->equipment, k->equipment, NUM_GEAR_SLOTS * sizeof(uint16_t));
     out->hitpoints = k->hitpoints;
     int bag_weapons = k->weapon_count - 1, two_handed_in_bag = 0, greataxe = 0;
     for (int i = 1; i < k->weapon_count; i++) two_handed_in_bag |= k->weapons[i] != ITEM_NONE && item_is_two_handed(k->weapons[i]);
@@ -170,16 +170,16 @@ static RiskfightKit riskfight_kit_new(const char* name, const char* source, Risk
     memset(k.weapons, ITEM_NONE, sizeof(k.weapons));
     return k;
 }
-static void riskfight_kit_wear(RiskfightKit* k, int gear_slot, uint8_t item) { k->equipment[gear_slot] = item; }
-static void riskfight_kit_arms(RiskfightKit* k, int count, const uint8_t* weapons) {
+static void riskfight_kit_wear(RiskfightKit* k, int gear_slot, uint16_t item) { k->equipment[gear_slot] = item; }
+static void riskfight_kit_arms(RiskfightKit* k, int count, const uint16_t* weapons) {
     assert(count >= 1 && count <= RF_KIT_WEAPONS);
-    memcpy(k->weapons, weapons, (size_t)count);
+    memcpy(k->weapons, weapons, (size_t)count * sizeof(*weapons));
     k->weapon_count = count;
     k->equipment[GEAR_SLOT_WEAPON] = weapons[0];
 }
-#define RF_ARMS(k, ...) do { const uint8_t arms_[] = {__VA_ARGS__}; riskfight_kit_arms(&(k), (int)sizeof(arms_), arms_); } while (0)
+#define RF_ARMS(k, ...) do { const uint16_t arms_[] = {__VA_ARGS__}; riskfight_kit_arms(&(k), (int)(sizeof(arms_) / sizeof(arms_[0])), arms_); } while (0)
 
-static void riskfight_kit_gear(RiskfightKit* k, uint8_t head, uint8_t cape, uint8_t neck, uint8_t body, uint8_t shield, uint8_t legs, uint8_t hands, uint8_t feet, uint8_t ring) {
+static void riskfight_kit_gear(RiskfightKit* k, uint16_t head, uint16_t cape, uint16_t neck, uint16_t body, uint16_t shield, uint16_t legs, uint16_t hands, uint16_t feet, uint16_t ring) {
     k->equipment[GEAR_SLOT_HEAD] = head; k->equipment[GEAR_SLOT_CAPE] = cape; k->equipment[GEAR_SLOT_NECK] = neck; k->equipment[GEAR_SLOT_BODY] = body;
     k->equipment[GEAR_SLOT_SHIELD] = shield; k->equipment[GEAR_SLOT_LEGS] = legs; k->equipment[GEAR_SLOT_HANDS] = hands; k->equipment[GEAR_SLOT_FEET] = feet;
     k->equipment[GEAR_SLOT_RING] = ring;
@@ -187,7 +187,7 @@ static void riskfight_kit_gear(RiskfightKit* k, uint8_t head, uint8_t cape, uint
 
 static int riskfight_kit_from_row(const RiskfightPoolRow* row, RiskfightKit* k) {
     *k = riskfight_kit_new("empirical", row->source, RF_KIT_EMPIRICAL, (float)(row->tape_fights * RF_KIT_TAPE_WEIGHT + row->duel_fights), RF_BAG_MELEE);
-    uint8_t weapons[RF_KIT_WEAPONS] = {ITEM_NONE};
+    uint16_t weapons[RF_KIT_WEAPONS] = {ITEM_NONE};
     int count = 0;
     uint16_t raw_weapons[RF_KIT_WEAPONS] = {row->weapon};
     for (int i = 0; i < RISKFIGHT_POOL_SWITCHES && i + 1 < RF_KIT_WEAPONS; i++) raw_weapons[i + 1] = row->switches[i];
@@ -195,9 +195,9 @@ static int riskfight_kit_from_row(const RiskfightPoolRow* row, RiskfightKit* k) 
         if (i > 0 && raw_weapons[i] == 0) continue;
         int item = raw_weapons[i] == 0 ? ITEM_NONE : osrs_item_index_from_raw_id(raw_weapons[i]);
         if (item < 0 || item >= NUM_ITEMS) return 0;
-        if (item != ITEM_NONE && get_item_attack_style((uint8_t)item) == ATTACK_STYLE_MAGIC) { RISKFIGHT_POOL_EXCLUDED_MAGIC_ROWS++; return 0; }
-        if (!riskfight_kit_weapon_ok((uint8_t)item)) return 0;
-        weapons[count++] = (uint8_t)item;
+        if (item != ITEM_NONE && get_item_attack_style((uint16_t)item) == ATTACK_STYLE_MAGIC) { RISKFIGHT_POOL_EXCLUDED_MAGIC_ROWS++; return 0; }
+        if (!riskfight_kit_weapon_ok((uint16_t)item)) return 0;
+        weapons[count++] = (uint16_t)item;
     }
     riskfight_kit_arms(k, count, weapons);
     for (int w = 0; w < RISKFIGHT_POOL_WORN; w++) {
@@ -205,7 +205,7 @@ static int riskfight_kit_from_row(const RiskfightPoolRow* row, RiskfightKit* k) 
         int item = osrs_item_index_from_raw_id(row->worn[w]);
         if (item < 0 || item >= NUM_ITEMS) return 0;
         if (riskfight_gear_slot_of_item(&ITEM_DATABASE[item]) != RF_KIT_GEAR_OF_WORN[w]) return 0;
-        k->equipment[RF_KIT_GEAR_OF_WORN[w]] = (uint8_t)item;
+        k->equipment[RF_KIT_GEAR_OF_WORN[w]] = (uint16_t)item;
     }
     if (item_is_two_handed(k->equipment[GEAR_SLOT_WEAPON]) && k->equipment[GEAR_SLOT_SHIELD] != ITEM_NONE) k->equipment[GEAR_SLOT_SHIELD] = ITEM_NONE; /* the shield seen under a switch */
     return 1;
@@ -383,7 +383,7 @@ static void riskfight_kit_apply(RiskfightState* s, int seat, const RiskfightKit*
     if (kit->ranged_level) him->current_ranged = kit->ranged_level;
     if (kit->equipment[GEAR_SLOT_RING] == ITEM_NONE) {
         int ranged = kit->ranged_level > 0;
-        uint8_t pick[5] = {ITEM_RING_OF_RECOIL, ranged ? ITEM_VENATOR_RING : ITEM_ULTOR_RING, ranged ? ITEM_RING_OF_SUFFERING_RI : ITEM_BERSERKER_RING_I, ITEM_NONE};
+        uint16_t pick[5] = {ITEM_RING_OF_RECOIL, ranged ? ITEM_VENATOR_RING : ITEM_ULTOR_RING, ranged ? ITEM_RING_OF_SUFFERING_RI : ITEM_BERSERKER_RING_I, ITEM_NONE};
         static const uint16_t share[2][4] = {{550, 150, 150, 150}, {350, 300, 150, 200}}; /* per mille; the recorded fights show a reflecting ring in 53 of 72 */
         int r = (int)((roll >> 8) % 1000u), at = 0, sum = share[ranged][0];
         while (r >= sum && at < 3) sum += share[ranged][++at];

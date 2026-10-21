@@ -208,7 +208,7 @@ typedef enum {
 
 typedef struct {
     InvSlotType type;
-    uint8_t     item_db_idx;
+    uint16_t     item_db_idx;
     int         osrs_id;
 } InvSlot;
 
@@ -241,7 +241,7 @@ typedef struct {
 typedef struct {
     int present;
     int enabled;
-    uint8_t item_db_idx;
+    uint16_t item_db_idx;
     int osrs_id;
     int quantity;
     int selected;
@@ -342,7 +342,7 @@ typedef struct {
     int display_inventory_osrs_ids[INV_GRID_SLOTS];
     int display_inventory_count;
 
-    uint8_t inv_prev_equipped[NUM_GEAR_SLOTS];
+    uint16_t inv_prev_equipped[NUM_GEAR_SLOTS];
     int inv_prev_food_count;
     int inv_prev_karambwan_count;
     int inv_prev_brew_doses;
@@ -836,7 +836,7 @@ static void gui_load_sprites(GuiState* gs) {
 
 static Texture2D gui_get_sprite_by_osrs_id(GuiState* gs, int osrs_id);
 
-static Texture2D gui_get_item_sprite(GuiState* gs, uint8_t item_idx) {
+static Texture2D gui_get_item_sprite(GuiState* gs, uint16_t item_idx) {
     Texture2D empty = { 0 };
     if (item_idx == ITEM_NONE || item_idx >= NUM_ITEMS) return empty;
     int item_id = ITEM_DATABASE[item_idx].item_id;
@@ -881,7 +881,7 @@ static int gui_item_display_id_for_quantity(const GuiState* gs, int item_id, int
 
 static Texture2D gui_get_item_sprite_for_quantity(
     GuiState* gs,
-    uint8_t item_idx,
+    uint16_t item_idx,
     int quantity
 ) {
     if (item_idx == ITEM_NONE || item_idx >= NUM_ITEMS) return (Texture2D){0};
@@ -948,7 +948,7 @@ static void gui_unload_sprites(GuiState* gs) {
     gs->item_stack_variant_count = 0;
 }
 
-static const char* gui_item_short_name(uint8_t item_idx) {
+static const char* gui_item_short_name(uint16_t item_idx) {
     if (item_idx == ITEM_NONE || item_idx >= NUM_ITEMS) return "";
     const char* full = ITEM_DATABASE[item_idx].name;
     switch (item_idx) {
@@ -1076,7 +1076,7 @@ static void gui_draw_tex_centered(Texture2D tex, int bx, int by, int bw, int bh)
 }
 
 static void gui_draw_equip_slot(GuiState* gs, int x, int y, int w, int h,
-                                int gear_slot, uint8_t item_idx) {
+                                int gear_slot, uint16_t item_idx) {
     Rectangle src = {0, 0, (float)gs->slot_tile.width, (float)gs->slot_tile.height};
     Rectangle dst = {(float)x, (float)y, (float)w, (float)h};
     DrawTexturePro(gs->slot_tile, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
@@ -1263,7 +1263,7 @@ static const GuiUiItemContainerOverride* gui_ui_item_container_override(
 
 static void gui_draw_ui_item_slot(GuiState* gs, const GuiUiItemSlot* slot, Rectangle rect) {
     if (slot->gear_slot >= 0) {
-        uint8_t item_idx = slot->enabled ? slot->item_db_idx : ITEM_NONE;
+        uint16_t item_idx = slot->enabled ? slot->item_db_idx : ITEM_NONE;
         gui_draw_equip_slot(
             gs,
             (int)rect.x,
@@ -1651,7 +1651,7 @@ static int gui_inv_first_empty(GuiState* gs) {
     return -1;
 }
 
-static int gui_inv_find_equipment(GuiState* gs, uint8_t item_db_idx) {
+static int gui_inv_find_equipment(GuiState* gs, uint16_t item_db_idx) {
     for (int i = 0; i < INV_GRID_SLOTS; i++) {
         if (gs->inv_grid[i].type == INV_SLOT_EQUIPMENT &&
             gs->inv_grid[i].item_db_idx == item_db_idx) return i;
@@ -1671,7 +1671,7 @@ static int gui_inv_remove_last_consumable(GuiState* gs, InvSlotType type) {
     return 0;
 }
 
-static int gui_inv_place_equipment(GuiState* gs, uint8_t item_db_idx) {
+static int gui_inv_place_equipment(GuiState* gs, uint16_t item_db_idx) {
     int slot = gui_inv_first_empty(gs);
     if (slot < 0) return -1;
     gs->inv_grid[slot].type = INV_SLOT_EQUIPMENT;
@@ -1681,7 +1681,7 @@ static int gui_inv_place_equipment(GuiState* gs, uint8_t item_db_idx) {
 }
 
 static void gui_snapshot_inventory_state(GuiState* gs, const Player* p) {
-    memcpy(gs->inv_prev_equipped, p->equipped, NUM_GEAR_SLOTS);
+    memcpy(gs->inv_prev_equipped, p->equipped, NUM_GEAR_SLOTS * sizeof(uint16_t));
     gs->inv_prev_food_count = p->food_count;
     gs->inv_prev_karambwan_count = p->karambwan_count;
     gs->inv_prev_brew_doses = p->brew_doses;
@@ -1854,7 +1854,7 @@ static void gui_inv_update_potion_doses(GuiState* gs, InvSlotType type,
     }
 }
 
-static int gui_player_loadout_contains(const Player* p, uint8_t item_db_idx) {
+static int gui_player_loadout_contains(const Player* p, uint16_t item_db_idx) {
     for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++) {
         if (osrs_inventory_cell_item_index(
                 &p->inventory_cells[cell]) == item_db_idx)
@@ -1867,8 +1867,8 @@ static int gui_player_loadout_contains(const Player* p, uint8_t item_db_idx) {
 
 static void gui_update_inventory(GuiState* gs, Player* p) {
     for (int s = 0; s < NUM_GEAR_SLOTS; s++) {
-        uint8_t prev = gs->inv_prev_equipped[s];
-        uint8_t curr = p->equipped[s];
+        uint16_t prev = gs->inv_prev_equipped[s];
+        uint16_t curr = p->equipped[s];
         if (prev == curr) continue;
 
         if (curr != ITEM_NONE && prev != ITEM_NONE) {
@@ -2001,7 +2001,7 @@ static uint16_t gui_inventory_raw_osrs_id(int osrs_id) {
 static const char* gui_inv_primary_action_label(const InvSlot* inv) {
     uint16_t raw_osrs_id =
         gui_inventory_raw_osrs_id(inv->osrs_id);
-    uint8_t item_idx = inv->type == INV_SLOT_EQUIPMENT
+    uint16_t item_idx = inv->type == INV_SLOT_EQUIPMENT
         ? inv->item_db_idx
         : ITEM_NONE;
     OsrsInventoryCell cell = item_idx == ITEM_NONE
@@ -2399,7 +2399,7 @@ static void gui_load_display_inventory(GuiState* gs) {
             osrs_item_content_metadata(
                 osrs_inventory_content_code_from_raw_osrs_id(
                     gui_inventory_raw_osrs_id(osrs_id)));
-        uint8_t item_idx = metadata->item_idx;
+        uint16_t item_idx = metadata->item_idx;
         gs->inv_grid[i].type = INV_SLOT_EQUIPMENT;
         gs->inv_grid[i].item_db_idx = item_idx;
         gs->inv_grid[i].osrs_id = osrs_id;
@@ -2550,7 +2550,7 @@ typedef struct {
     int count;
 } GuiCombatStyleOptions;
 
-static GuiCombatStyleOptions gui_combat_style_options(uint8_t weapon) {
+static GuiCombatStyleOptions gui_combat_style_options(uint16_t weapon) {
     GuiCombatStyleOptions out = {
         .names = { "Accurate", "Aggressive", "Controlled", "Defensive" },
         .values = {
@@ -2646,7 +2646,7 @@ static Rectangle gui_combat_special_rect(void) {
     return (Rectangle){20, 200, 150, 26};
 }
 
-static const char* gui_combat_icon_asset(uint8_t weapon, FightStyle style, int index) {
+static const char* gui_combat_icon_asset(uint16_t weapon, FightStyle style, int index) {
     switch (weapon) {
         case ITEM_TOXIC_BLOWPIPE:
         case ITEM_ZARYTE_CROSSBOW:

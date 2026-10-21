@@ -9,7 +9,7 @@
 static RiskfightState state;
 static RiskfightContext context;
 
-static int count_weapons_in_bag(const RiskfightLoadout* l, uint8_t item) {
+static int count_weapons_in_bag(const RiskfightLoadout* l, uint16_t item) {
     int n = 0;
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) n += osrs_item_content_metadata(l->inventory[slot])->item_idx == item;
     return n;
@@ -24,7 +24,7 @@ static void test_kits_consistent(void) {
         const RiskfightLoadout* l = &RISKFIGHT_POOL_LOADOUT[i];
         total += k->weight; mass[k->kind] += k->weight; count[k->kind]++;
         assert(k->weight > 0 && k->weapon_count >= 1 && k->weapon_count <= RF_KIT_WEAPONS);
-        assert(k->weapons[0] == k->equipment[GEAR_SLOT_WEAPON] && memcmp(k->equipment, l->equipment, NUM_GEAR_SLOTS) == 0);
+        assert(k->weapons[0] == k->equipment[GEAR_SLOT_WEAPON] && memcmp(k->equipment, l->equipment, NUM_GEAR_SLOTS * sizeof(uint16_t)) == 0);
         /* Every worn item sits in its own slot; a two-hander never sits over a shield. */
         for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
             if (k->equipment[slot] == ITEM_NONE) continue;
@@ -40,7 +40,7 @@ static void test_kits_consistent(void) {
             if (w > 0) { assert(count_weapons_in_bag(l, k->weapons[w]) == 1); bag_weapons++; }
             ranged |= k->weapons[w] != ITEM_NONE && get_item_attack_style(k->weapons[w]) == ATTACK_STYLE_RANGED;
         }
-        uint8_t ammo = osrs_ammo_assumption(k->equipment[GEAR_SLOT_WEAPON]);
+        uint16_t ammo = osrs_ammo_assumption(k->equipment[GEAR_SLOT_WEAPON]);
         if (ammo != ITEM_NONE) assert(k->equipment[GEAR_SLOT_AMMO] != ITEM_NONE);
         if (ranged) assert(k->ranged_level >= 99 && k->start_offset > 1);
         /* The bag fits, and holds a free slot when a two-hander has to take the shield off. */
@@ -110,10 +110,10 @@ static void check_threat_block_against_reference(const RiskfightState* s, const 
         assert(fabsf(block[i * RF_THREAT_HIS_WIDTH + 3] - osrs_threat_hit_chance(w, &ours)) < 1e-6f);
         if (w->spec_hits > 0) assert(fabsf(block[i * RF_THREAT_HIS_WIDTH + 10] - osrs_threat_spec_hit_chance(w, &ours)) < 1e-6f);
     }
-    uint8_t items[RF_THREAT_OURS_SLOTS];
+    uint16_t items[RF_THREAT_OURS_SLOTS];
     int n = 0;
     items[n++] = p->equipped[GEAR_SLOT_WEAPON];
-    for (int item = 0; item < ITEM_NONE && n < RF_THREAT_OURS_SLOTS; item++) {
+    for (int item = 0; item < NUM_ITEMS + OSRS_STAT_ITEM_SLOTS && n < RF_THREAT_OURS_SLOTS; item++) {
         if (item == items[0]) continue;
         for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
             const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[slot]);
@@ -176,7 +176,7 @@ static void test_every_kit_plays(void) {
 
 /* The prior the threat block reads: a Dharok's wearer's other weapons come from the pool, summing over the kits that look like him. */
 static void test_prior(void) {
-    uint8_t visible[NUM_GEAR_SLOTS];
+    uint16_t visible[NUM_GEAR_SLOTS];
     memset(visible, ITEM_NONE, sizeof(visible));
     visible[GEAR_SLOT_HEAD] = ITEM_HELM_NEITIZNOT;
     visible[GEAR_SLOT_CAPE] = ITEM_INFERNAL_CAPE;
@@ -187,7 +187,7 @@ static void test_prior(void) {
     visible[GEAR_SLOT_HANDS] = ITEM_BARROWS_GLOVES;
     visible[GEAR_SLOT_FEET] = ITEM_DRAGON_BOOTS;
     visible[GEAR_SLOT_WEAPON] = ITEM_VOIDWAKER;
-    uint8_t items[8];
+    uint16_t items[8];
     float p[8];
     int n = riskfight_pool_prior(visible, items, p, 8);
     assert(n >= 1);

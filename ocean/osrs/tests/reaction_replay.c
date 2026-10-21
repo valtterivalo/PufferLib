@@ -120,8 +120,8 @@ static void build_loadouts(void) {
                 {OSRS_CONSUMABLE_ANGLERFISH, 0, 14}, {OSRS_CONSUMABLE_KARAMBWAN, 0, 4}, {OSRS_CONSUMABLE_BREW, 4, 3}, {OSRS_CONSUMABLE_SUPER_RESTORE, 4, 2}};
             for (size_t k = 0; k < sizeof(supplies) / sizeof(*supplies); k++)
                 for (int n = 0; n < supplies[k].count; n++) l->inventory[slot++] = riskfight_supply_code(supplies[k].kind, supplies[k].doses);
-            const uint8_t spares[] = {ITEM_AGS, ITEM_DRAGON_CLAWS, ITEM_GRANITE_MAUL_ORNATE};
-            for (size_t k = 0; k < sizeof(spares); k++) l->inventory[slot++] = osrs_inventory_content_code_from_item(spares[k]);
+            const uint16_t spares[] = {ITEM_AGS, ITEM_DRAGON_CLAWS, ITEM_GRANITE_MAUL_ORNATE};
+            for (size_t k = 0; k < sizeof(spares) / sizeof(*spares); k++) l->inventory[slot++] = osrs_inventory_content_code_from_item(spares[k]);
         }
     }
 }

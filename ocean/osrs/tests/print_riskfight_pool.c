@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include "../encounters/encounter_riskfight.h"
 
-static const char* item_name(uint8_t item) { return item == ITEM_NONE ? "-" : ITEM_DATABASE[item].name; }
+static const char* item_name(uint16_t item) { return item == ITEM_NONE ? "-" : ITEM_DATABASE[item].name; }
 
 int main(int argc, char** argv) {
     int top = argc > 1 ? atoi(argv[1]) : RISKFIGHT_POOL_COUNT;

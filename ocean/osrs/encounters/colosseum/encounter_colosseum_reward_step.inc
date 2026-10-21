@@ -2,7 +2,7 @@
 
 static const ColoBestGear (*col_get_best_gear_table(ColosseumState* s))[COLO_NUM_NPC_TYPES];
 static float col_expected_dpt_for_equipment_vs_npc(
-    ColosseumState* s, const uint8_t equipment[NUM_GEAR_SLOTS],
+    ColosseumState* s, const uint16_t equipment[NUM_GEAR_SLOTS],
     const ColoNPC* npc, int use_style_matched_prayer);
 
 static void col_record_reward_clamp_headroom(ColosseumState* s) {

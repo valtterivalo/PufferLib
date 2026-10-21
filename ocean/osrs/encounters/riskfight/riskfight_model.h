@@ -195,7 +195,7 @@ static const int RF_GEAR_SLOT_BY_HEAD[RF_HEADS] = {
 };
 
 typedef struct {
-    uint8_t equipment[NUM_GEAR_SLOTS];
+    uint16_t equipment[NUM_GEAR_SLOTS];
     int health_bar;
     int x, y;
     int interacting;
@@ -301,7 +301,7 @@ typedef struct {
     int data_escapes[2];
 } RiskfightState;
 typedef struct {
-    uint8_t equipment[NUM_GEAR_SLOTS];
+    uint16_t equipment[NUM_GEAR_SLOTS];
     uint16_t inventory[OSRS_INVENTORY_SIZE];
     int hitpoints;
     int vengeance_sacks;
@@ -433,9 +433,9 @@ __attribute__((constructor)) static void riskfight_build_default_loadout(void) {
     for (size_t k = 0; k < sizeof(supplies) / sizeof(*supplies); k++)
         for (int n = 0; n < supplies[k].count; n++)
             loadout.inventory[slot++] = riskfight_supply_code(supplies[k].kind, supplies[k].doses);
-    const uint8_t switches[] = {ITEM_DHAROKS_GREATAXE, ITEM_VOIDWAKER,
+    const uint16_t switches[] = {ITEM_DHAROKS_GREATAXE, ITEM_VOIDWAKER,
         ITEM_GRANITE_MAUL_ORNATE, ITEM_RING_OF_RECOIL};
-    for (size_t k = 0; k < sizeof(switches); k++)
+    for (size_t k = 0; k < sizeof(switches) / sizeof(*switches); k++)
         loadout.inventory[slot++] = osrs_inventory_content_code_from_item(switches[k]);
     loadout.inventory[slot++] = riskfight_supply_code(OSRS_CONSUMABLE_LOCATOR_ORB, 0);
     assert(slot == 27);
@@ -529,7 +529,7 @@ __attribute__((constructor)) static void riskfight_build_dharok_loadout(void) {
         if (bag[i] == maul) maul_cell = i;
     }
     assert(last_marlin >= 0 && maul_cell >= 0);
-    const struct { int kit; uint8_t spec; int cell; } spectated[] = {
+    const struct { int kit; uint16_t spec; int cell; } spectated[] = {
         {RF_DHAROK_TENTACLE_VW_MAUL, ITEM_VOIDWAKER, last_marlin}, {RF_DHAROK_TENTACLE_VW, ITEM_VOIDWAKER, maul_cell},
         {RF_DHAROK_TENTACLE_AGS_MAUL, ITEM_AGS, last_marlin},
     };
@@ -730,9 +730,9 @@ static void riskfight_pid_seen(RiskfightState* s, int viewer, int tick) {
     const RiskfightVisibleOpponent* other = &s->visible[1 - viewer]; /* what he sees of the viewer: the viewer's own swings */
     if (v->pid_due_tick == tick) { v->pid_reading = v->pid_due_owner; v->pid_seen_tick = tick; v->pid_due_tick = -1; }
     const int holder_viewer = s->pid_played == viewer;
-    if (other->last_attack_tick == tick && osrs_threat_style_of_weapon((uint8_t)other->last_swing_item) == ATTACK_STYLE_MELEE)
+    if (other->last_attack_tick == tick && osrs_threat_style_of_weapon((uint16_t)other->last_swing_item) == ATTACK_STYLE_MELEE)
         riskfight_pid_swing(v, tick, 1, holder_viewer);
-    if (v->last_attack_tick == tick && osrs_threat_style_of_weapon((uint8_t)v->last_swing_item) == ATTACK_STYLE_MELEE)
+    if (v->last_attack_tick == tick && osrs_threat_style_of_weapon((uint16_t)v->last_swing_item) == ATTACK_STYLE_MELEE)
         riskfight_pid_swing(v, tick, 0, holder_viewer);
     v->pid_flip = v->pid_reading < 0 ? 0 : riskfight_pid_flip(tick - v->pid_seen_tick);
 }

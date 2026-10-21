@@ -32,7 +32,7 @@ static int bag_bit(const unsigned char* mask, const Player* p, int head, int slo
     return mask[RF_HEAD_OFFSET[head] + actions[head]];
 }
 
-static int first_slot_of(const Player* p, OsrsConsumableKind kind, uint8_t item) {
+static int first_slot_of(const Player* p, OsrsConsumableKind kind, uint16_t item) {
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
         const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[slot]);
         if (osrs_inventory_cell_is_empty(&p->inventory_cells[slot])) continue;

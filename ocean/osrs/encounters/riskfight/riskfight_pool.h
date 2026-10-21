@@ -19,8 +19,8 @@ typedef struct {
     const char* source;                  /* where the row comes from: the tapes/duels it was mined from, or the wiki/meta reason of an archetype */
     RiskfightKitKind kind;
     float weight;                        /* relative draw weight */
-    uint8_t equipment[NUM_GEAR_SLOTS];   /* worn at the start; the weapon slot is the weapon he starts with, ring and ammunition included */
-    uint8_t weapons[RF_KIT_WEAPONS];     /* every weapon of the kit, the started-with one first; ITEM_NONE past weapon_count */
+    uint16_t equipment[NUM_GEAR_SLOTS];   /* worn at the start; the weapon slot is the weapon he starts with, ring and ammunition included */
+    uint16_t weapons[RF_KIT_WEAPONS];     /* every weapon of the kit, the started-with one first; ITEM_NONE past weapon_count */
     int weapon_count;
     int bag;                             /* RiskfightBag: what fills his inventory (riskfight_kits.h) */
     int start_offset;                    /* tiles east of us he starts; 1 is adjacent, the fight starts at melee range as the live ones do */
@@ -59,9 +59,9 @@ static const int RF_POOL_VISIBLE_SLOTS[] = {GEAR_SLOT_HEAD, GEAR_SLOT_CAPE, GEAR
 /** The weapons of the pool besides the wielded one, with the probability each is in the kit of a fighter that looks like `visible`: the weight of every
  * kit, scaled by how well it matches what is worn, summed over the kits that hold the weapon. Writes at most `cap` (item, probability) pairs sorted by
  * probability, returns how many. */
-static int riskfight_pool_prior(const uint8_t visible[NUM_GEAR_SLOTS], uint8_t* items, float* probability, int cap) {
-    float mass[ITEM_NONE] = {0}, total = 0;
-    uint8_t wielded = visible[GEAR_SLOT_WEAPON];
+static int riskfight_pool_prior(const uint16_t visible[NUM_GEAR_SLOTS], uint16_t* items, float* probability, int cap) {
+    float mass[NUM_ITEMS + OSRS_STAT_ITEM_SLOTS] = {0}, total = 0;
+    uint16_t wielded = visible[GEAR_SLOT_WEAPON];
     for (int k = 0; k < RISKFIGHT_POOL_COUNT; k++) {
         const RiskfightKit* kit = &RISKFIGHT_POOL[k];
         float likelihood = kit->weight;
@@ -77,10 +77,10 @@ static int riskfight_pool_prior(const uint8_t visible[NUM_GEAR_SLOTS], uint8_t* 
     int count = 0;
     for (int pick = 0; pick < cap && total > 0; pick++) {
         int best = -1;
-        for (int item = 0; item < ITEM_NONE; item++)
+        for (int item = 0; item < NUM_ITEMS + OSRS_STAT_ITEM_SLOTS; item++)
             if (mass[item] > 0 && (best < 0 || mass[item] > mass[best])) best = item;
         if (best < 0) break;
-        items[count] = (uint8_t)best;
+        items[count] = (uint16_t)best;
         probability[count++] = mass[best] / total;
         mass[best] = 0;
     }
@@ -91,15 +91,15 @@ static int riskfight_pool_prior(const uint8_t visible[NUM_GEAR_SLOTS], uint8_t* 
  * so the prior is a pure function of that key; a fight asks for it again at every rebuild of the threat slots (a new weapon seen, a stack change) with the same
  * gear, and a scan of the whole pool costs microseconds. Direct-mapped, one table per thread (the env threads share nothing). */
 enum { RF_PRIOR_MEMO_SIZE = 2048, RF_PRIOR_MEMO_CAP = 8 };
-typedef struct { uint64_t visible; uint8_t wielded, cap, count, valid; uint8_t items[RF_PRIOR_MEMO_CAP]; float probability[RF_PRIOR_MEMO_CAP]; } RiskfightPriorMemo;
+typedef struct { uint64_t visible; uint16_t wielded; uint8_t cap, count, valid; uint16_t items[RF_PRIOR_MEMO_CAP]; float probability[RF_PRIOR_MEMO_CAP]; } RiskfightPriorMemo;
 static __thread RiskfightPriorMemo riskfight_prior_memo[RF_PRIOR_MEMO_SIZE];
 
-static int riskfight_pool_prior_memo(const uint8_t visible[NUM_GEAR_SLOTS], uint8_t* items, float* probability, int cap) {
+static int riskfight_pool_prior_memo(const uint16_t visible[NUM_GEAR_SLOTS], uint16_t* items, float* probability, int cap) {
     assert(cap >= 1 && cap <= RF_PRIOR_MEMO_CAP);
     uint64_t packed = 0;
-    for (size_t s = 0; s < sizeof(RF_POOL_VISIBLE_SLOTS) / sizeof(*RF_POOL_VISIBLE_SLOTS); s++) packed = packed << 8 | visible[RF_POOL_VISIBLE_SLOTS[s]];
-    const uint8_t wielded = visible[GEAR_SLOT_WEAPON];
-    RiskfightPriorMemo* e = &riskfight_prior_memo[(uint32_t)(((packed ^ ((uint64_t)wielded << 17 | cap)) * UINT64_C(0x9E3779B97F4A7C15)) >> 53)];
+    for (size_t s = 0; s < sizeof(RF_POOL_VISIBLE_SLOTS) / sizeof(*RF_POOL_VISIBLE_SLOTS); s++) packed = packed << 8 | (uint64_t)osrs_item_byte_code(visible[RF_POOL_VISIBLE_SLOTS[s]]);
+    const uint16_t wielded = visible[GEAR_SLOT_WEAPON];
+    RiskfightPriorMemo* e = &riskfight_prior_memo[(uint32_t)(((packed ^ ((uint64_t)osrs_item_byte_code(wielded) << 17 | cap)) * UINT64_C(0x9E3779B97F4A7C15)) >> 53)];
     if (!e->valid || e->visible != packed || e->wielded != wielded || e->cap != cap) {
         e->visible = packed; e->wielded = wielded; e->cap = (uint8_t)cap;
         e->count = (uint8_t)riskfight_pool_prior(visible, e->items, e->probability, cap);

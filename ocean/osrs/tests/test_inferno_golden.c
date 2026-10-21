@@ -66,7 +66,7 @@ static uint64_t hash_core_state(uint64_t h, const InfernoState* s) {
     h = fnv_bytes(h, s->pending_sparks, sizeof(s->pending_sparks));
     for (int cell_idx = 0; cell_idx < OSRS_INVENTORY_SIZE; cell_idx++) {
         const OsrsInventoryCell* cell = &s->player.inventory_cells[cell_idx];
-        h = fnv_u8(h, osrs_inventory_cell_item_index(cell));
+        h = fnv_u8(h, (uint8_t)osrs_item_byte_code(osrs_inventory_cell_item_index(cell)));
         h = fnv_u16(h, osrs_inventory_cell_raw_osrs_id(cell));
         h = fnv_u8(h, osrs_inventory_cell_dose_count(cell));
     }
@@ -198,11 +198,11 @@ static const GoldenConfig CONFIGS[] = {
 
 /* Canonical inventory cells intentionally change the serialized player state hash. */
 static const uint64_t EXPECTED_STATE[NUM_CONFIGS] = {
-    0xca39e9781a010772ULL, 0xe2380b41529a5580ULL, 0x9f5c9a70dc38d2a2ULL,
-    0x725d6ac815196158ULL, 0x7125e46091913184ULL, 0x3bb0137696e9b900ULL,
-    0xfb08d2e440f5255eULL, 0xca7ad37462aa6b69ULL, 0x19c6aec9be3355c5ULL,
-    0x2c1c7b404e00155cULL, 0x2cb1614c207486baULL, 0x4fd95e4e32938a7eULL,
-    0xfc21d9dc38cb186aULL, 0xe2a032e5272f486cULL, 0xb17815312a89ec9fULL,
+    0xbc105cc3eb81b32cULL, 0xcb0c810495d1baf0ULL, 0xb23318bd9b279dc8ULL,
+    0xbd703809d9da8cc3ULL, 0xd76654d45bba8ed2ULL, 0x75fc288b954fd4f4ULL,
+    0x5e4aa1990c505e43ULL, 0xa61df7bd8e726cf9ULL, 0x025b053b4dc4fa71ULL,
+    0x5d371a610f642041ULL, 0x302dc842e8a47144ULL, 0xb1ff0f5cd9acdbcbULL,
+    0x9b17e8a0a0b7935fULL, 0x18a748a8d28efb5dULL, 0x2d3a5cf7a2ef2052ULL,
 };
 
 static const uint64_t EXPECTED_REWARD[NUM_CONFIGS] = {

@@ -172,7 +172,7 @@ typedef enum {
 #undef OSRS_WIKI_ITEM_ENUM
     NUM_HAND_ITEMS = 163,
     NUM_ITEMS = NUM_HAND_ITEMS + OSRS_ITEM_WIKI_ROW_COUNT,
-    ITEM_NONE = 255
+    ITEM_NONE = 0xFFFF
 } ItemIndex;
 
 /* Mutable only past NUM_ITEMS: the OSRS_STAT_ITEM_SLOTS spare rows hold stat-priced items (osrs_stat_item_register). */

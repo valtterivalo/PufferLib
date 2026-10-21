@@ -370,10 +370,10 @@ static void tape_free(Tape* tape) {
 
 /** An id without an ITEM_DATABASE row is priced from its stats (gs_item_priced_from_stats, a stat row valid until osrs_stat_items_clear()); the raw id
  * stays in the tape. An id with no stats row stays an explicit unknown: ITEM_NONE. Never an abort. */
-static uint8_t raw_id_to_item(int raw) {
+static uint16_t raw_id_to_item(int raw) {
     if (raw < 0) return ITEM_NONE;
     int item = gs_item_priced_from_stats(raw, 0);
-    return item >= 0 ? (uint8_t)item : ITEM_NONE;
+    return item >= 0 ? (uint16_t)item : ITEM_NONE;
 }
 
 /** Inventory content code of a raw id; 0 (empty) for an explicit unknown, see tape_unknown_count. */

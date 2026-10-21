@@ -224,10 +224,10 @@ static void riskfight_training_randomize(RiskfightTraining* training, RiskfightS
     /* Hitpoints are not randomized: everyone starts a fight at 121 after the anglerfish overheal at the bank (a pool kit that starts lower, the low-hitpoints Dharok's, keeps it); a ranger's level varies below the boosted 112. */
     if (context->opp_kit && context->opp_kit->ranged_level) p->current_ranged = 100 + riskfight_dr_pick(training, 13);
     if (context->loadout[1] == &RISKFIGHT_LIVE_LOADOUT) {
-        static const uint8_t shields[] = {ITEM_AVERNIC_DEFENDER, ITEM_DRAGON_DEFENDER, ITEM_RUNE_DEFENDER};
-        static const uint8_t legs[] = {ITEM_DRAGON_PLATELEGS, ITEM_RUNE_PLATELEGS};
-        static const uint8_t bodies[] = {ITEM_FIGHTER_TORSO, ITEM_BANDOS_CHESTPLATE};
-        static const uint8_t necks[] = {ITEM_AMULET_OF_STRENGTH, ITEM_AMULET_OF_TORTURE, ITEM_FURY};
+        static const uint16_t shields[] = {ITEM_AVERNIC_DEFENDER, ITEM_DRAGON_DEFENDER, ITEM_RUNE_DEFENDER};
+        static const uint16_t legs[] = {ITEM_DRAGON_PLATELEGS, ITEM_RUNE_PLATELEGS};
+        static const uint16_t bodies[] = {ITEM_FIGHTER_TORSO, ITEM_BANDOS_CHESTPLATE};
+        static const uint16_t necks[] = {ITEM_AMULET_OF_STRENGTH, ITEM_AMULET_OF_TORTURE, ITEM_FURY};
         p->equipped[GEAR_SLOT_SHIELD] = shields[riskfight_dr_pick(training, 3)];
         p->equipped[GEAR_SLOT_LEGS] = legs[riskfight_dr_pick(training, 2)];
         p->equipped[GEAR_SLOT_BODY] = bodies[riskfight_dr_pick(training, 2)];

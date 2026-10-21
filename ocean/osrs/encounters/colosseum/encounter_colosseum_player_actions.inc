@@ -518,7 +518,7 @@ static int col_npc_effective_def_level(const ColoNPC* npc, const ColoNpcStats* n
 static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
     ColoNPC* npc = &s->npcs[npc_slot];
     const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
-    uint8_t item = s->player.equipped[GEAR_SLOT_WEAPON];
+    uint16_t item = s->player.equipped[GEAR_SLOT_WEAPON];
     assert(osrs_spec_cost(item) > 0 &&
            "spec attack dispatched with a non-special weapon equipped");
     const EncounterLoadoutStats* ls = col_live_loadout_stats(s);
@@ -749,7 +749,7 @@ static int col_npc_target_def_roll(
 static float col_expected_dpt_vs_npc(
     const EncounterLoadoutStats* ls,
     const OsrsEquipmentEffectProfile* effects,
-    uint8_t weapon_item,
+    uint16_t weapon_item,
     AttackStyle style,
     MeleeStyle melee_style,
     const ColoNPC* npc,
@@ -832,7 +832,7 @@ static void col_player_attack_target_ctx(
     }
 
     const OsrsEquipmentEffectProfile* effects = col_live_effects(s);
-    uint8_t weapon_item = s->player.equipped[GEAR_SLOT_WEAPON];
+    uint16_t weapon_item = s->player.equipped[GEAR_SLOT_WEAPON];
     const Item* weapon = get_item(weapon_item);
     int projectile_dist = encounter_projectile_distance(
         s->player.x, s->player.y, 1,
@@ -1021,7 +1021,7 @@ static void col_tick_player_ctx(
 #endif
 
     int spec_act = actions[COLO_HEAD_SPEC];
-    uint8_t equipped_weapon = s->player.equipped[GEAR_SLOT_WEAPON];
+    uint16_t equipped_weapon = s->player.equipped[GEAR_SLOT_WEAPON];
     int spec_cost = osrs_spec_cost(equipped_weapon);
     if (spec_act == 1 && spec_cost > 0 && s->player.special_energy >= spec_cost) {
         s->player.spec_armed = 1;

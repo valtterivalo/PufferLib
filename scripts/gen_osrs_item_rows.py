@@ -12,7 +12,7 @@ Adding an item the sim does not know is three steps:
        /tmp/gen_osrs_item_obs ocean/osrs/osrs_item_obs_generated.h ocean/osrs/osrs_item_obs_table.inc
      and run ocean/osrs/tests/test_wiki_item_rows.c.
 Two budgets bound the table, both enforced below or by the observation generator: the item index is a
-uint8 (NUM_ITEMS + OSRS_STAT_ITEM_SLOTS < 255) and the content code space is OSRS_ITEM_OBS_CODE_SCALE
+uint16 (NUM_ITEMS + OSRS_STAT_ITEM_SLOTS < ITEM_NONE, 65535) and the content code space is OSRS_ITEM_OBS_CODE_SCALE
 (512, GEN_OBS_CODE_SCALE of the observation generator). A row with a special attack the sim does not model keeps no special: spec costs and
 osrs_resolve_spec stay a hand job in osrs_special_attacks.h.
 
@@ -84,8 +84,8 @@ def read_rows():
             if not -32768 <= v <= 32767:
                 fail(n, f"{k}={v} does not fit int16")
         rows.append(r)
-    if HAND_ITEMS + len(rows) + STAT_SLOTS_MIN >= 255:
-        sys.exit(f"{len(rows)} wiki rows leave fewer than {STAT_SLOTS_MIN} stat slots below ITEM_NONE (255)")
+    if HAND_ITEMS + len(rows) + STAT_SLOTS_MIN >= 65535:
+        sys.exit(f"{len(rows)} wiki rows leave fewer than {STAT_SLOTS_MIN} stat slots below ITEM_NONE (65535)")
     return rows
 
 

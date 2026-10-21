@@ -369,7 +369,7 @@ static void test_nh_shared_contract_and_inventory_actions(void) {
     int ranged_cell =
         pvp_inventory_cell_with_item(player, ITEM_RUNE_CROSSBOW);
     CHECK("reset exposes a ranged weapon cell", ranged_cell >= 0);
-    uint8_t previous_weapon = player->equipped[GEAR_SLOT_WEAPON];
+    uint16_t previous_weapon = player->equipped[GEAR_SLOT_WEAPON];
     int equip[OSRS_BASE_NUM_ACTION_HEADS] = {0};
     equip[OSRS_HEAD_EQUIP_SLOT(GEAR_SLOT_WEAPON)] = ranged_cell + 1;
     ENCOUNTER_NH_PVP.step(

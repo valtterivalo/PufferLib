@@ -93,7 +93,7 @@ static void tfa_player_cast_barrage(TfaState* s, int p, TfaNpc* n) {
     TfaPlayer* tp = &s->players[p];
     EncounterLoadoutStats ls;
     encounter_compute_player_equipped_stats(&tp->player, ATTACK_STYLE_MAGIC, FIGHT_STYLE_AUTOCAST, ICE_BARRAGE_MAX_HIT, &ls);
-    uint8_t weapon = tp->player.equipped[GEAR_SLOT_WEAPON];
+    uint16_t weapon = tp->player.equipped[GEAR_SLOT_WEAPON];
     OsrsTargetRef target = { .kind = OSRS_TARGET_NPC, .id = tfa_npc_slot(s, n) };
     OsrsPreparedAttackEffects fx = osrs_prepare_attack_effects(
         &tp->player.equipment_effect_profile, &tp->player.item_effect_state, weapon, ATTACK_STYLE_MAGIC,
@@ -141,8 +141,8 @@ static void tfa_player_attack(TfaState* s, int p, TfaNpc* n) {
     }
     const EncounterLoadoutStats* ls = tfa_player_stats(tp);
     AttackStyle style = ls->style;
-    uint8_t weapon = tp->player.equipped[GEAR_SLOT_WEAPON];
-    uint8_t ammo = tp->player.equipped[GEAR_SLOT_AMMO];
+    uint16_t weapon = tp->player.equipped[GEAR_SLOT_WEAPON];
+    uint16_t ammo = tp->player.equipped[GEAR_SLOT_AMMO];
     int bolts = style == ATTACK_STYLE_RANGED && !osrs_weapon_is_thrown(weapon);
     MeleeStyle melee_style = osrs_item_melee_style(weapon);
     const MonsterStats* m = &MONSTER_DATABASE[n->monster];

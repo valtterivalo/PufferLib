@@ -20,7 +20,7 @@ static void decide(const RiskfightProfile* profile, uint32_t seed, int* actions)
         assert(actions[head] >= 0 && actions[head] < RF_ACTION_DIMS[head]);
 }
 
-static int inventory_action(uint8_t item) {
+static int inventory_action(uint16_t item) {
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
         if (osrs_inventory_cell_metadata(&state.env.players[0].inventory_cells[slot])->item_idx == item) return slot + 1;
     assert(0 && "item not in inventory");

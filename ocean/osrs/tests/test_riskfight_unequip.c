@@ -13,7 +13,7 @@ static void reset(void) {
 static void test_ordered_partial_removal(void) {
     reset();
     const int slots[] = {GEAR_SLOT_HEAD, GEAR_SLOT_BODY, GEAR_SLOT_LEGS, GEAR_SLOT_CAPE, GEAR_SLOT_HANDS};
-    uint8_t items[5];
+    uint16_t items[5];
     HumanInput clicks;
     human_input_init(&clicks);
     Player* p = &state.env.players[0];

@@ -33,16 +33,16 @@ static int weapon_kind_of_item(int item) {
     }
 }
 
-static const uint8_t WK_ITEM[WK_COUNT] = {ITEM_VOIDWAKER, ITEM_AGS, ITEM_DRAGON_CLAWS, ITEM_GRANITE_MAUL_ORNATE};
+static const uint16_t WK_ITEM[WK_COUNT] = {ITEM_VOIDWAKER, ITEM_AGS, ITEM_DRAGON_CLAWS, ITEM_GRANITE_MAUL_ORNATE};
 
-static int raw_of_item_id(uint8_t item);
+static int raw_of_item_id(uint16_t item);
 
 
 static int worn_slot_item(const TapeTick* t, int worn) { return t->worn[worn] >= 0 ? raw_id_to_item(t->worn[worn]) : ITEM_NONE; }
 
 /** The kit composition ids (item id plus the client's offset, -1 for none) a viewer reads of a fighter: the nine visible slots, no ring or ammunition. */
 enum { KIT_SLOTS = 12 };
-static void kit_of_equipped(const uint8_t equipped[NUM_GEAR_SLOTS], int kit[KIT_SLOTS]) {
+static void kit_of_equipped(const uint16_t equipped[NUM_GEAR_SLOTS], int kit[KIT_SLOTS]) {
     static const int GEAR_OF_KIT[KIT_SLOTS] = {GEAR_SLOT_HEAD, GEAR_SLOT_CAPE, GEAR_SLOT_NECK, GEAR_SLOT_WEAPON, GEAR_SLOT_BODY, GEAR_SLOT_SHIELD, -1,
         GEAR_SLOT_LEGS, -1, GEAR_SLOT_HANDS, GEAR_SLOT_FEET, -1};
     for (int k = 0; k < KIT_SLOTS; k++) kit[k] = GEAR_OF_KIT[k] < 0 || equipped[GEAR_OF_KIT[k]] == ITEM_NONE ? -1 : ITEM_DATABASE[equipped[GEAR_OF_KIT[k]]].item_id + GS_ITEM_OFFSET;
@@ -106,14 +106,14 @@ static int attack_hitsplat(int type) { return type == 16 || type == 17 || type =
 /** Ticks since his bar last moved on which a meal would have been hidden behind another animation. */
 static int unseen_ticks(const Tape* tape, int tick) { return ((const Hist*)tape->hist_series)[tick - tape->lo].warning.unseen_count; }
 
-static int has_item(const RiskfightState* s, int agent, uint8_t item) {
+static int has_item(const RiskfightState* s, int agent, uint16_t item) {
     const Player* p = &s->env.players[agent];
     if (p->equipped[GEAR_SLOT_WEAPON] == item) return 1;
     for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) if (osrs_inventory_cell_metadata(&p->inventory_cells[i])->item_idx == item) return 1;
     return 0;
 }
 
-static int is_maul_item(uint8_t item) { return item == ITEM_GRANITE_MAUL || item == ITEM_GRANITE_MAUL_ORNATE; }
+static int is_maul_item(uint16_t item) { return item == ITEM_GRANITE_MAUL || item == ITEM_GRANITE_MAUL_ORNATE; }
 
 static int has_maul(const RiskfightState* s, int agent) {
     return has_item(s, agent, ITEM_GRANITE_MAUL) || has_item(s, agent, ITEM_GRANITE_MAUL_ORNATE);
@@ -149,7 +149,7 @@ static OppIn opp_inputs(const RiskfightState* s, const Hist* h, int tick) {
 }
 
 typedef struct { int ate_visible, ate, swung, vw, maul, damage_on_him, max_hit_on_him, hit_on_him; } StepEvents;
-static int raw_of_item_id(uint8_t item) { return item == ITEM_NONE ? -1 : ITEM_DATABASE[item].item_id; }
+static int raw_of_item_id(uint16_t item) { return item == ITEM_NONE ? -1 : ITEM_DATABASE[item].item_id; }
 
 /** Moves the history one sim step on. tick is the tape tick the step covered. */
 static void hist_step(Hist* h, RiskfightState* s, int tick, const StepEvents* e) {
@@ -260,12 +260,12 @@ static void opp_fit_actions(const OppFit* fit, const RiskfightState* s, const Hi
     int armed = obs[13] >= 0.5f;
     int holding_maul = pvp_is_maul(self.weapon);
     if (maul) {
-        actions[RF_WEAPON] = inventory.item_slot[ITEM_GRANITE_MAUL_ORNATE];
+        actions[RF_WEAPON] = inventory.item_slot[riskfight_item_slot(ITEM_GRANITE_MAUL_ORNATE)];
         actions[RF_SHIELD] = 0;
         actions[RF_SPECIAL] = 2;
         actions[RF_PRIMARY] = RF_ATTACK;
     } else if (kind != WK_NONE) {
-        actions[RF_WEAPON] = inventory.item_slot[WK_ITEM[kind]];
+        actions[RF_WEAPON] = inventory.item_slot[riskfight_item_slot(WK_ITEM[kind])];
         if (item_is_two_handed(WK_ITEM[kind])) actions[RF_SHIELD] = 0;
         actions[RF_SPECIAL] = !holding_maul && (WK_COST[kind] > 0 ? !armed : armed);
     } else if (!eating) {

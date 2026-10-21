@@ -104,7 +104,7 @@ static inline void osrs_render_entity_from_npc_spec(
         abort();
     }
     memset(out, 0, sizeof(RenderEntity));
-    memset(out->equipped, ITEM_NONE, NUM_GEAR_SLOTS);
+    memset(out->equipped, ITEM_NONE, NUM_GEAR_SLOTS * sizeof(uint16_t));
     out->entity_type = ENTITY_NPC;
     out->npc_def_id = spec->npc_def_id;
     out->npc_slot = spec->npc_slot;

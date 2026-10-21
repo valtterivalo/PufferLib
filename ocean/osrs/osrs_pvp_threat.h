@@ -17,7 +17,7 @@ typedef struct {
 /** Visible loadout and explicit stat/energy assumptions to same-weapon damage bounds.
     HP lower bound maximizes Dharok damage. Excludes hidden switches, reflection and timing. */
 static inline OsrsMeleeThreat osrs_melee_threat(
-    const uint8_t equipment[NUM_GEAR_SLOTS], int assumed_effective_strength,
+    const uint16_t equipment[NUM_GEAR_SLOTS], int assumed_effective_strength,
     int assumed_base_hp, int observed_hp_lower, int assumed_special_energy
 ) {
     assert(assumed_effective_strength > 0);
@@ -69,7 +69,7 @@ typedef struct {
  * ranging potion (112), the stance a player of that weapon uses (aggressive, rapid; magic accurate). */
 enum { OSRS_THREAT_ASSUMED_MELEE = 118, OSRS_THREAT_ASSUMED_RANGED = 112, OSRS_THREAT_ASSUMED_MAGIC = 99, OSRS_THREAT_ASSUMED_DEFENCE = 99 };
 
-static inline int osrs_threat_style_of_weapon(uint8_t weapon) {
+static inline int osrs_threat_style_of_weapon(uint16_t weapon) {
     if (weapon == ITEM_NONE) return ATTACK_STYLE_MELEE;
     int style = get_item_attack_style(weapon);
     assert(style != ATTACK_STYLE_NONE);
@@ -85,7 +85,7 @@ static inline OsrsThreatActor osrs_threat_actor_assumed(int attack_style) {
 }
 
 /** Ammunition a wielder of `weapon` is assumed to carry: the sim has no observation of a quiver (and the client shows none). Thrown weapons carry their own. */
-static inline uint8_t osrs_ammo_assumption(uint8_t weapon) {
+static inline uint16_t osrs_ammo_assumption(uint16_t weapon) {
     switch (weapon) {
         case ITEM_MAGIC_SHORTBOW_I: return ITEM_AMETHYST_ARROW;
         case ITEM_DARK_BOW: case ITEM_TWISTED_BOW: return ITEM_DRAGON_ARROWS;
@@ -132,7 +132,7 @@ static inline OsrsDefenceRolls osrs_defence_rolls_from(const EquipmentBonuses* b
         melee * (b->defence_ranged + 64), magic * (b->defence_magic + 64)};
 }
 
-static inline OsrsDefenceRolls osrs_defence_rolls(const uint8_t equipment[NUM_GEAR_SLOTS], const OsrsThreatActor* who) {
+static inline OsrsDefenceRolls osrs_defence_rolls(const uint16_t equipment[NUM_GEAR_SLOTS], const OsrsThreatActor* who) {
     EquipmentBonuses b;
     osrs_sum_equipment_bonuses(equipment, &b);
     return osrs_defence_rolls_from(&b, who);
@@ -151,10 +151,11 @@ static inline EquipmentBonuses osrs_equipment_bonuses_of_gear(const GearBonuses*
 
 /** One weapon in one loadout: its normal attack and its special. Rolls are attack rolls, to be set against OsrsDefenceRolls. */
 typedef struct {
-    uint8_t item, style, speed, dharok;
+    uint16_t item;
+    uint8_t style, speed, dharok;
     int8_t melee_type;          /* MeleeBonusType of the normal attack, -1 for ranged and magic */
     int att_roll, max_hit;      /* max_hit at full hitpoints: osrs_threat_max_hit_at scales a Dharok's */
-    uint8_t bolt, zcb;          /* ranged: the ammunition and whether it is fired from a Zaryte crossbow (bolt effects: osrs_threat_effect_max) */
+    uint16_t bolt; uint8_t zcb;          /* ranged: the ammunition and whether it is fired from a Zaryte crossbow (bolt effects: osrs_threat_effect_max) */
     int spec_cost;              /* special energy it costs; 0 with spec_hits > 0: a special that costs stacks (Behead) */
     int spec_hits, spec_max;    /* hits of one special (0: none) and the most all of them can deal */
     int spec_min;               /* least a landed special deals (Behead's minimum) */
@@ -164,11 +165,11 @@ typedef struct {
 } OsrsThreatWeapon;
 
 /** Loadout as wielded `weapon` makes it: the weapon slot, no shield under a two-hander, the assumed ammunition for a ranged weapon. */
-static inline void osrs_threat_loadout(const uint8_t equipment[NUM_GEAR_SLOTS], uint8_t weapon, uint8_t out[NUM_GEAR_SLOTS]) {
-    memcpy(out, equipment, NUM_GEAR_SLOTS);
+static inline void osrs_threat_loadout(const uint16_t equipment[NUM_GEAR_SLOTS], uint16_t weapon, uint16_t out[NUM_GEAR_SLOTS]) {
+    memcpy(out, equipment, NUM_GEAR_SLOTS * sizeof(uint16_t));
     out[GEAR_SLOT_WEAPON] = weapon;
     if (weapon != ITEM_NONE && item_is_two_handed(weapon)) out[GEAR_SLOT_SHIELD] = ITEM_NONE;
-    uint8_t ammo = osrs_ammo_assumption(weapon);
+    uint16_t ammo = osrs_ammo_assumption(weapon);
     if (ammo != ITEM_NONE) out[GEAR_SLOT_AMMO] = ammo;
 }
 
@@ -184,7 +185,7 @@ static inline int osrs_threat_melee_attack(const EquipmentBonuses* b, int type) 
 
 /** The weapon `weapon` for bonuses `b` of a loadout that wields it (weapon row included, shield and ammunition as the loadout has them); `dharok` says the loadout is
  * a full Dharok's set. The two callers: osrs_threat_weapon (sums a loadout) and osrs_threat_weapon_swapped (derives it from what is worn). */
-static inline OsrsThreatWeapon osrs_threat_weapon_core(const EquipmentBonuses* bonuses, int dharok_set, uint8_t ammo, uint8_t weapon, const OsrsThreatActor* who) {
+static inline OsrsThreatWeapon osrs_threat_weapon_core(const EquipmentBonuses* bonuses, int dharok_set, uint16_t ammo, uint16_t weapon, const OsrsThreatActor* who) {
     const EquipmentBonuses b = *bonuses;
     int style = osrs_threat_style_of_weapon(weapon);
     OsrsThreatWeapon w;
@@ -252,8 +253,8 @@ static inline OsrsThreatWeapon osrs_threat_weapon_core(const EquipmentBonuses* b
 }
 
 /** The weapon `weapon` as `who` wields it in `equipment` (weapon slot overwritten; ITEM_NONE fights bare-handed): the loadout summed from scratch. */
-static inline OsrsThreatWeapon osrs_threat_weapon(const uint8_t equipment[NUM_GEAR_SLOTS], uint8_t weapon, const OsrsThreatActor* who) {
-    uint8_t loadout[NUM_GEAR_SLOTS];
+static inline OsrsThreatWeapon osrs_threat_weapon(const uint16_t equipment[NUM_GEAR_SLOTS], uint16_t weapon, const OsrsThreatActor* who) {
+    uint16_t loadout[NUM_GEAR_SLOTS];
     osrs_threat_loadout(equipment, weapon, loadout);
     EquipmentBonuses b;
     osrs_sum_equipment_bonuses(loadout, &b);
@@ -262,7 +263,7 @@ static inline OsrsThreatWeapon osrs_threat_weapon(const uint8_t equipment[NUM_GE
     return osrs_threat_weapon_core(&b, effects.dharok_piece_count >= 4, loadout[GEAR_SLOT_AMMO], weapon, who);
 }
 
-static inline void osrs_threat_bonus_item(EquipmentBonuses* b, uint8_t item, int sign) {
+static inline void osrs_threat_bonus_item(EquipmentBonuses* b, uint16_t item, int sign) {
     const Item* it = &ITEM_DATABASE[item];
     b->attack_stab += sign * it->attack_stab; b->attack_slash += sign * it->attack_slash; b->attack_crush += sign * it->attack_crush;
     b->attack_magic += sign * it->attack_magic; b->attack_ranged += sign * it->attack_ranged;
@@ -274,12 +275,12 @@ static inline void osrs_threat_bonus_item(EquipmentBonuses* b, uint8_t item, int
 
 /** osrs_threat_weapon for a fighter whose worn loadout is `equipment` with summed bonuses `worn` (e.g. a Player's cache) and `worn_dharok_armour` Dharok's pieces among
  * its armour: the weapon row swaps in, a two-hander takes the shield off, the assumed ammunition goes on: a handful of adds instead of summing the loadout again. */
-static inline OsrsThreatWeapon osrs_threat_weapon_swapped(const EquipmentBonuses* worn, int worn_dharok_armour, const uint8_t equipment[NUM_GEAR_SLOTS], uint8_t weapon,
+static inline OsrsThreatWeapon osrs_threat_weapon_swapped(const EquipmentBonuses* worn, int worn_dharok_armour, const uint16_t equipment[NUM_GEAR_SLOTS], uint16_t weapon,
         const OsrsThreatActor* who) {
-    uint8_t worn_weapon = equipment[GEAR_SLOT_WEAPON];
+    uint16_t worn_weapon = equipment[GEAR_SLOT_WEAPON];
     int dharok_set = worn_dharok_armour >= 3 && weapon != ITEM_NONE && (ITEM_DATABASE[weapon].effect_mask & OSRS_ITEM_EFFECT_DHAROK_PIECE);
     if (osrs_weapon_is_thrown(weapon) || osrs_weapon_is_thrown(worn_weapon)) { /* a thrown weapon drops the worn ammunition: not a delta */
-        uint8_t loadout[NUM_GEAR_SLOTS];
+        uint16_t loadout[NUM_GEAR_SLOTS];
         osrs_threat_loadout(equipment, weapon, loadout);
         EquipmentBonuses b;
         osrs_sum_equipment_bonuses(loadout, &b);
@@ -291,7 +292,7 @@ static inline OsrsThreatWeapon osrs_threat_weapon_swapped(const EquipmentBonuses
         osrs_threat_bonus_item(&b, weapon, 1);
         if (item_is_two_handed(weapon) && equipment[GEAR_SLOT_SHIELD] != ITEM_NONE) osrs_threat_bonus_item(&b, equipment[GEAR_SLOT_SHIELD], -1);
     }
-    uint8_t ammo = osrs_ammo_assumption(weapon);
+    uint16_t ammo = osrs_ammo_assumption(weapon);
     if (ammo != ITEM_NONE && equipment[GEAR_SLOT_AMMO] != ammo) {
         if (equipment[GEAR_SLOT_AMMO] != ITEM_NONE) osrs_threat_bonus_item(&b, equipment[GEAR_SLOT_AMMO], -1);
         osrs_threat_bonus_item(&b, ammo, 1);

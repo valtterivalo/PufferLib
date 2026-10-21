@@ -419,7 +419,7 @@ typedef struct {
     uint32_t body_model_ids[BODY_PART_COUNT];
     uint32_t item_model_ids[NUM_GEAR_SLOTS];
     uint8_t body_visible[BODY_PART_COUNT];
-    uint8_t item_visible[NUM_GEAR_SLOTS];
+    uint16_t item_visible[NUM_GEAR_SLOTS];
 } OsrsPlayerAppearance;
 
 #define OSRS_VISIBLE_EQUIP_SLOT_COUNT 9
@@ -492,7 +492,7 @@ static int item_render_is_two_handed(uint16_t item_id) {
 }
 
 static OsrsPlayerAppearance osrs_resolve_player_appearance(
-    const uint8_t equipped[NUM_GEAR_SLOTS]
+    const uint16_t equipped[NUM_GEAR_SLOTS]
 ) {
     OsrsPlayerAppearance out;
     memset(&out, 0, sizeof(out));
@@ -504,7 +504,7 @@ static OsrsPlayerAppearance osrs_resolve_player_appearance(
         out.item_model_ids[slot] = ITEM_RENDER_MODEL_MISSING;
     }
 
-    uint8_t weapon_index = equipped[GEAR_SLOT_WEAPON];
+    uint16_t weapon_index = equipped[GEAR_SLOT_WEAPON];
     int suppress_shield = 0;
     if (weapon_index < NUM_ITEMS) {
         uint16_t weapon_item_id = ITEM_DATABASE[weapon_index].item_id;
@@ -514,7 +514,7 @@ static OsrsPlayerAppearance osrs_resolve_player_appearance(
 
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
         if (slot == GEAR_SLOT_SHIELD && suppress_shield) continue;
-        uint8_t db_idx = equipped[slot];
+        uint16_t db_idx = equipped[slot];
         if (db_idx >= NUM_ITEMS) continue;
         out.hide_body_mask |= item_hide_body_mask(ITEM_DATABASE[db_idx].item_id);
     }
@@ -529,7 +529,7 @@ static OsrsPlayerAppearance osrs_resolve_player_appearance(
     for (int i = 0; i < OSRS_VISIBLE_EQUIP_SLOT_COUNT; i++) {
         int slot = OSRS_VISIBLE_EQUIP_SLOTS[i];
         if (slot == GEAR_SLOT_SHIELD && suppress_shield) continue;
-        uint8_t db_idx = equipped[slot];
+        uint16_t db_idx = equipped[slot];
         if (db_idx >= NUM_ITEMS) continue;
         uint16_t item_id = ITEM_DATABASE[db_idx].item_id;
         uint32_t model_id = item_to_wield_model(item_id);

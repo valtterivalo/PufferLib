@@ -596,8 +596,8 @@ typedef struct { int melee; int ranged; int magic; } OppSpecPlan;
 static OppSpecPlan opp_plan_specs(Player* self, Player* target, int dist) {
     int can_melee_range = (self->frozen_ticks > 0) ? (dist <= 1) : (dist <= 3);
     float target_hp_pct = (float)target->current_hitpoints / (float)target->base_hitpoints;
-    uint8_t ranged_spec = find_best_ranged_spec(self);
-    uint8_t magic_spec = find_best_magic_spec(self);
+    uint16_t ranged_spec = find_best_ranged_spec(self);
+    uint16_t magic_spec = find_best_magic_spec(self);
     int has_ranged_or_magic = (ranged_spec != ITEM_NONE || magic_spec != ITEM_NONE);
 
     OppSpecPlan plan;
@@ -1715,7 +1715,7 @@ static void opp_gmaul_combo(OsrsEnv* env, OpponentState* opp, int* actions) {
                            target->prayer != PRAYER_PROTECT_MELEE &&
                            can_spec_range);
 
-        uint8_t ranged_spec = find_best_ranged_spec(self);
+        uint16_t ranged_spec = find_best_ranged_spec(self);
         int should_ranged_spec = (ranged_spec != 0 &&
                                  target_hp_pct < opp->ko_threshold &&
                                  self->special_energy >= get_ranged_spec_cost(self->ranged_spec_weapon) &&
@@ -1789,7 +1789,7 @@ static void opp_range_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
     if (opp_should_skip_offensive(env, opp)) return;
 
     if (opp_attack_ready(self) && !eating) {
-        uint8_t ranged_spec = find_best_ranged_spec(self);
+        uint16_t ranged_spec = find_best_ranged_spec(self);
         int has_ranged_spec = (ranged_spec != 0);
         int ranged_spec_cost = has_ranged_spec
                                ? get_ranged_spec_cost(self->ranged_spec_weapon) : 100;

@@ -586,7 +586,7 @@ static int run_fight(Run* r, uint32_t seed, int exact, RiskfightState* state, Ri
             if (!him->inventory[i] && empty < 0) empty = i;
             if (osrs_item_content_metadata(him->inventory[i])->consumable_kind == OSRS_CONSUMABLE_ANGLERFISH) replace = i;
         }
-        uint8_t item = raw_id_to_item(raw);
+        uint16_t item = raw_id_to_item(raw);
         if (have || item == ITEM_NONE || him->equipment[GEAR_SLOT_WEAPON] == item) continue;
         if (empty >= 0) him->inventory[empty] = code;
         else if (replace >= 0) him->inventory[replace] = code;

@@ -17,7 +17,7 @@ static RiskfightContext context;
 
 static Player* us(void) { return &state.env.players[0]; }
 
-static const uint8_t OPENER[RF_DHAROK_SPECTATED_KITS] = {ITEM_VOIDWAKER, ITEM_VOIDWAKER, ITEM_AGS};
+static const uint16_t OPENER[RF_DHAROK_SPECTATED_KITS] = {ITEM_VOIDWAKER, ITEM_VOIDWAKER, ITEM_AGS};
 static const int HAS_MAUL[RF_DHAROK_SPECTATED_KITS] = {1, 0, 1};
 static const char* const NAME[RF_DHAROK_SPECTATED_KITS] = {"tentacle+VW+maul", "tentacle+VW", "tentacle+AGS+maul"};
 
@@ -28,7 +28,7 @@ static void reset_with(const RiskfightLoadout* kit, uint32_t seed) {
     context.loadout[0] = NULL;
 }
 
-static int slot_of(const Player* p, OsrsConsumableKind kind, uint8_t item) {
+static int slot_of(const Player* p, OsrsConsumableKind kind, uint16_t item) {
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
         if (osrs_inventory_cell_is_empty(&p->inventory_cells[slot])) continue;
         const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[slot]);
@@ -143,8 +143,8 @@ static void test_switch_spec_and_2h(int k) {
     assert(obs[RF_TACTICS_START + RF_TACTICS_CAN_WIELD_2H] == 1);
     assert(offered(&state, decision));
     /* Every two-hander of the bag wields once a cell is free. */
-    const uint8_t two_handers[] = {ITEM_DHAROKS_GREATAXE, ITEM_GRANITE_MAUL_ORNATE, ITEM_AGS};
-    for (size_t i = 0; i < sizeof(two_handers); i++) {
+    const uint16_t two_handers[] = {ITEM_DHAROKS_GREATAXE, ITEM_GRANITE_MAUL_ORNATE, ITEM_AGS};
+    for (size_t i = 0; i < sizeof(two_handers) / sizeof(*two_handers); i++) {
         int slot = slot_of(us(), OSRS_CONSUMABLE_NONE, two_handers[i]);
         if (slot < 0) continue;
         int wield[RF_HEADS] = {0};
@@ -239,8 +239,8 @@ static void test_server(int k, int free_cell) {
         assert(m == 3 && out[0].kind == GS_WIRE_CLICK_SLOT && out[0].arg == opener && out[1].kind == GS_WIRE_SPEC_TOGGLE && out[2].kind == GS_WIRE_ATTACK);
     }
     /* The two-handers: offered only with a free cell; the wield is a CLICK_SLOT on the weapon's own slot. */
-    const uint8_t two_handers[] = {ITEM_DHAROKS_GREATAXE, ITEM_GRANITE_MAUL_ORNATE, ITEM_AGS};
-    for (size_t i = 0; i < sizeof(two_handers); i++) {
+    const uint16_t two_handers[] = {ITEM_DHAROKS_GREATAXE, ITEM_GRANITE_MAUL_ORNATE, ITEM_AGS};
+    for (size_t i = 0; i < sizeof(two_handers) / sizeof(*two_handers); i++) {
         int slot = slot_of(p, OSRS_CONSUMABLE_NONE, two_handers[i]);
         if (slot < 0) continue;
         int wield[RF_HEADS] = {0};

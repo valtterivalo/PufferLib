@@ -45,7 +45,7 @@ enum {
 static const float RF_THREAT_PRIOR_FLOOR = 0.02f; /* a weapon the pool gives less than this chance does not take a slot */
 
 typedef struct {
-    uint8_t item;
+    uint16_t item;
     uint8_t shown;
     float p;
     OsrsThreatWeapon w;
@@ -58,8 +58,9 @@ typedef struct {
     int shown_count;
     int built_for_shown, built_stacks;
     int soul_held, soul_tick; /* his Soulreaper stacks as of the last swing with the axe (SoulStacks.java) */
-    uint8_t shield_seen, has_shield_seen; /* the last shield he wore: a one-handed weapon he is not holding is rated with it, the two-hander he holds now has pushed it off */
-    uint8_t key[NUM_GEAR_SLOTS];
+    uint16_t shield_seen;
+    uint8_t has_shield_seen; /* the last shield he wore: a one-handed weapon he is not holding is rated with it, the two-hander he holds now has pushed it off */
+    uint16_t key[NUM_GEAR_SLOTS];
     int valid, count;
     RiskfightThreatSlot slots[RF_THREAT_HIS_SLOTS];
     OsrsDefenceRolls his_defence;
@@ -74,7 +75,7 @@ static inline int riskfight_threat_stacks(const RiskfightThreat* t, int now) {
 }
 
 /** He swung `weapon` (a sim item index, ITEM_NONE for fists) at fight tick `tick`; `spec` says the swing had a special attack's animation. */
-static void riskfight_threat_note_swing(RiskfightThreat* t, uint8_t weapon, int tick, int spec) {
+static void riskfight_threat_note_swing(RiskfightThreat* t, uint16_t weapon, int tick, int spec) {
     if (weapon == ITEM_NONE) return;
     if (weapon == ITEM_SOULREAPER_AXE) {
         int held = spec ? 0 : riskfight_threat_stacks(t, tick + 1) + 1;
@@ -92,20 +93,20 @@ static void riskfight_threat_note_swing(RiskfightThreat* t, uint8_t weapon, int 
 
 /** Rebuilds the slots when what he wears, has shown or holds (stacks) changed since the last build. `equipment` is what the viewer sees of him (ring and ammunition
  * blank), `now` the fight tick the observation is read at. */
-static void riskfight_threat_refresh(RiskfightThreat* t, const uint8_t equipment[NUM_GEAR_SLOTS], int now) {
+static void riskfight_threat_refresh(RiskfightThreat* t, const uint16_t equipment[NUM_GEAR_SLOTS], int now) {
     int stacks = riskfight_threat_stacks(t, now);
-    if (t->valid && t->built_for_shown == t->shown_count && t->built_stacks == stacks && !memcmp(t->key, equipment, NUM_GEAR_SLOTS)) return;
+    if (t->valid && t->built_for_shown == t->shown_count && t->built_stacks == stacks && !memcmp(t->key, equipment, NUM_GEAR_SLOTS * sizeof(uint16_t))) return;
     t->built_stacks = stacks;
     if (equipment[GEAR_SLOT_SHIELD] != ITEM_NONE) { t->shield_seen = equipment[GEAR_SLOT_SHIELD]; t->has_shield_seen = 1; }
-    memcpy(t->key, equipment, NUM_GEAR_SLOTS);
+    memcpy(t->key, equipment, NUM_GEAR_SLOTS * sizeof(uint16_t));
     t->built_for_shown = t->shown_count;
     t->valid = 1;
     t->count = 0;
-    uint8_t items[RF_THREAT_HIS_SLOTS];
+    uint16_t items[RF_THREAT_HIS_SLOTS];
     uint8_t shown[RF_THREAT_HIS_SLOTS];
     float p[RF_THREAT_HIS_SLOTS];
     int n = 0;
-    uint8_t wielded = equipment[GEAR_SLOT_WEAPON];
+    uint16_t wielded = equipment[GEAR_SLOT_WEAPON];
     items[n] = wielded; p[n] = 1; shown[n] = 0; n++;
     /* The swung weapons besides the wielded one take the RF_THREAT_HIS_SLOTS - 1 slots after it, the most recent ones when more were swung (a kit like ours
      * carries five weapons or more: a fighter who swung five and wields a sixth has six), in the order he showed them. */
@@ -120,7 +121,7 @@ static void riskfight_threat_refresh(RiskfightThreat* t, const uint8_t equipment
         if (!known && n + taken < RF_THREAT_HIS_SLOTS) recent[taken++] = (uint8_t)index;
     }
     for (int j = taken - 1; j >= 0; j--) { items[n] = recent[j]; p[n] = 1; shown[n++] = 1; }
-    uint8_t prior_items[RF_THREAT_HIS_SLOTS];
+    uint16_t prior_items[RF_THREAT_HIS_SLOTS];
     float prior_p[RF_THREAT_HIS_SLOTS];
     int prior_n = riskfight_pool_prior_memo(equipment, prior_items, prior_p, RF_THREAT_HIS_SLOTS);
     for (int i = 0; i < prior_n && n < RF_THREAT_HIS_SLOTS; i++) {
@@ -135,8 +136,8 @@ static void riskfight_threat_refresh(RiskfightThreat* t, const uint8_t equipment
         t->slots[i].shown = shown[i];
         OsrsThreatActor who = osrs_threat_actor_assumed(osrs_threat_style_of_weapon(items[i]));
         who.soul_stacks = stacks;
-        uint8_t worn[NUM_GEAR_SLOTS];
-        memcpy(worn, equipment, NUM_GEAR_SLOTS);
+        uint16_t worn[NUM_GEAR_SLOTS];
+        memcpy(worn, equipment, NUM_GEAR_SLOTS * sizeof(uint16_t));
         if (worn[GEAR_SLOT_SHIELD] == ITEM_NONE && t->has_shield_seen) worn[GEAR_SLOT_SHIELD] = t->shield_seen;
         t->slots[i].w = osrs_threat_weapon(worn, items[i], &who);
     }
@@ -153,9 +154,9 @@ static OsrsThreatActor riskfight_threat_actor_of(const Player* p) {
 
 /** The weapons of our bag that take an OURS slot after the wielded one: distinct, ascending by item index, at most RF_THREAT_OURS_SLOTS - 1. Feed every bag weapon to
  * riskfight_threat_note_bag_weapon while the inventory is walked anyway. */
-typedef struct { uint8_t item[RF_THREAT_OURS_SLOTS - 1]; int count; } RiskfightBagWeapons;
+typedef struct { uint16_t item[RF_THREAT_OURS_SLOTS - 1]; int count; } RiskfightBagWeapons;
 
-static inline void riskfight_threat_note_bag_weapon(RiskfightBagWeapons* bag, uint8_t item) {
+static inline void riskfight_threat_note_bag_weapon(RiskfightBagWeapons* bag, uint16_t item) {
     int at = 0;
     while (at < bag->count && bag->item[at] < item) at++;
     if (at < bag->count && bag->item[at] == item) return;
@@ -174,7 +175,7 @@ static inline void riskfight_threat_write_stacks(const Player* p, const Riskfigh
 
 /** What `p` wears, summed (the Player's cache when it is current, else summed here), and the Dharok pieces of it besides the wielded weapon. */
 static void riskfight_threat_worn(const Player* p, EquipmentBonuses* worn, int* dharok_armour) {
-    uint8_t wielded = p->equipped[GEAR_SLOT_WEAPON];
+    uint16_t wielded = p->equipped[GEAR_SLOT_WEAPON];
     if (!p->slot_gear_dirty) {
         *worn = osrs_equipment_bonuses_of_gear(&p->slot_cached_bonuses);
         *dharok_armour = p->equipment_effect_profile.dharok_piece_count;
@@ -198,7 +199,7 @@ static inline int riskfight_threat_his_hp_upper(int bar_ratio) {
 }
 
 /** Our weapon `item` as an OURS row rates it. `his_hp_upper` is -1 until a ranged weapon needed it (a bolt's effect reads it); the first ranged weapon fills it in. */
-static OsrsThreatWeapon riskfight_threat_ours_weapon(const Player* p, const EquipmentBonuses* worn, int dharok_armour, const OsrsThreatActor* us, uint8_t item,
+static OsrsThreatWeapon riskfight_threat_ours_weapon(const Player* p, const EquipmentBonuses* worn, int dharok_armour, const OsrsThreatActor* us, uint16_t item,
     int bar_ratio, int* his_hp_upper) {
     OsrsThreatWeapon w = osrs_threat_weapon_swapped(worn, dharok_armour, p->equipped, item, us);
     if (w.style == ATTACK_STYLE_RANGED && *his_hp_upper < 0) *his_hp_upper = riskfight_threat_his_hp_upper(bar_ratio);
@@ -209,7 +210,7 @@ static OsrsThreatWeapon riskfight_threat_ours_weapon(const Player* p, const Equi
  * spec_max 0 for a weapon with none. */
 typedef struct { int max, spec_max; } RiskfightOurMaxes;
 
-static RiskfightOurMaxes riskfight_threat_our_maxes(const Player* p, uint8_t item, int bar_ratio) {
+static RiskfightOurMaxes riskfight_threat_our_maxes(const Player* p, uint16_t item, int bar_ratio) {
     EquipmentBonuses worn;
     int dharok_armour, his_hp_upper = -1;
     riskfight_threat_worn(p, &worn, &dharok_armour);
@@ -225,7 +226,7 @@ static void riskfight_threat_write(const Player* p, const RiskfightBagWeapons* b
     OsrsThreatActor us = riskfight_threat_actor_of(p);
     EquipmentBonuses worn;
     int dharok_armour;
-    uint8_t wielded = p->equipped[GEAR_SLOT_WEAPON];
+    uint16_t wielded = p->equipped[GEAR_SLOT_WEAPON];
     riskfight_threat_worn(p, &worn, &dharok_armour);
     OsrsDefenceRolls ours = osrs_defence_rolls_from(&worn, &us);
     int his_hp_lower = -1, his_hp_upper = -1;
@@ -254,7 +255,7 @@ static void riskfight_threat_write(const Player* p, const RiskfightBagWeapons* b
     /* Ours: the wielded weapon, then the bag's weapons in item order. */
     float* block = out + RF_THREAT_OURS_OFFSET;
     for (int i = 0; i <= bag->count; i++) {
-        uint8_t item = i == 0 ? wielded : bag->item[i - 1];
+        uint16_t item = i == 0 ? wielded : bag->item[i - 1];
         OsrsThreatWeapon w = riskfight_threat_ours_weapon(p, &worn, dharok_armour, &us, item, bar_ratio, &his_hp_upper);
         float* o = block + i * RF_THREAT_OURS_WIDTH;
         o[0] = 1;

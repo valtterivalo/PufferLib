@@ -58,16 +58,16 @@ static const char* const KIT_NAMES[KITS] = {"live (VW, maul)", "VW", "VW pies", 
 static Player* us(Env* env) { return &env->state.env.players[0]; }
 
 /** The canonical bag entry + 1 of `pick` items in our bag (0: none). */
-static int entry_of(Env* env, int (*pick)(uint8_t)) {
+static int entry_of(Env* env, int (*pick)(uint16_t)) {
     const Player* p = us(env);
     const RiskfightBagOrder order = riskfight_bag_order(p);
     for (int e = 0; e < OSRS_INVENTORY_SIZE; e++)
         if (pick(osrs_inventory_cell_metadata(&p->inventory_cells[order.slot[e]])->item_idx)) return e + 1;
     return 0;
 }
-static int is_maul(uint8_t item) { return pvp_is_maul(item); }
-static int is_opener(uint8_t item) { return item == ITEM_VOIDWAKER || item == ITEM_AGS; }
-static uint8_t item_at(Env* env, int entry) {
+static int is_maul(uint16_t item) { return pvp_is_maul(item); }
+static int is_opener(uint16_t item) { return item == ITEM_VOIDWAKER || item == ITEM_AGS; }
+static uint16_t item_at(Env* env, int entry) {
     return osrs_inventory_cell_metadata(&us(env)->inventory_cells[riskfight_bag_order(us(env)).slot[entry - 1]])->item_idx;
 }
 
@@ -86,7 +86,7 @@ static int maul_line(Env* env, const int* base, int k, int gated, int* out) {
     const int holding = pvp_is_maul(p->equipped[GEAR_SLOT_WEAPON]);
     const int entry = holding ? 0 : entry_of(env, is_maul);
     if (!holding && !entry) return WHY_OTHER;
-    const uint8_t maul = holding ? p->equipped[GEAR_SLOT_WEAPON] : item_at(env, entry);
+    const uint16_t maul = holding ? p->equipped[GEAR_SLOT_WEAPON] : item_at(env, entry);
     if (k < 1 || p->special_energy < k * osrs_spec_cost(maul)) return WHY_ENERGY;
     memcpy(out, base, RF_HEADS * sizeof(int));
     out[RF_WEAPON] = entry;
@@ -113,7 +113,7 @@ static int opener_line(Env* env, const int* base, int* out) {
     const int holding = is_opener(p->equipped[GEAR_SLOT_WEAPON]);
     const int entry = holding ? 0 : entry_of(env, is_opener);
     if ((!holding && !entry) || pvp_is_maul(p->equipped[GEAR_SLOT_WEAPON])) return WHY_ENERGY;
-    const uint8_t opener = holding ? p->equipped[GEAR_SLOT_WEAPON] : item_at(env, entry);
+    const uint16_t opener = holding ? p->equipped[GEAR_SLOT_WEAPON] : item_at(env, entry);
     if (p->special_energy < osrs_spec_cost(opener) + osrs_spec_cost(ITEM_GRANITE_MAUL_ORNATE)) return WHY_ENERGY;
     memcpy(out, base, RF_HEADS * sizeof(int));
     out[RF_WEAPON] = entry;

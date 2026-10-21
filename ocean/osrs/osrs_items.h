@@ -69,7 +69,7 @@ typedef struct {
 /* Rows after the fixed table hold items the sim has no hand-written row for, priced from their stats at run time (gearswapper/gs_stat_items.h
  * fills them from the Java item table: bonuses, speed, style, two-handedness; no special attack, no effects). The table is rewritten only at a
  * request boundary (osrs_stat_items_clear), never while worlds run. */
-#define OSRS_STAT_ITEM_SLOTS 38 /* NUM_ITEMS + slots must stay below ITEM_NONE (255); 38 is the floor scripts/gen_osrs_item_rows.py keeps */
+#define OSRS_STAT_ITEM_SLOTS 40 /* NUM_ITEMS + slots must stay below ITEM_NONE; 40 is the floor scripts/gen_osrs_item_rows.py keeps */
 #include "osrs_items_generated.h"
 
 static int osrs_stat_item_count;
@@ -193,16 +193,30 @@ static inline uint16_t osrs_item_canonical_raw_id(uint16_t raw) {
 #undef OSRS_CANONICAL_GEAR_CASE
 }
 
-static inline const Item* get_item(uint8_t item_index) {
+/** One-byte item code of the observations that carry the raw index: an index as is, ITEM_NONE as 255. Aborts on an index past 254. */
+static inline int osrs_item_byte_code(uint16_t item_index) {
+    if (item_index == ITEM_NONE) return 255;
+    if (item_index >= 255) {
+        fprintf(stderr, "item index %u has no one-byte code\n", item_index);
+        abort();
+    }
+    return item_index;
+}
+
+static inline uint16_t osrs_item_from_byte_code(int code) {
+    return code == 255 ? ITEM_NONE : (uint16_t)code;
+}
+
+static inline const Item* get_item(uint16_t item_index) {
     if (!osrs_item_row_valid(item_index)) return NULL;
     return &ITEM_DATABASE[item_index];
 }
 
-static inline int item_supports_ancient_autocast(uint8_t item_index) {
+static inline int item_supports_ancient_autocast(uint16_t item_index) {
     return item_index == ITEM_KODAI_WAND || item_index == ITEM_DRAGON_HUNTER_WAND;
 }
 
-static inline int get_item_attack_style(uint8_t item_index) {
+static inline int get_item_attack_style(uint16_t item_index) {
     switch (item_index) {
         case ITEM_WHIP:
         case ITEM_DRAGON_SCIMITAR:
@@ -261,15 +275,15 @@ static inline int get_item_attack_style(uint8_t item_index) {
     }
 }
 
-static inline int item_is_two_handed(uint8_t item_index) {
+static inline int item_is_two_handed(uint16_t item_index) {
     if (!osrs_item_row_valid(item_index)) return 0;
     return ITEM_DATABASE[item_index].slot == SLOT_WEAPON &&
            ITEM_DATABASE[item_index].two_handed;
 }
 
-static inline uint8_t osrs_suppress_shield_for_two_handed_weapon(
-    uint8_t weapon_item,
-    uint8_t shield_item
+static inline uint16_t osrs_suppress_shield_for_two_handed_weapon(
+    uint16_t weapon_item,
+    uint16_t shield_item
 ) {
     return item_is_two_handed(weapon_item) ? ITEM_NONE : shield_item;
 }

@@ -18,7 +18,7 @@ static const int WORN_OF_GEAR[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_LEGS] = 7, [GEAR_SLOT_HANDS] = 9, [GEAR_SLOT_FEET] = 10, [GEAR_SLOT_RING] = 12, [GEAR_SLOT_AMMO] = 13,
 };
 
-static int raw_of_item(uint8_t item) { return item == ITEM_NONE ? -1 : ITEM_DATABASE[item].item_id; }
+static int raw_of_item(uint16_t item) { return item == ITEM_NONE ? -1 : ITEM_DATABASE[item].item_id; }
 
 static void observer_register_items(void) {
     static int done;
@@ -154,7 +154,7 @@ static void observer_stakes(Observer* ob) {
 }
 
 static int attack_animation(const Player* p) {
-    uint8_t weapon = p->equipped[GEAR_SLOT_WEAPON];
+    uint16_t weapon = p->equipped[GEAR_SLOT_WEAPON];
     if (p->used_special_this_tick) {
         if (weapon == ITEM_VOIDWAKER) return ANIM_VW_SPEC_ID;
         if (pvp_is_maul(weapon)) return ANIM_MAUL_SPEC_ID;

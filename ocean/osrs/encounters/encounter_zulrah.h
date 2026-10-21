@@ -304,7 +304,7 @@ static_assert(ZUL_HEAD_OFFENSIVE == ZUL_NUM_ACTION_HEADS - 1,
 #define ZUL_GEAR_TIER_UNIFORM 1
 #define ZUL_GEAR_TIER_WEIGHTED 2
 
-static const uint8_t ZUL_MAGE_LOADOUT[ZUL_NUM_GEAR_TIERS][NUM_GEAR_SLOTS] = {
+static const uint16_t ZUL_MAGE_LOADOUT[ZUL_NUM_GEAR_TIERS][NUM_GEAR_SLOTS] = {
     { ITEM_MYSTIC_HAT, ITEM_GOD_CAPE, ITEM_GLORY, ITEM_AMETHYST_ARROW,
       ITEM_TRIDENT_OF_SWAMP, ITEM_BOOK_OF_DARKNESS, ITEM_MYSTIC_TOP, ITEM_MYSTIC_BOTTOM,
       ITEM_BARROWS_GLOVES, ITEM_MYSTIC_BOOTS, ITEM_RING_OF_RECOIL },
@@ -316,7 +316,7 @@ static const uint8_t ZUL_MAGE_LOADOUT[ZUL_NUM_GEAR_TIERS][NUM_GEAR_SLOTS] = {
       ITEM_CONFLICTION_GAUNTLETS, ITEM_AVERNIC_TREADS, ITEM_RING_OF_SUFFERING_RI },
 };
 
-static const uint8_t ZUL_RANGE_LOADOUT[ZUL_NUM_GEAR_TIERS][NUM_GEAR_SLOTS] = {
+static const uint16_t ZUL_RANGE_LOADOUT[ZUL_NUM_GEAR_TIERS][NUM_GEAR_SLOTS] = {
     { ITEM_BLESSED_COIF, ITEM_AVAS_ACCUMULATOR, ITEM_GLORY, ITEM_AMETHYST_ARROW,
       ITEM_MAGIC_SHORTBOW_I, ITEM_NONE, ITEM_BLACK_DHIDE_BODY, ITEM_BLACK_DHIDE_CHAPS,
       ITEM_BARROWS_GLOVES, ITEM_MYSTIC_BOOTS, ITEM_RING_OF_RECOIL },
@@ -510,7 +510,7 @@ typedef struct {
 
     Log log;
 } ZulrahState;
-static_assert(sizeof(ZulrahState) == 12976, "ZulrahState serialized layout");
+static_assert(sizeof(ZulrahState) == 13096, "ZulrahState serialized layout");
 
 static void zul_set_npc_anim_event(ZulrahState* s, int anim_id, int duration_ticks) {
     osrs_npc_primary_anim_event_set(
@@ -2329,7 +2329,7 @@ static void zul_seed_inventory_cells(ZulrahState* s) {
         s->player.inventory_cells[i] = osrs_inventory_cell_empty();
     int cell = 0;
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        uint8_t item = ZUL_RANGE_LOADOUT[s->gear_tier][slot];
+        uint16_t item = ZUL_RANGE_LOADOUT[s->gear_tier][slot];
         if (item == ITEM_NONE || item == s->player.equipped[slot]) continue;
         s->player.inventory_cells[cell++] = osrs_inventory_cell_from_item(item);
     }
@@ -2376,7 +2376,7 @@ static void zul_reset(EncounterState* state, EncounterContext* context, uint32_t
     s->gear_tier = zul_sample_gear_tier(s);
 
     s->player.entity_type = ENTITY_PLAYER;
-    memset(s->player.equipped, ITEM_NONE, NUM_GEAR_SLOTS);
+    memset(s->player.equipped, ITEM_NONE, NUM_GEAR_SLOTS * sizeof(uint16_t));
     encounter_init_maxed_player_combat_stats(&s->player, ZUL_PLAYER_PRAYER);
     s->player.x = ZUL_PLAYER_START_X;
     s->player.y = ZUL_PLAYER_START_Y;
@@ -2393,7 +2393,7 @@ static void zul_reset(EncounterState* state, EncounterContext* context, uint32_t
     }
     osrs_interaction_init(&s->interaction);
     encounter_apply_loadout(&s->player, ZUL_MAGE_LOADOUT[s->gear_tier], GEAR_MAGE);
-    const uint8_t* loadouts[] = {
+    const uint16_t* loadouts[] = {
         ZUL_MAGE_LOADOUT[s->gear_tier],
         ZUL_RANGE_LOADOUT[s->gear_tier],
     };
@@ -2685,7 +2685,7 @@ static int zul_first_cell_with_kind(
     return -1;
 }
 
-static int zul_cell_with_item(const ZulrahState* s, uint8_t item_idx) {
+static int zul_cell_with_item(const ZulrahState* s, uint16_t item_idx) {
     for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++)
         if (osrs_inventory_cell_item_index(
                 &s->player.inventory_cells[cell]) == item_idx) return cell;
@@ -2693,10 +2693,10 @@ static int zul_cell_with_item(const ZulrahState* s, uint8_t item_idx) {
 }
 
 static void zul_heuristic_gear_swap(
-    const ZulrahState* s, int* actions, const uint8_t* loadout
+    const ZulrahState* s, int* actions, const uint16_t* loadout
 ) {
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        uint8_t want = loadout[slot];
+        uint16_t want = loadout[slot];
         if (want == ITEM_NONE || s->player.equipped[slot] == want) continue;
         int cell = zul_cell_with_item(s, want);
         if (cell >= 0) actions[ZUL_HEAD_EQUIP_SLOT(slot)] = cell + 1;
@@ -2786,7 +2786,7 @@ static void zul_heuristic_actions(ZulrahState* s, int* actions) {
     if (s->zulrah_visible && !s->is_diving) {
         AttackStyle want_style = s->current_form == ZUL_FORM_BLUE
             ? ATTACK_STYLE_RANGED : ATTACK_STYLE_MAGIC;
-        const uint8_t* want_loadout = s->current_form == ZUL_FORM_BLUE
+        const uint16_t* want_loadout = s->current_form == ZUL_FORM_BLUE
             ? ZUL_RANGE_LOADOUT[s->gear_tier] : ZUL_MAGE_LOADOUT[s->gear_tier];
         if (zul_player_equipped_attack_style(s) != want_style) {
             zul_heuristic_gear_swap(s, actions, want_loadout);
@@ -3016,7 +3016,7 @@ static void zul_emit_player_projectile_profile(
     int sequence_count
 ) {
     if (!profile || profile->projectile_model_id <= 0) {
-        uint8_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
+        uint16_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
         int item_id = weapon < NUM_ITEMS ? ITEM_DATABASE[weapon].item_id : -1;
         fprintf(stderr, "zulrah: missing player projectile model for item %d style %d\n",
             item_id, style);
@@ -3056,7 +3056,7 @@ static void zul_emit_player_attack_projectiles(ZulrahState* s, EncounterOverlay*
         return;
     }
 
-    uint8_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
+    uint16_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
     int style = s->player_attack_style_id;
     if (style == ATTACK_STYLE_MAGIC) {
         const OsrsCombatProjectileProfile* profile = NULL;

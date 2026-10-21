@@ -15,11 +15,11 @@
  * spec_lo..spec_hi); unknown_items the composition slots whose raw id has no item row, worn as empty. */
 #include "../encounters/encounter_riskfight.h"
 
-static int load(const int comp[12], uint8_t equipment[NUM_GEAR_SLOTS]) {
+static int load(const int comp[12], uint16_t equipment[NUM_GEAR_SLOTS]) {
     static const int GEAR_OF_COMP[12] = {GEAR_SLOT_HEAD, GEAR_SLOT_CAPE, GEAR_SLOT_NECK, GEAR_SLOT_WEAPON, GEAR_SLOT_BODY, GEAR_SLOT_SHIELD, -1, GEAR_SLOT_LEGS, -1,
         GEAR_SLOT_HANDS, GEAR_SLOT_FEET, -1};
     int unknown = 0;
-    memset(equipment, ITEM_NONE, NUM_GEAR_SLOTS);
+    memset(equipment, ITEM_NONE, NUM_GEAR_SLOTS * sizeof(uint16_t));
     for (int k = 0; k < 12; k++) {
         if (GEAR_OF_COMP[k] < 0 || comp[k] < 0) continue;
         int item = osrs_item_index_from_raw_id(comp[k]);
@@ -37,7 +37,7 @@ int main(void) {
         for (int k = 0; k < 12; k++) if (scanf("%d", &d[k]) != 1) { fprintf(stderr, "risk_laws: short query\n"); return 2; }
         int weapon = weapon_raw < 0 ? ITEM_NONE : osrs_item_index_from_raw_id(weapon_raw);
         if (weapon < 0) { printf("unknown_weapon\n"); continue; }
-        uint8_t att[NUM_GEAR_SLOTS], def[NUM_GEAR_SLOTS];
+        uint16_t att[NUM_GEAR_SLOTS], def[NUM_GEAR_SLOTS];
         int unknown = load(a, att) + load(d, def);
         OsrsThreatActor who = osrs_threat_actor_assumed(osrs_threat_style_of_weapon((uint8_t)weapon));
         OsrsThreatWeapon w = osrs_threat_weapon(att, (uint8_t)weapon, &who);

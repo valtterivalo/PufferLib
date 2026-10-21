@@ -16,7 +16,7 @@ typedef struct {
 
 static const SeedPriors DEFAULT_PRIORS = {0.35f, 12, 4, 3, 2, 1};
 
-typedef struct { uint8_t main, vw, maul, ammo; } HisKit;
+typedef struct { uint16_t main; uint8_t vw, maul; uint16_t ammo; } HisKit;
 
 static HisKit his_kit(const Tape* tape) {
     const TapeTick* first = tape_tick(tape, tape->lo);
@@ -306,7 +306,7 @@ static int tape_snapshot_construct(const Tape* tape, int t, const SeedPriors* pr
     us->hitpoints = tick->hp;
     us->vengeance_sacks = tick->sacks;
 
-    uint8_t his_weapon = tick->opponent_gear[3] < 0 ? ITEM_NONE : raw_id_to_item(tick->opponent_gear[3]);
+    uint16_t his_weapon = tick->opponent_gear[3] < 0 ? ITEM_NONE : raw_id_to_item(tick->opponent_gear[3]);
     RiskfightLoadout* him = &out->loadout[1];
     for (int i = 0; i < NUM_GEAR_SLOTS; i++) him->equipment[i] = ITEM_NONE;
     for (int i = 0; i < tick->opponent_gear_count; i++)
@@ -318,9 +318,9 @@ static int tape_snapshot_construct(const Tape* tape, int t, const SeedPriors* pr
     int recoil = tick->recoil_evidence > 0 || uniform(rng) < priors->recoil_ring;
     him->equipment[GEAR_SLOT_RING] = recoil ? ITEM_RING_OF_RECOIL : ITEM_NONE;
     int slot = 0;
-    uint8_t carried[] = {kit.main, kit.vw ? ITEM_VOIDWAKER : ITEM_NONE, kit.maul ? ITEM_GRANITE_MAUL_ORNATE : ITEM_NONE,
-        two_handed ? (uint8_t)shield : ITEM_NONE};
-    for (size_t i = 0; i < sizeof(carried); i++)
+    uint16_t carried[] = {kit.main, kit.vw ? ITEM_VOIDWAKER : ITEM_NONE, kit.maul ? ITEM_GRANITE_MAUL_ORNATE : ITEM_NONE,
+        two_handed ? (uint16_t)shield : ITEM_NONE};
+    for (size_t i = 0; i < sizeof(carried) / sizeof(*carried); i++)
         if (carried[i] != ITEM_NONE && carried[i] != his_weapon) him->inventory[slot++] = osrs_inventory_content_code_from_item(carried[i]);
     const struct { OsrsConsumableKind kind; int doses, count; } supplies[] = {
         {OSRS_CONSUMABLE_ANGLERFISH, 0, priors->anglerfish}, {OSRS_CONSUMABLE_KARAMBWAN, 0, priors->karambwan},

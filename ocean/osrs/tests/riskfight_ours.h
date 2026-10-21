@@ -26,14 +26,14 @@ static int slot_with_kind(const Player* p, OsrsConsumableKind kind, int* count) 
     return first;
 }
 
-static int slot_with_item(const Player* p, int (*matches)(uint8_t)) {
+static int slot_with_item(const Player* p, int (*matches)(uint16_t)) {
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
-        uint8_t item = osrs_inventory_cell_metadata(&p->inventory_cells[slot])->item_idx;
+        uint16_t item = osrs_inventory_cell_metadata(&p->inventory_cells[slot])->item_idx;
         if (item != ITEM_NONE && matches(item)) return slot;
     }
     return -1;
 }
-static int is_voidwaker(uint8_t item) { return item == ITEM_VOIDWAKER; }
+static int is_voidwaker(uint16_t item) { return item == ITEM_VOIDWAKER; }
 
 static void command(HumanInput* hi, HumanCommand c) { human_input_queue_command(hi, c); }
 static HumanCommand click_command(int slot) { return (HumanCommand){.kind = HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK, .inventory_slot = slot}; }

@@ -736,7 +736,7 @@ static inline int osrs_combat_visual_special_fallback_anim(uint16_t item_id) {
 }
 
 static inline int osrs_combat_visual_weapon_attack_anim_for_stance(
-    uint8_t item_db_idx,
+    uint16_t item_db_idx,
     AttackStyle style,
     int stance_idx,
     int is_special,
@@ -759,7 +759,7 @@ static inline int osrs_combat_visual_weapon_attack_anim_for_stance(
 }
 
 static inline int osrs_combat_visual_weapon_attack_anim_for_fight_style(
-    uint8_t item_db_idx,
+    uint16_t item_db_idx,
     AttackStyle style,
     FightStyle fight_style,
     int is_special,
@@ -820,7 +820,7 @@ static inline const OsrsCombatProjectileProfile* osrs_combat_projectile_profile(
 }
 
 static inline const OsrsCombatProjectileProfile* osrs_combat_visual_ranged_projectile_profile(
-    uint8_t item_db_idx, OsrsCombatProjectileVisual fallback
+    uint16_t item_db_idx, OsrsCombatProjectileVisual fallback
 ) {
     if (item_db_idx >= NUM_ITEMS) return osrs_combat_projectile_profile(fallback);
     uint16_t item_id = ITEM_DATABASE[item_db_idx].item_id;
@@ -839,7 +839,7 @@ static inline const OsrsCombatProjectileProfile* osrs_combat_visual_ranged_proje
 }
 
 static inline const OsrsCombatProjectileProfile* osrs_combat_visual_ranged_special_projectile_profile(
-    uint8_t item_db_idx
+    uint16_t item_db_idx
 ) {
     if (item_db_idx >= NUM_ITEMS) return NULL;
     const OsrsCombatVisualRow* special =
@@ -858,7 +858,7 @@ static inline int osrs_combat_visual_item_is_powered_staff(uint16_t item_id) {
 }
 
 static inline OsrsCombatProjectileVisual osrs_combat_visual_magic_projectile(
-    uint8_t item_db_idx
+    uint16_t item_db_idx
 ) {
     if (item_db_idx >= NUM_ITEMS) return OSRS_COMBAT_PROJECTILE_NONE;
     return osrs_combat_visual_item_is_powered_staff(
@@ -868,7 +868,7 @@ static inline OsrsCombatProjectileVisual osrs_combat_visual_magic_projectile(
 }
 
 static inline const OsrsCombatProjectileProfile* osrs_combat_visual_magic_projectile_profile(
-    uint8_t item_db_idx
+    uint16_t item_db_idx
 ) {
     if (item_db_idx >= NUM_ITEMS) {
         return osrs_combat_projectile_profile(OSRS_COMBAT_PROJECTILE_NONE);
@@ -884,7 +884,7 @@ static inline const OsrsCombatProjectileProfile* osrs_combat_visual_magic_projec
 }
 
 static inline int osrs_combat_visual_magic_attack_anim_for_fight_style(
-    uint8_t item_db_idx, FightStyle fight_style, int is_special, int fallback_anim_id
+    uint16_t item_db_idx, FightStyle fight_style, int is_special, int fallback_anim_id
 ) {
     if (item_db_idx >= NUM_ITEMS) return fallback_anim_id;
     if (!osrs_combat_visual_item_is_powered_staff(

@@ -200,7 +200,7 @@ static inline int osrs_write_shared_observations(
     }
 
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        uint8_t item = player->equipped[slot];
+        uint16_t item = player->equipped[slot];
         uint16_t content_code = item == ITEM_NONE
             ? 0 : osrs_inventory_content_code_from_item(item);
         obs[i++] = osrs_inventory_cell_obs_code_encode(content_code);

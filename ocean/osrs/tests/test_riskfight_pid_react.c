@@ -13,7 +13,7 @@ static RiskfightContext context;
 
 enum { SACK_SLOT = 1, HIS_HIT = 40 };
 
-static void reset(uint8_t weapon) {
+static void reset(uint16_t weapon) {
     riskfight_reset((EncounterState*)&state, (EncounterContext*)&context, 7);
     for (int side = 0; side < 2; side++) {
         Player* p = &state.env.players[side];
@@ -56,7 +56,7 @@ static void fix_his_hit(void) {
 /* `spec`: a Voidwaker special, else a greataxe swing. `we_hold`: who holds PID on his swing's tick. A first swing of his on tick 1 (we hold PID: it pairs on
  * tick 2, naming us) gives the viewer a reading; his second swing comes when his clock frees it. */
 static void react(int spec, int we_hold) {
-    const uint8_t weapon = spec ? ITEM_VOIDWAKER : ITEM_DHAROKS_GREATAXE;
+    const uint16_t weapon = spec ? ITEM_VOIDWAKER : ITEM_DHAROKS_GREATAXE;
     reset(weapon);
     Player* us = &state.env.players[0];
     Player* him = &state.env.players[1];

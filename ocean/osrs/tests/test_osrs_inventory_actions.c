@@ -33,7 +33,7 @@ static void count_items(
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
         if (p->equipped[slot] != ITEM_NONE) counts[p->equipped[slot]]++;
     for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
-        uint8_t item_idx = osrs_inventory_cell_item_index(&cells[i]);
+        uint16_t item_idx = osrs_inventory_cell_item_index(&cells[i]);
         if (item_idx != ITEM_NONE) counts[item_idx]++;
     }
 }
@@ -41,7 +41,7 @@ static void count_items(
 static void run_equip_storm(int trial) {
     Player p;
     memset(&p, 0, sizeof(p));
-    memset(p.equipped, ITEM_NONE, NUM_GEAR_SLOTS);
+    memset(p.equipped, ITEM_NONE, NUM_GEAR_SLOTS * sizeof(uint16_t));
     p.base_hitpoints = 99;
     p.current_hitpoints = 50;
     p.base_prayer = 99;
@@ -92,7 +92,7 @@ static void run_equip_storm(int trial) {
             return;
         }
 
-        uint8_t weapon = p.equipped[GEAR_SLOT_WEAPON];
+        uint16_t weapon = p.equipped[GEAR_SLOT_WEAPON];
         if (weapon != ITEM_NONE && item_is_two_handed(weapon)) {
             CHECK("two-handed weapon must never coexist with a shield",
                 p.equipped[GEAR_SLOT_SHIELD] == ITEM_NONE);
@@ -103,7 +103,7 @@ static void run_equip_storm(int trial) {
 static void run_drink_dose_check(void) {
     Player p;
     memset(&p, 0, sizeof(p));
-    memset(p.equipped, ITEM_NONE, NUM_GEAR_SLOTS);
+    memset(p.equipped, ITEM_NONE, NUM_GEAR_SLOTS * sizeof(uint16_t));
     p.base_hitpoints = 99;
     p.current_hitpoints = 99;
 
@@ -152,7 +152,7 @@ static void test_weapon_ranges(void) {
     const Item* dragon_dart = get_item(ITEM_DRAGON_DART);
     ASSERT_INT_EQ("dragon dart weapon range", dragon_dart->attack_range, 3);
 
-    uint8_t unarmed_loadout[NUM_GEAR_SLOTS];
+    uint16_t unarmed_loadout[NUM_GEAR_SLOTS];
     memset(unarmed_loadout, ITEM_NONE, sizeof(unarmed_loadout));
     EquipmentBonuses unarmed = {0};
     osrs_sum_equipment_bonuses(unarmed_loadout, &unarmed);
@@ -161,7 +161,7 @@ static void test_weapon_ranges(void) {
 }
 
 static void test_blowpipe_uses_loaded_dragon_darts(void) {
-    uint8_t loadout[NUM_GEAR_SLOTS];
+    uint16_t loadout[NUM_GEAR_SLOTS];
     memset(loadout, ITEM_NONE, sizeof(loadout));
     loadout[GEAR_SLOT_WEAPON] = ITEM_TOXIC_BLOWPIPE;
     loadout[GEAR_SLOT_AMMO] = ITEM_DRAGON_ARROWS;

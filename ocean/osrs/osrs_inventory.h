@@ -53,7 +53,7 @@ typedef struct {
     const Item* item;
     uint16_t raw_osrs_id;
     uint16_t next_content_code;
-    uint8_t item_idx;
+    uint16_t item_idx;
     int8_t gear_slot;
     uint8_t click_action;
     uint8_t consumable_kind;
@@ -135,7 +135,7 @@ static inline uint16_t osrs_inventory_content_code_from_raw_osrs_id(
 }
 #undef OSRS_RAW_CONTENT_CODE_CASE
 
-static inline uint16_t osrs_inventory_content_code_from_item(uint8_t item_idx) {
+static inline uint16_t osrs_inventory_content_code_from_item(uint16_t item_idx) {
     if (!osrs_item_row_valid(item_idx)) {
         fprintf(stderr, "inventory content: invalid item index %u\n", item_idx);
         abort();
@@ -186,7 +186,7 @@ static inline int osrs_inventory_cell_is_empty(const OsrsInventoryCell* cell) {
     return cell->content_code == 0;
 }
 
-static inline OsrsInventoryCell osrs_inventory_cell_from_item(uint8_t item_idx) {
+static inline OsrsInventoryCell osrs_inventory_cell_from_item(uint16_t item_idx) {
     if (item_idx == ITEM_NONE) return osrs_inventory_cell_empty();
     return osrs_inventory_cell_from_content_code(
         osrs_inventory_content_code_from_item(item_idx));
@@ -220,7 +220,7 @@ static inline OsrsInventoryIndex osrs_inventory_index(const OsrsInventoryCell* c
     return index;
 }
 
-static inline uint8_t osrs_inventory_cell_item_index(
+static inline uint16_t osrs_inventory_cell_item_index(
     const OsrsInventoryCell* cell
 ) {
     return osrs_inventory_cell_metadata(cell)->item_idx;
@@ -238,7 +238,7 @@ static inline uint8_t osrs_inventory_cell_dose_count(
     return osrs_inventory_cell_metadata(cell)->dose_count;
 }
 
-static inline int osrs_item_gear_slot(uint8_t item_idx) {
+static inline int osrs_item_gear_slot(uint16_t item_idx) {
     if (item_idx == ITEM_NONE) return -1;
     return osrs_item_content_metadata(
         osrs_inventory_content_code_from_item(item_idx))->gear_slot;

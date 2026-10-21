@@ -591,7 +591,7 @@ static void col_emit_player_attack_projectiles(
     if (!target->active)
         return;
 
-    uint8_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
+    uint16_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
     int target_size = col_npc_effective_size(target);
     int p_start_h = 64;
     int p_end_h = (int)(target_size * 0.5f * 128);

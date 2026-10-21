@@ -2,13 +2,13 @@
 #include <stdio.h>
 
 static void test_dharok_health_interval(void) {
-    uint8_t equipment[NUM_GEAR_SLOTS];
+    uint16_t equipment[NUM_GEAR_SLOTS];
     memset(equipment, ITEM_NONE, sizeof(equipment));
     equipment[GEAR_SLOT_HEAD] = ITEM_DHAROKS_HELM;
     equipment[GEAR_SLOT_BODY] = ITEM_DHAROKS_PLATEBODY;
     equipment[GEAR_SLOT_LEGS] = ITEM_DHAROKS_PLATELEGS;
     equipment[GEAR_SLOT_WEAPON] = ITEM_DHAROKS_GREATAXE;
-    uint8_t original[NUM_GEAR_SLOTS];
+    uint16_t original[NUM_GEAR_SLOTS];
     memcpy(original, equipment, sizeof(original));
     int strength = osrs_player_eff_level(118, 1.23f, 3);
     int previous_max = 1000;
@@ -31,7 +31,7 @@ static void test_dharok_health_interval(void) {
 }
 
 static void test_energy_and_same_tick_specials(void) {
-    uint8_t equipment[NUM_GEAR_SLOTS];
+    uint16_t equipment[NUM_GEAR_SLOTS];
     memset(equipment, ITEM_NONE, sizeof(equipment));
     int strength = osrs_player_eff_level(118, 1.23f, 3);
     const int weapons[] = {ITEM_VOIDWAKER, ITEM_GRANITE_MAUL, ITEM_GRANITE_MAUL_ORNATE};

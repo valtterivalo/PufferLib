@@ -63,7 +63,7 @@ int main(void) {
     actions[RF_HEADS + RF_WEAPON] = 23;
     riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
     assert_consumption_visible(single);
-    assert(single[RF_OPPONENT_START + GEAR_SLOT_WEAPON] * RF_OBSERVATION_ITEM_SCALE == ITEM_DHAROKS_GREATAXE);
+    assert(osrs_item_from_byte_code((int)lroundf(single[RF_OPPONENT_START + GEAR_SLOT_WEAPON] * RF_OBSERVATION_ITEM_SCALE)) == ITEM_DHAROKS_GREATAXE);
     Player* p = &state.env.players[1];
     p->cast_veng_this_tick = 1;
     riskfight_observe_visible(&state, 0, 0);

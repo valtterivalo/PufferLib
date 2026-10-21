@@ -49,15 +49,16 @@ static void check_row(char* line, int order) {
     assert(it->item_id == raw && !strcmp(it->name, f[2]));
     assert(it->slot == slot_of(f[3]) && it->two_handed == atoi(f[4]));
     assert(it->attack_speed == atoi(f[5]) && it->attack_range == atoi(f[6]));
-    assert(get_item_attack_style((uint8_t)idx) == style_of(f[7]));
-    /* specials stay unmodelled until osrs_special_attacks.h has them; the Saradomin sword's is modelled there */
-    assert(osrs_spec_cost(idx) == (idx == ITEM_SARADOMIN_SWORD ? OSRS_SARADOMIN_LIGHTNING_COST : 0) && it->effect_mask == 0);
+    assert(get_item_attack_style((uint16_t)idx) == style_of(f[7]));
+    /* specials stay unmodelled until osrs_special_attacks.h has them; the Saradomin sword's, the Dragon warhammer's and the Tonalztics' are */
+    int modelled = idx == ITEM_SARADOMIN_SWORD || idx == ITEM_DRAGON_WARHAMMER || idx == ITEM_TONALZTICS_OF_RALOS;
+    assert((osrs_spec_cost(idx) > 0) == modelled && it->effect_mask == 0);
     const int16_t got[STAT_FIELDS] = {it->attack_stab, it->attack_slash, it->attack_crush, it->attack_magic, it->attack_ranged,
         it->defence_stab, it->defence_slash, it->defence_crush, it->defence_magic, it->defence_ranged,
         it->melee_strength, it->ranged_strength, it->magic_damage, it->prayer};
     for (int k = 0; k < STAT_FIELDS; k++) assert(got[k] == atoi(f[8 + k]));
-    if (it->slot == SLOT_WEAPON) assert(it->attack_speed > 0 && get_item_attack_style((uint8_t)idx) != ATTACK_STYLE_NONE);
-    else assert(it->attack_speed == 0 && it->attack_range == 0 && get_item_attack_style((uint8_t)idx) == ATTACK_STYLE_NONE);
+    if (it->slot == SLOT_WEAPON) assert(it->attack_speed > 0 && get_item_attack_style((uint16_t)idx) != ATTACK_STYLE_NONE);
+    else assert(it->attack_speed == 0 && it->attack_range == 0 && get_item_attack_style((uint16_t)idx) == ATTACK_STYLE_NONE);
     if (n >= 23 && f[22][0] >= '0' && f[22][0] <= '9') {          /* aliases column: comma separated raw ids */
         for (char* a = strtok(f[22], ","); a; a = strtok(NULL, ",")) {
             assert(osrs_item_index_from_raw_id(atoi(a)) == idx);

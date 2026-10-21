@@ -152,7 +152,7 @@ typedef struct {
 
     AnimModelState* anim_state;
 
-    uint8_t last_equipped[NUM_GEAR_SLOTS];
+    uint16_t last_equipped[NUM_GEAR_SLOTS];
     int     last_npc_def_id;
     int     needs_rebuild;
 } PlayerComposite;
@@ -516,7 +516,7 @@ static double render_scaled_frame_dt(RenderClient* rc, double frame_dt) {
     return frame_dt * (double)(tps / RENDER_DEFAULT_GAME_TICKS_PER_SECOND);
 }
 
-static int render_offhand_uses_shield_block_anim(uint8_t item_idx) {
+static int render_offhand_uses_shield_block_anim(uint16_t item_idx) {
     switch (item_idx) {
         case ITEM_DRAGON_DEFENDER:
         case ITEM_AVERNIC_DEFENDER:
@@ -2374,7 +2374,7 @@ static inline void flight_update_target_anchored_position(
     fp->pitch = orientation.pitch;
 }
 
-static inline RangedSpecWeapon render_pvp_ranged_spec_weapon_for_item(uint8_t weapon_db_idx) {
+static inline RangedSpecWeapon render_pvp_ranged_spec_weapon_for_item(uint16_t weapon_db_idx) {
     switch (weapon_db_idx) {
         case ITEM_DARK_BOW:           return RANGED_SPEC_DARK_BOW;
         case ITEM_HEAVY_BALLISTA:     return RANGED_SPEC_BALLISTA;
@@ -3289,7 +3289,7 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
 
         if (!has_encounter_overlay) {
             if (p->attack_style_this_tick == ATTACK_STYLE_MAGIC) {
-                uint8_t wpn = p->equipped[GEAR_SLOT_WEAPON];
+                uint16_t wpn = p->equipped[GEAR_SLOT_WEAPON];
                 int dist = render_pvp_distance_to_target(p, t);
                 int duration_ticks = pvp_magic_hit_delay(dist) * 30;
                 const OsrsCombatProjectileProfile* profile =
@@ -3309,7 +3309,7 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
             }
 
             if (p->attack_style_this_tick == ATTACK_STYLE_RANGED) {
-                uint8_t wpn = p->equipped[GEAR_SLOT_WEAPON];
+                uint16_t wpn = p->equipped[GEAR_SLOT_WEAPON];
                 int dist = render_pvp_distance_to_target(p, t);
                 const OsrsCombatProjectileProfile* special_profile =
                     p->used_special_this_tick
@@ -3343,7 +3343,7 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
                 att = &rc->entities[0];
             }
 
-            uint8_t att_wpn = att->equipped[GEAR_SLOT_WEAPON];
+            uint16_t att_wpn = att->equipped[GEAR_SLOT_WEAPON];
             const OsrsCombatProjectileProfile* att_magic_profile =
                 osrs_combat_visual_magic_projectile_profile(att_wpn);
             int att_is_powered_staff = att_magic_profile &&
@@ -4052,7 +4052,7 @@ static int render_select_primary(RenderEntity* p) {
             if (special_anim != OSRS_COMBAT_VISUAL_NO_ANIMATION) return special_anim;
         }
         if (p->attack_style_this_tick == ATTACK_STYLE_MAGIC) {
-            uint8_t wpn = p->equipped[GEAR_SLOT_WEAPON];
+            uint16_t wpn = p->equipped[GEAR_SLOT_WEAPON];
             return osrs_combat_visual_magic_attack_anim_for_fight_style(
                 wpn, p->fight_style, p->used_special_this_tick, ANIM_SEQ_CAST_BARRAGE);
         }
@@ -4101,7 +4101,7 @@ static uint32_t render_item_anim_id(uint16_t item_id, RenderItemAnimKind kind) {
 static int render_weapon_anim_or_fallback(
     RenderClient* rc, const RenderEntity* p, RenderItemAnimKind kind, int fallback
 ) {
-    uint8_t weapon_idx = p->equipped[GEAR_SLOT_WEAPON];
+    uint16_t weapon_idx = p->equipped[GEAR_SLOT_WEAPON];
     if (weapon_idx >= NUM_ITEMS) return fallback;
 
     uint16_t item_id = ITEM_DATABASE[weapon_idx].item_id;
@@ -4276,7 +4276,7 @@ static void composite_rebuild(
 
     composite_recreate_anim_state(comp);
 
-    memcpy(comp->last_equipped, p->equipped, NUM_GEAR_SLOTS);
+    memcpy(comp->last_equipped, p->equipped, NUM_GEAR_SLOTS * sizeof(uint16_t));
     comp->needs_rebuild = 0;
 }
 
@@ -4443,7 +4443,7 @@ static void render_player_composite(
         }
     } else {
         if (comp->needs_rebuild ||
-            memcmp(comp->last_equipped, p->equipped, NUM_GEAR_SLOTS) != 0) {
+            memcmp(comp->last_equipped, p->equipped, NUM_GEAR_SLOTS * sizeof(uint16_t)) != 0) {
             composite_rebuild(comp, rc->model_cache, p);
         }
     }

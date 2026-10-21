@@ -94,7 +94,7 @@ static void test_timing_helper_matches_section8(void) {
     const AttackStyle styles[3] = {
         ATTACK_STYLE_MELEE, ATTACK_STYLE_RANGED, ATTACK_STYLE_MAGIC
     };
-    const uint8_t weapons[3] = {
+    const uint16_t weapons[3] = {
         ITEM_SCYTHE_OF_VITUR, ITEM_TWISTED_BOW, ITEM_TUMEKENS_SHADOW
     };
     const char* labels[3] = { "melee", "ranged", "magic" };

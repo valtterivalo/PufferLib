@@ -42,7 +42,7 @@ static int dharok_pieces_worn(void) {
     return n;
 }
 
-static int in_bag(uint8_t item) {
+static int in_bag(uint16_t item) {
     const Player* p = &state.env.players[0];
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
         if (osrs_inventory_cell_metadata(&p->inventory_cells[slot])->item_idx == item) return 1;
@@ -149,7 +149,7 @@ static void test_axe_swings_by_state(void) {
     reset(3);
     Player* p = &state.env.players[0];
     p->special_energy = 0;
-    uint8_t main = p->equipped[GEAR_SLOT_WEAPON];
+    uint16_t main = p->equipped[GEAR_SLOT_WEAPON];
     assert(main == ITEM_ABYSSAL_TENTACLE && in_bag(ITEM_DHAROKS_GREATAXE));
     int speed = ITEM_DATABASE[main].attack_speed;
     for (size_t c = 0; c < sizeof(CELLS) / sizeof(CELLS[0]); c++) {

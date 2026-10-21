@@ -189,7 +189,7 @@ static int test_obs_slot_for_npc(const ColosseumState* s, int npc_idx) {
     return -1;
 }
 
-static int test_find_inventory_cell_with_item(const ColosseumState* s, uint8_t item_idx) {
+static int test_find_inventory_cell_with_item(const ColosseumState* s, uint16_t item_idx) {
     for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++)
         if (osrs_inventory_cell_item_index(
                 &s->player.inventory_cells[i]) == item_idx) return i;
@@ -501,7 +501,7 @@ static void test_check_inventory_cut_equivalence_state(
 
 static int test_count_item_in_equipment_and_inventory(
     const ColosseumState* s,
-    uint8_t item_idx
+    uint16_t item_idx
 ) {
     int count = 0;
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
@@ -518,7 +518,7 @@ static int test_npc_covers_player(const ColosseumState* s, const ColoNPC* npc) {
         s->player.y >= npc->y && s->player.y < npc->y + size;
 }
 
-static uint8_t test_profile_spec_item(ColoLoadoutProfile profile, int kind) {
+static uint16_t test_profile_spec_item(ColoLoadoutProfile profile, int kind) {
     if (profile == COLO_LOADOUT_PROFILE_SPEEDRUN && kind == 1) return ITEM_DRAGON_CLAWS;
     if (profile == COLO_LOADOUT_PROFILE_SPEEDRUN && kind == 2) return ITEM_ELDER_MAUL;
     if (profile == COLO_LOADOUT_PROFILE_BEGINNER && kind == 1) return ITEM_SGS;
@@ -5455,8 +5455,8 @@ static void test_loadout_profiles_and_supplies(void) {
         test_find_inventory_cell_with_item(&s, ITEM_SGS) >= 0 &&
         test_find_inventory_cell_with_item(&s, ITEM_DRAGON_CLAWS) >= 0);
 
-    uint8_t beginner_sgs_without_defender[NUM_GEAR_SLOTS];
-    memcpy(beginner_sgs_without_defender, COLO_BEGINNER_MELEE_LOADOUT, NUM_GEAR_SLOTS);
+    uint16_t beginner_sgs_without_defender[NUM_GEAR_SLOTS];
+    memcpy(beginner_sgs_without_defender, COLO_BEGINNER_MELEE_LOADOUT, NUM_GEAR_SLOTS * sizeof(uint16_t));
     beginner_sgs_without_defender[GEAR_SLOT_WEAPON] = ITEM_SGS;
     beginner_sgs_without_defender[GEAR_SLOT_SHIELD] = ITEM_NONE;
     EncounterLoadoutStats beginner_sgs_expected;
@@ -5466,8 +5466,8 @@ static void test_loadout_profiles_and_supplies(void) {
     CHECK("beginner SGS spec stats exclude dragon defender bonuses",
         col_loadout_stats_equal(&beginner_sgs_spec, &beginner_sgs_expected));
 
-    uint8_t beginner_claws_without_defender[NUM_GEAR_SLOTS];
-    memcpy(beginner_claws_without_defender, COLO_BEGINNER_MELEE_LOADOUT, NUM_GEAR_SLOTS);
+    uint16_t beginner_claws_without_defender[NUM_GEAR_SLOTS];
+    memcpy(beginner_claws_without_defender, COLO_BEGINNER_MELEE_LOADOUT, NUM_GEAR_SLOTS * sizeof(uint16_t));
     beginner_claws_without_defender[GEAR_SLOT_WEAPON] = ITEM_DRAGON_CLAWS;
     beginner_claws_without_defender[GEAR_SLOT_SHIELD] = ITEM_NONE;
     EncounterLoadoutStats beginner_claws_without;
@@ -5481,8 +5481,8 @@ static void test_loadout_profiles_and_supplies(void) {
     CHECK("beginner claws spec stats keep dragon defender accuracy",
         beginner_claws_spec.attack_bonus > beginner_claws_without.attack_bonus);
 
-    uint8_t beginner_bowfa_without_defender[NUM_GEAR_SLOTS];
-    memcpy(beginner_bowfa_without_defender, COLO_BEGINNER_RANGED_LOADOUT, NUM_GEAR_SLOTS);
+    uint16_t beginner_bowfa_without_defender[NUM_GEAR_SLOTS];
+    memcpy(beginner_bowfa_without_defender, COLO_BEGINNER_RANGED_LOADOUT, NUM_GEAR_SLOTS * sizeof(uint16_t));
     beginner_bowfa_without_defender[GEAR_SLOT_SHIELD] = ITEM_NONE;
     EncounterLoadoutStats beginner_bowfa_legal_2h;
     encounter_compute_loadout_stats(beginner_bowfa_without_defender, ATTACK_STYLE_RANGED,
@@ -6676,7 +6676,7 @@ static void test_venator_bow_bounce_colosseum_integration(void) {
         return;
     }
 
-    uint8_t weapon_item = s.player.equipped[GEAR_SLOT_WEAPON];
+    uint16_t weapon_item = s.player.equipped[GEAR_SLOT_WEAPON];
     const EncounterLoadoutStats* ls = col_live_loadout_stats(&s);
     const OsrsEquipmentEffectProfile* effects = col_live_effects(&s);
     const ColoNPC* primary = &s.npcs[0];
@@ -6973,8 +6973,8 @@ static void test_magic_set_max_hit_math(void) {
 
     EncounterLoadoutStats untripled;
     {
-        uint8_t no_shadow[NUM_GEAR_SLOTS];
-        memcpy(no_shadow, COLO_SPEEDRUN_MAGIC_LOADOUT, NUM_GEAR_SLOTS);
+        uint16_t no_shadow[NUM_GEAR_SLOTS];
+        memcpy(no_shadow, COLO_SPEEDRUN_MAGIC_LOADOUT, NUM_GEAR_SLOTS * sizeof(uint16_t));
         no_shadow[GEAR_SLOT_WEAPON] = ITEM_TRIDENT_OF_SWAMP;
         encounter_compute_loadout_stats(no_shadow, ATTACK_STYLE_MAGIC,
             OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_ACCURATE, 34, &untripled);
@@ -7521,7 +7521,7 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
     int count = 0;
     col_fill_render_entities_ctx(
         (EncounterState*)&s, (EncounterContext*)&ctx, entities, 4, &count);
-    const uint8_t* const* loadouts = col_loadouts_for_profile(s.active_loadout_profile);
+    const uint16_t* const* loadouts = col_loadouts_for_profile(s.active_loadout_profile);
     CHECK("render player uses the active loadout weapon",
         count > 0 &&
         entities[0].equipped[GEAR_SLOT_WEAPON] ==
@@ -8052,7 +8052,7 @@ static void test_shared_inventory_tracks_gear_swaps(void) {
     for (int candidate = 0;
             candidate < COLO_INVENTORY_DISPLAY_SLOTS;
             candidate++) {
-        uint8_t item = osrs_inventory_cell_item_index(
+        uint16_t item = osrs_inventory_cell_item_index(
             &s.player.inventory_cells[candidate]);
         if (item == ITEM_NONE) continue;
         int gear_slot = osrs_item_gear_slot(item);
@@ -8199,7 +8199,7 @@ static void test_stage3_t1_inventory_ranged_weapon_swap(void) {
     ColosseumContext ctx;
     ColosseumState s;
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 501);
-    uint8_t melee_weapon = s.player.equipped[GEAR_SLOT_WEAPON];
+    uint16_t melee_weapon = s.player.equipped[GEAR_SLOT_WEAPON];
     int bow_cell = test_find_inventory_cell_with_item(&s, ITEM_TWISTED_BOW);
     int actions[COLO_NUM_ACTION_HEADS] = {0};
     test_click_inventory_cell_action_s(&s, actions, bow_cell);
@@ -8854,7 +8854,7 @@ static void test_modifier_draft_forces_pick(void) {
 
 static int colo_test_cell_of_named_item(const ColosseumState* s, const char* name) {
     for (int c = 0; c < OSRS_INVENTORY_SIZE; c++) {
-        uint8_t item =
+        uint16_t item =
             osrs_inventory_cell_item_index(&s->player.inventory_cells[c]);
         if (item == ITEM_NONE) continue;
         const Item* meta = get_item(item);
@@ -9022,7 +9022,7 @@ static void test_best_gear_cache_signatures(void) {
     for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++) {
         const OsrsItemContentMetadata* metadata =
             osrs_inventory_cell_metadata(&s.player.inventory_cells[cell]);
-        uint8_t item = metadata->item_idx;
+        uint16_t item = metadata->item_idx;
         if (item == ITEM_NONE) {
             if (metadata->raw_osrs_id != 0 && non_gear_cell < 0)
                 non_gear_cell = cell;

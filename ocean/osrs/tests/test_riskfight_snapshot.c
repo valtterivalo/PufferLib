@@ -9,7 +9,7 @@ static RiskfightState state, copy;
 static int bow_hits;
 static RiskfightContext context;
 
-static RiskfightLoadout fight_loadout(uint8_t weapon, uint8_t ammo, uint16_t first_slot) {
+static RiskfightLoadout fight_loadout(uint16_t weapon, uint16_t ammo, uint16_t first_slot) {
     RiskfightLoadout loadout = {.hitpoints = 99, .vengeance_sacks = 5};
     for (int i = 0; i < NUM_GEAR_SLOTS; i++) loadout.equipment[i] = ITEM_NONE;
     loadout.equipment[GEAR_SLOT_WEAPON] = weapon;

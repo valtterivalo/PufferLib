@@ -36,7 +36,7 @@ int main(void) {
         const float* t = obs + RF_THREAT_START;
         requests++;
         swung |= seen.swing_raw != -1;
-        uint8_t wielded = g_base.state.visible[0].equipment[GEAR_SLOT_WEAPON];
+        uint16_t wielded = g_base.state.visible[0].equipment[GEAR_SLOT_WEAPON];
         if (wielded == ITEM_BELLES_FOLLY) {
             /* Slot 0 is his weapon: Belle's folly, a melee weapon of speed 5 with no special; shown from the tick of his first swing. */
             assert(t[0] == 1 && t[5] == 1 && t[6] == 0 && t[7] == 0 && near(t[4], 0.5f, 1e-6f) && t[8] == 0);

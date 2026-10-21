@@ -278,7 +278,7 @@ static RiskfightLoadout sc_loadout(uint32_t* r, int ours) {
     l.hitpoints = 121; l.vengeance_sacks = 100; l.equipment[GEAR_SLOT_RING] = ITEM_RING_OF_RECOIL;
     memset(l.inventory, 0, sizeof(l.inventory));
     uint32_t weapon_roll = sc_draw(r, 0, 9);
-    uint8_t weapon = ours ? ITEM_VOIDWAKER : weapon_roll < 4 ? ITEM_VOIDWAKER : weapon_roll < 8 ? ITEM_ABYSSAL_TENTACLE : ITEM_DHAROKS_GREATAXE;
+    uint16_t weapon = ours ? ITEM_VOIDWAKER : weapon_roll < 4 ? ITEM_VOIDWAKER : weapon_roll < 8 ? ITEM_ABYSSAL_TENTACLE : ITEM_DHAROKS_GREATAXE;
     l.equipment[GEAR_SLOT_WEAPON] = weapon;
     if (item_is_two_handed(weapon)) l.equipment[GEAR_SLOT_SHIELD] = ITEM_NONE;
     /* He carries one karambwan: the sim lets him eat a second after 2 ticks, the plugin's HP-history meal model (3 ticks) then has no support and aborts. */

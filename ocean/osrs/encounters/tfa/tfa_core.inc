@@ -95,7 +95,7 @@ static void tfa_mark_stats_dirty(TfaPlayer* tp) {
 
 /* An empty weapon slot punches: melee. */
 static AttackStyle tfa_player_weapon_style(const TfaPlayer* tp) {
-    uint8_t weapon = tp->player.equipped[GEAR_SLOT_WEAPON];
+    uint16_t weapon = tp->player.equipped[GEAR_SLOT_WEAPON];
     AttackStyle style = (AttackStyle)get_item_attack_style(weapon);
     if (style == ATTACK_STYLE_MAGIC && !osrs_item_is_powered_staff(weapon)) return ATTACK_STYLE_MELEE;
     return style == ATTACK_STYLE_NONE ? ATTACK_STYLE_MELEE : style;
@@ -108,7 +108,7 @@ static FightStyle tfa_default_fight_style(AttackStyle style) {
 static const EncounterLoadoutStats* tfa_player_stats(TfaPlayer* tp) {
     if (tp->stats_dirty) {
         AttackStyle style = tfa_player_weapon_style(tp);
-        uint8_t weapon = tp->player.equipped[GEAR_SLOT_WEAPON];
+        uint16_t weapon = tp->player.equipped[GEAR_SLOT_WEAPON];
         int spell = style == ATTACK_STYLE_MAGIC ? osrs_powered_staff_base_damage(weapon, tp->player.current_magic) : 0;
         encounter_compute_player_equipped_stats(&tp->player, style, tfa_default_fight_style(style), spell, &tp->stats);
         tp->stats_dirty = 0;
@@ -278,7 +278,7 @@ static void tfa_npc_drain_defence(TfaNpc* n, const SpecResult* sr) {
 }
 
 /* A stunned NPC has no defence: the zero-hit fraction fell from 23% to 3% of player hits during Ezekiel's weakened window. */
-static int tfa_npc_def_roll(const TfaNpc* n, AttackStyle style, int melee_style, uint8_t weapon) {
+static int tfa_npc_def_roll(const TfaNpc* n, AttackStyle style, int melee_style, uint16_t weapon) {
     if (n->act == TFA_ACT_STUNNED) return 0;
     const MonsterStats* m = &MONSTER_DATABASE[n->monster];
     return encounter_npc_target_def_roll(

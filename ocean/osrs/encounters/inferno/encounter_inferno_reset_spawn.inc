@@ -37,11 +37,11 @@ static void inf_seed_inventory_cells(InfernoState* s) {
         s->player.inventory_cells[i] = osrs_inventory_cell_empty();
 
     int cell = 0;
-    const uint8_t* const* loadouts =
+    const uint16_t* const* loadouts =
         inf_loadouts_for_profile(s->active_loadout_profile);
     for (int g = 0; g < INF_NUM_WEAPON_SETS; g++) {
         for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-            uint8_t item = loadouts[g][slot];
+            uint16_t item = loadouts[g][slot];
             if (item == ITEM_NONE) continue;
             if (s->player.equipped[slot] == item) continue;
             int duplicate = 0;
@@ -378,7 +378,7 @@ static void inf_reset_ctx(EncounterState* state, EncounterContext* context, uint
         ctx->config.loadout_profile_mode,
         ctx->config.budget_loadout_fraction,
         &s->rng_state);
-    const uint8_t* const* loadouts =
+    const uint16_t* const* loadouts =
         inf_loadouts_for_profile(s->active_loadout_profile);
     encounter_apply_loadout(&s->player, loadouts[INF_GEAR_MAGE], GEAR_MAGE);
     InfSupplyDoses full_supplies = inf_full_starting_supplies();

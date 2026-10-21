@@ -23,9 +23,9 @@ static void test_initial_scale_and_purity(void) {
     assert(obs[23] == 0);
     assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 1] * RF_OBSERVATION_TILE_SCALE == 1);
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
-        assert(obs[RF_EQUIPPED_START + slot] * RF_OBSERVATION_ITEM_SCALE == state.env.players[0].equipped[slot]);
-    assert(obs[RF_OPPONENT_START + GEAR_SLOT_RING] * RF_OBSERVATION_ITEM_SCALE == ITEM_NONE);
-    assert(obs[RF_OPPONENT_START + GEAR_SLOT_AMMO] * RF_OBSERVATION_ITEM_SCALE == ITEM_NONE);
+        assert(osrs_item_from_byte_code((int)lroundf(obs[RF_EQUIPPED_START + slot] * RF_OBSERVATION_ITEM_SCALE)) == state.env.players[0].equipped[slot]);
+    assert(osrs_item_from_byte_code((int)lroundf(obs[RF_OPPONENT_START + GEAR_SLOT_RING] * RF_OBSERVATION_ITEM_SCALE)) == ITEM_NONE);
+    assert(osrs_item_from_byte_code((int)lroundf(obs[RF_OPPONENT_START + GEAR_SLOT_AMMO] * RF_OBSERVATION_ITEM_SCALE)) == ITEM_NONE);
 }
 
 

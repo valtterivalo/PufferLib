@@ -4,7 +4,7 @@ static inline int inf_jad_attack_timer(int wave) {
 }
 
 static AttackStyle inf_player_equipped_attack_style(const InfernoState* s) {
-    uint8_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
+    uint16_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
     AttackStyle style = (AttackStyle)get_item_attack_style(weapon);
     if (style == ATTACK_STYLE_MAGIC ||
         style == ATTACK_STYLE_RANGED ||
@@ -49,7 +49,7 @@ static const EncounterLoadoutStats* inf_current_loadout_stats(
     return &s->live_stats;
 }
 
-static int inf_player_weapon_is(const InfernoState* s, uint8_t item) {
+static int inf_player_weapon_is(const InfernoState* s, uint16_t item) {
     return s->player.equipped[GEAR_SLOT_WEAPON] == item;
 }
 
@@ -59,7 +59,7 @@ typedef struct {
     EncounterLoadoutStats stats;
     int spell;
     int is_barrage;
-    uint8_t weapon;
+    uint16_t weapon;
 } InfPlayerAttack;
 
 static int inf_spell_magic_level_requirement(int spell) {

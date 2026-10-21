@@ -376,7 +376,7 @@ static int test_occupied_inventory_cells(const InfernoState* s) {
     return occupied;
 }
 
-static int test_cell_holding_item(const InfernoState* s, uint8_t item) {
+static int test_cell_holding_item(const InfernoState* s, uint16_t item) {
     for (int c = 0; c < OSRS_INVENTORY_SIZE; c++) {
         if (osrs_inventory_cell_item_index(&s->player.inventory_cells[c]) == item)
             return c;
@@ -1551,7 +1551,7 @@ static int test_inventory_potion_vials(int doses) {
 static int test_player_slot_inventory_contains(
     const Player* p,
     int gear_slot,
-    uint8_t item
+    uint16_t item
 ) {
     for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++) {
         const OsrsItemContentMetadata* metadata =
@@ -6876,7 +6876,7 @@ static void test_inferno_human_equip_does_not_snap_loadout(void) {
     human_input_init(&input);
     input.enabled = 1;
 
-    uint8_t old_body = state->player.equipped[GEAR_SLOT_BODY];
+    uint16_t old_body = state->player.equipped[GEAR_SLOT_BODY];
     human_input_queue_equip_inventory_item(
         &input, 0, ITEM_TOXIC_BLOWPIPE, GEAR_SLOT_WEAPON);
 
@@ -6983,7 +6983,7 @@ static void test_inferno_human_primary_inventory_click_equips_item(void) {
     EncounterState* raw = inf_create();
     InfernoState* state = (InfernoState*)raw;
     inf_reset_ctx(raw, (EncounterContext*)&test_context, 123);
-    uint8_t old_weapon = state->player.equipped[GEAR_SLOT_WEAPON];
+    uint16_t old_weapon = state->player.equipped[GEAR_SLOT_WEAPON];
     state->player.inventory_cells[0] =
         osrs_inventory_cell_from_item(ITEM_TOXIC_BLOWPIPE);
 
@@ -7010,7 +7010,7 @@ static void test_inferno_fight_style_command_does_not_click_inventory(void) {
     EncounterState* raw = inf_create();
     InfernoState* state = (InfernoState*)raw;
     inf_reset_ctx(raw, (EncounterContext*)&test_context, 123);
-    uint8_t old_weapon = state->player.equipped[GEAR_SLOT_WEAPON];
+    uint16_t old_weapon = state->player.equipped[GEAR_SLOT_WEAPON];
     state->player.inventory_cells[0] =
         osrs_inventory_cell_from_item(ITEM_OSMUMTENS_FANG);
 
@@ -8214,7 +8214,7 @@ static void test_compact_transient_inventory_equipment_semantics(void) {
     }
 
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        uint8_t item = state.player.equipped[slot];
+        uint16_t item = state.player.equipped[slot];
         uint16_t content_code = item == ITEM_NONE
             ? 0 : osrs_inventory_content_code_from_item(item);
         ASSERT_FLOAT_NEAR("shared worn equipment code",

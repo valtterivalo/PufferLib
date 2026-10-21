@@ -33,7 +33,7 @@ static void reset(uint32_t seed, int motor) {
     assert(us()->equipped[GEAR_SLOT_WEAPON] == ITEM_VOIDWAKER);
 }
 
-static int first_slot_of(uint8_t item) {
+static int first_slot_of(uint16_t item) {
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
         if (!osrs_inventory_cell_is_empty(&us()->inventory_cells[slot]) && osrs_inventory_cell_metadata(&us()->inventory_cells[slot])->item_idx == item) return slot;
     return -1;

@@ -155,11 +155,11 @@ static void tfa_heuristic_actions(TfaState* s, int p, int* acts) {
     AttackStyle stance = barrage ? ATTACK_STYLE_MAGIC
         : s->room == TFA_ROOM_EZEKIEL ? ATTACK_STYLE_MELEE
         : ATTACK_STYLE_RANGED;
-    uint8_t spec_weapon = ITEM_NONE;
+    uint16_t spec_weapon = ITEM_NONE;
     if (stance == ATTACK_STYLE_MELEE && crossbow && tp->player.special_energy >= 50) spec_weapon = ITEM_DRAGON_WARHAMMER;
     if (stance == ATTACK_STYLE_RANGED && crossbow && tp->player.special_energy == 100) spec_weapon = ITEM_ZARYTE_CROSSBOW;
     if (stance == ATTACK_STYLE_RANGED && !crossbow && tp->player.special_energy == 100) spec_weapon = ITEM_TONALZTICS_OF_RALOS;
-    uint8_t wanted[NUM_GEAR_SLOTS];
+    uint16_t wanted[NUM_GEAR_SLOTS];
     memset(wanted, ITEM_NONE, sizeof(wanted));
     if (stance == ATTACK_STYLE_RANGED) {
         memcpy(wanted, TFA_KIT_WORN[tp->kit], sizeof(wanted));

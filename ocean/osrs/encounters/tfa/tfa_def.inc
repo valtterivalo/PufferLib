@@ -17,7 +17,7 @@ static void tfa_player_reset(TfaState* s, int p) {
     memset(tp, 0, sizeof(*tp));
     Player* pl = &tp->player;
     pl->entity_type = ENTITY_PLAYER;
-    memset(pl->equipped, ITEM_NONE, NUM_GEAR_SLOTS);
+    memset(pl->equipped, ITEM_NONE, NUM_GEAR_SLOTS * sizeof(uint16_t));
     encounter_init_maxed_player_combat_stats(pl, TFA_PLAYER_PRAYER);
     pl->special_energy = 100;
     osrs_item_effect_state_init(&pl->item_effect_state);
@@ -28,8 +28,8 @@ static void tfa_player_reset(TfaState* s, int p) {
     pl->current_ranged = TFA_BOOSTED_RANGED;
     encounter_apply_loadout(pl, TFA_KIT_WORN[tp->kit], GEAR_RANGED);
     int cell = 0;
-    for (size_t k = 0; k < sizeof(TFA_KIT_MELEE); k++) pl->inventory_cells[cell++] = osrs_inventory_cell_from_item(TFA_KIT_MELEE[k]);
-    for (size_t k = 0; k < sizeof(TFA_KIT_MAGIC); k++) pl->inventory_cells[cell++] = osrs_inventory_cell_from_item(TFA_KIT_MAGIC[k]);
+    for (size_t k = 0; k < sizeof(TFA_KIT_MELEE) / sizeof(*TFA_KIT_MELEE); k++) pl->inventory_cells[cell++] = osrs_inventory_cell_from_item(TFA_KIT_MELEE[k]);
+    for (size_t k = 0; k < sizeof(TFA_KIT_MAGIC) / sizeof(*TFA_KIT_MAGIC); k++) pl->inventory_cells[cell++] = osrs_inventory_cell_from_item(TFA_KIT_MAGIC[k]);
     for (int k = 0; k < 6 && TFA_KIT_SWITCHES[tp->kit][k] != ITEM_NONE; k++)
         pl->inventory_cells[cell++] = osrs_inventory_cell_from_item(TFA_KIT_SWITCHES[tp->kit][k]);
     for (size_t k = 0; k < sizeof(TFA_SUPPLIES) / sizeof(*TFA_SUPPLIES); k++) {

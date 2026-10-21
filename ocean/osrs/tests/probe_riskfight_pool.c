@@ -27,7 +27,7 @@ int main(int argc, char** argv) {
             riskfight_kit_apply(&state, 1, k, 0x9e3779b9u * (uint32_t)(e + 1));
             riskfight_observe_visible(&state, 0, 1);
             state.opponent_profile = &RISKFIGHT_HUMAN_PROFILES[e % RISKFIGHT_HUMAN_TRAIN_PROFILES];
-            uint8_t seen[RF_KIT_WEAPONS + 2] = {0};
+            uint16_t seen[RF_KIT_WEAPONS + 2] = {0};
             int seen_count = 0;
             while (!state.env.episode_over) {
                 int actions[2 * RF_HEADS] = {0};
@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
                 if (him->attack_style_this_tick != ATTACK_STYLE_NONE) {
                     swings++;
                     specs += him->used_special_this_tick;
-                    uint8_t w = him->equipped[GEAR_SLOT_WEAPON];
+                    uint16_t w = him->equipped[GEAR_SLOT_WEAPON];
                     int known = 0;
                     for (int j = 0; j < seen_count; j++) known |= seen[j] == w;
                     if (!known && seen_count < RF_KIT_WEAPONS + 2) { seen[seen_count++] = w; weapons++; }

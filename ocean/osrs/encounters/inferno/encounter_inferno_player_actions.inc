@@ -214,8 +214,8 @@ static void inf_player_pretick(InfernoState* s, InfernoContext* ctx, const int* 
 }
 
 static void inf_note_human_weapon_set(InfernoState* s) {
-    uint8_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
-    const uint8_t* const* loadouts =
+    uint16_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
+    const uint16_t* const* loadouts =
         inf_loadouts_for_profile(s->active_loadout_profile);
     for (int g = 0; g < INF_NUM_WEAPON_SETS; g++) {
         if (loadouts[g][GEAR_SLOT_WEAPON] == weapon) {
@@ -606,7 +606,7 @@ static void inf_tick_player_ctx(
             const EncounterLoadoutStats* ls = &attack.stats;
             int is_magic_attack = attack.is_barrage;
             int weapon_is_blowpipe = inf_player_weapon_is(s, ITEM_TOXIC_BLOWPIPE);
-            uint8_t player_weapon = attack.weapon;
+            uint16_t player_weapon = attack.weapon;
             int active_spell = attack.spell;
             int is_manual_dying_barrage =
                 target_npc->death_ticks > 0 && inf_is_barrage_spell(manual_spell);

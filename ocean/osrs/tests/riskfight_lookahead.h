@@ -59,7 +59,7 @@ static LaGearIssue la_gear_status(GsObservedGear gear) {
 }
 
 /* Declared ammo prior of the opponent's mapped weapon: the sim has no observation of his quiver (osrs_ammo_assumption, shared with the threat features). */
-static uint8_t la_ammo_prior(uint8_t weapon) { return osrs_ammo_assumption(weapon); }
+static uint16_t la_ammo_prior(uint16_t weapon) { return osrs_ammo_assumption(weapon); }
 
 /* Every observed slot is empty or an item the sim has; priors (la_ammo_prior, server gear priors) cover the rest. */
 static int la_gear_wearable(GsObservedGear gear) {
@@ -122,7 +122,7 @@ static void la_world(const RiskfightState* base, const Hist* base_hist, const La
             fprintf(stderr, "lookahead poison immunity does not cover horizon side=%d\n", side);
             abort();
         }
-        uint8_t weapon = side == 1 ? la_item_of(b->gear.weapon).item :
+        uint16_t weapon = side == 1 ? la_item_of(b->gear.weapon).item :
             base->env.players[side].equipped[GEAR_SLOT_WEAPON];
         if (weapon == ITEM_ABYSSAL_DAGGER_BH_P_PLUS_PLUS &&
             base->poison[1 - side].immunity_ticks <= g_la_horizon) {
@@ -855,13 +855,13 @@ static uint64_t la_fingerprint(const RiskfightState* w) {
     int parts[] = {him->current_hitpoints, him->special_energy, him->spec_regen_active, him->item_effect_state.special_regen_ticks, him->veng_active, him->veng_cooldown, him->attack_timer, him->attack_timer_uncapped, him->has_attack_timer,
         him->food_timer, him->potion_timer, him->karambwan_timer, him->current_attack, him->current_strength, w->env.pid_holder, w->visible[0].health_bar, (int)w->script_seed[1]};
     for (size_t i = 0; i < sizeof(parts) / sizeof(*parts); i++) { h ^= (uint64_t)(uint32_t)parts[i]; h *= 1099511628211ull; }
-    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) { h ^= him->equipped[slot]; h *= 1099511628211ull; }
-    int counts[256][5] = {{0}};
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) { h ^= him->equipped[slot] == ITEM_NONE ? 255u : him->equipped[slot]; h *= 1099511628211ull; }
+    int counts[NUM_ITEMS + OSRS_STAT_ITEM_SLOTS + 1][5] = {{0}}; /* ITEM_NONE counted at 255, as when it was the uint8 sentinel */
     for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
         const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&him->inventory_cells[i]);
-        counts[m->item_idx][m->dose_count > 4 ? 4 : m->dose_count] += 1 + 16 * (int)m->consumable_kind;
+        counts[m->item_idx == ITEM_NONE ? 255 : m->item_idx][m->dose_count > 4 ? 4 : m->dose_count] += 1 + 16 * (int)m->consumable_kind;
     }
-    for (int i = 0; i < 256; i++) for (int d = 0; d < 5; d++) if (counts[i][d]) { h ^= (uint64_t)(i * 5 + d) * 2654435761u + (uint64_t)counts[i][d]; h *= 1099511628211ull; }
+    for (int i = 0; i < NUM_ITEMS + OSRS_STAT_ITEM_SLOTS + 1; i++) for (int d = 0; d < 5; d++) if (counts[i][d]) { h ^= (uint64_t)(i * 5 + d) * 2654435761u + (uint64_t)counts[i][d]; h *= 1099511628211ull; }
     return h;
 }
 
@@ -973,7 +973,7 @@ static void la_task_compute(const LaJob* job, const LaStage* st, int t, Sim* wor
     if (job->trace) {
         const Player* h = &world.env.players[1];
         int vw = 0, mm = 0, food = 0;
-        for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) { uint8_t it = osrs_inventory_cell_metadata(&h->inventory_cells[i])->item_idx; vw += it == ITEM_VOIDWAKER; mm += is_maul_item(it); food += osrs_inventory_cell_metadata(&h->inventory_cells[i])->consumable_kind == OSRS_CONSUMABLE_ANGLERFISH; }
+        for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) { uint16_t it = osrs_inventory_cell_metadata(&h->inventory_cells[i])->item_idx; vw += it == ITEM_VOIDWAKER; mm += is_maul_item(it); food += osrs_inventory_cell_metadata(&h->inventory_cells[i])->consumable_kind == OSRS_CONSUMABLE_ANGLERFISH; }
         fprintf(stderr, "W hp %d en %d timer %d veng %d pid %d vw %d maul %d food %d eqw %d since %d warn %d\n", h->current_hitpoints, h->special_energy, h->attack_timer, h->veng_active, world.env.pid_holder, vw, mm, food, h->equipped[GEAR_SLOT_WEAPON], hist.since_eat, warning_since(&hist.warning));
     }
     uint32_t seed = osrs_lowbias32(draw + 17);

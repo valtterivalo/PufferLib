@@ -50,18 +50,18 @@ typedef struct {
 } SimConfig;
 
 static SimConfig CONFIGS[] = {
-    {"w01",  1, 1001ULL, 0xC0FFEE01ULL, 0x950110fe17377780ULL},
-    {"w02",  2, 1002ULL, 0xC0FFEE02ULL, 0x5e59d0055bf045dfULL},
-    {"w03",  3, 1003ULL, 0xC0FFEE03ULL, 0xbe9b8a0ce024b32cULL},
-    {"w04",  4, 1004ULL, 0xC0FFEE04ULL, 0x5807b7e0faac3f46ULL},
-    {"w05",  5, 1005ULL, 0xC0FFEE05ULL, 0x70885b02b9d77f26ULL},
-    {"w06",  6, 1006ULL, 0xC0FFEE06ULL, 0x14f0c45ecef91a5eULL},
-    {"w07",  7, 1007ULL, 0xC0FFEE07ULL, 0x196a2218d0aaf834ULL},
-    {"w08",  8, 1008ULL, 0xC0FFEE08ULL, 0x84a078d9599509e7ULL},
-    {"w09",  9, 1009ULL, 0xC0FFEE09ULL, 0xf49062edac6ec467ULL},
-    {"w10", 10, 1010ULL, 0xC0FFEE10ULL, 0x6beaab272a3ad8c6ULL},
-    {"w11", 11, 1011ULL, 0xC0FFEE11ULL, 0x783a810036b7526fULL},
-    {"w12", 12, 1012ULL, 0xC0FFEE12ULL, 0x96a6691d4109f2f2ULL},
+    {"w01",  1, 1001ULL, 0xC0FFEE01ULL, 0x753b8eddfd89976eULL},
+    {"w02",  2, 1002ULL, 0xC0FFEE02ULL, 0xd6fd7844d280712fULL},
+    {"w03",  3, 1003ULL, 0xC0FFEE03ULL, 0xd3e6f866bd8f914eULL},
+    {"w04",  4, 1004ULL, 0xC0FFEE04ULL, 0x2578d9fc99a17bfeULL},
+    {"w05",  5, 1005ULL, 0xC0FFEE05ULL, 0xb8bf39bc8cc78276ULL},
+    {"w06",  6, 1006ULL, 0xC0FFEE06ULL, 0x6e7c66809ae61ecaULL},
+    {"w07",  7, 1007ULL, 0xC0FFEE07ULL, 0x8e2566cd9af17c5aULL},
+    {"w08",  8, 1008ULL, 0xC0FFEE08ULL, 0x29e53c2997350a21ULL},
+    {"w09",  9, 1009ULL, 0xC0FFEE09ULL, 0x5cececc444254cafULL},
+    {"w10", 10, 1010ULL, 0xC0FFEE10ULL, 0x606e6f0d22eddb72ULL},
+    {"w11", 11, 1011ULL, 0xC0FFEE11ULL, 0xf7a2de96708758d7ULL},
+    {"w12", 12, 1012ULL, 0xC0FFEE12ULL, 0x64a2e0d596dae984ULL},
 };
 
 static void fill_actions(
@@ -134,7 +134,7 @@ static uint64_t hash_sim(uint64_t h, const ColosseumState* s, const float* mask)
     h = fnv_queue(h, &s->player_pending_hits);
     for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
         const OsrsInventoryCell* cell = &s->player.inventory_cells[i];
-        h = fnv_u8(h, osrs_inventory_cell_item_index(cell));
+        h = fnv_u8(h, (uint8_t)osrs_item_byte_code(osrs_inventory_cell_item_index(cell)));
         h = fnv_u16(h, osrs_inventory_cell_raw_osrs_id(cell));
         h = fnv_u8(h, osrs_inventory_cell_dose_count(cell));
     }

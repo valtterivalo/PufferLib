@@ -18,9 +18,9 @@ static void riskfight_record_attack(RiskfightState* s, int agent, int hits, int 
     RiskfightVisibleOpponent* visible = &s->visible[1 - agent];
     float* event = visible->events[s->env.tick % RF_HISTORY_TICKS];
     event[0] += hits;
-    event[1] = weapon;
+    event[1] = (float)osrs_item_byte_code((uint16_t)weapon);
     event[2] = p->attack_style_this_tick;
-    riskfight_threat_note_swing(&visible->threat, (uint8_t)weapon, s->env.tick, p->used_special_this_tick);
+    riskfight_threat_note_swing(&visible->threat, (uint16_t)weapon, s->env.tick, p->used_special_this_tick);
     visible->last_swing_item = weapon;
     visible->last_swing_tick = s->env.tick;
     if (p->used_special_this_tick) visible->last_spec_tick = s->env.tick;

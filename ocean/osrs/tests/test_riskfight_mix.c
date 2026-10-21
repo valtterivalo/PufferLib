@@ -356,7 +356,7 @@ static void test_swapped_seats_see_mirrored_observations(void) {
         Env* env = make_env(knobs, 2, 0, 500 + (unsigned)fight);
         RiskfightState* s = &env->state;
         s->death_price = 2.0f; /* seat 1's is 0.5: the swap inverts it exactly */
-        kits_differ += memcmp(s->env.players[0].equipped, s->env.players[1].equipped, NUM_GEAR_SLOTS) != 0;
+        kits_differ += memcmp(s->env.players[0].equipped, s->env.players[1].equipped, NUM_GEAR_SLOTS * sizeof(uint16_t)) != 0;
         uint32_t rng = 0x9e3779b9u + (uint32_t)fight;
         for (int tick = 0; tick < 70 && !s->env.episode_over; tick++) {
             int act[2 * RF_HEADS];
@@ -647,8 +647,8 @@ static void test_self_play_kit_symmetry(void) {
         for (int j = 0; j < i; j++) {
             if (RISKFIGHT_POOL[j].kit_class != RF_CLASS_DHAROK) continue;
             loadout_new &= memcmp(&RISKFIGHT_POOL_LOADOUT[i], &RISKFIGHT_POOL_LOADOUT[j], sizeof(RiskfightLoadout)) != 0;
-            setup_new &= memcmp(RISKFIGHT_POOL[i].equipment, RISKFIGHT_POOL[j].equipment, NUM_GEAR_SLOTS) || RISKFIGHT_POOL[i].weapon_count != RISKFIGHT_POOL[j].weapon_count ||
-                memcmp(RISKFIGHT_POOL[i].weapons, RISKFIGHT_POOL[j].weapons, RF_KIT_WEAPONS);
+            setup_new &= memcmp(RISKFIGHT_POOL[i].equipment, RISKFIGHT_POOL[j].equipment, NUM_GEAR_SLOTS * sizeof(uint16_t)) || RISKFIGHT_POOL[i].weapon_count != RISKFIGHT_POOL[j].weapon_count ||
+                memcmp(RISKFIGHT_POOL[i].weapons, RISKFIGHT_POOL[j].weapons, RF_KIT_WEAPONS * sizeof(uint16_t));
         }
         variants += loadout_new;
         setups += setup_new;

@@ -11,7 +11,7 @@ static RiskfightContext context;
 
 static int near(double a, double b, double eps) { return fabs(a - b) <= eps; }
 
-static void dress(Player* p, uint8_t weapon, uint8_t ammo) {
+static void dress(Player* p, uint16_t weapon, uint16_t ammo) {
     memset(p->equipped, ITEM_NONE, sizeof(p->equipped));
     p->equipped[GEAR_SLOT_WEAPON] = weapon;
     p->equipped[GEAR_SLOT_AMMO] = ammo;
@@ -21,7 +21,7 @@ static void dress(Player* p, uint8_t weapon, uint8_t ammo) {
 
 /* Attacker 0 and defender 1 of the hand examples: attack and strength 118 on Piety, aggressive, hitpoints 99; the defender 99 defence on Piety (x1.25) in a
  * Fighter torso: slash roll (floor(99 * 1.25) + 8) * (85 + 64) = 131 * 149 = 19519. */
-static void arena(uint8_t weapon, uint8_t ammo) {
+static void arena(uint16_t weapon, uint16_t ammo) {
     riskfight_init_context((EncounterContext*)&context);
     riskfight_reset((EncounterState*)&state, (EncounterContext*)&context, 99);
     Player* a = &state.env.players[0];
@@ -325,7 +325,7 @@ static void test_zcb_threat(void) {
     /* The block: a Zaryte crossbow with the assumed ruby dragon bolts (e) against our 99 hitpoints: normal max max(42, 21), Evoke max(42, 21) = 42 (the roll's max stays
      * above the effect), against 121 the effect is 26. Against 600 it would be 110, shown through osrs_threat_effect_max. */
     OsrsThreatActor ranged = osrs_threat_actor_assumed(ATTACK_STYLE_RANGED);
-    uint8_t eq[NUM_GEAR_SLOTS];
+    uint16_t eq[NUM_GEAR_SLOTS];
     memset(eq, ITEM_NONE, sizeof(eq));
     OsrsThreatWeapon zcb = osrs_threat_weapon(eq, ITEM_ZARYTE_CROSSBOW, &ranged);
     assert(zcb.bolt == ITEM_RUBY_DRAGON_BOLTS_E && zcb.zcb && zcb.max_hit == 42);

@@ -26,8 +26,8 @@ static void rd_comp_of(const Player* p, int comp[12]) {
 }
 
 static int rd_weapon_raw(const Player* p) { return p->equipped[GEAR_SLOT_WEAPON] == ITEM_NONE ? -1 : ITEM_DATABASE[p->equipped[GEAR_SLOT_WEAPON]].item_id; }
-static const char* rd_spec_token(uint8_t weapon) { return weapon == ITEM_VOIDWAKER ? "VW" : pvp_is_maul(weapon) ? "MAUL" : weapon == ITEM_AGS ? "AGS" : "SPEC"; }
-static int rd_spec_anim(uint8_t weapon) { return weapon == ITEM_VOIDWAKER ? 11275 : pvp_is_maul(weapon) ? 1667 : weapon == ITEM_AGS ? 7644 : 1062; }
+static const char* rd_spec_token(uint16_t weapon) { return weapon == ITEM_VOIDWAKER ? "VW" : pvp_is_maul(weapon) ? "MAUL" : weapon == ITEM_AGS ? "AGS" : "SPEC"; }
+static int rd_spec_anim(uint16_t weapon) { return weapon == ITEM_VOIDWAKER ? 11275 : pvp_is_maul(weapon) ? 1667 : weapon == ITEM_AGS ? 7644 : 1062; }
 
 /** The row of the tick just stepped: `s` after the step, `pre` before it. */
 static void rd_write_row(const RiskfightState* s, const RiskfightState* pre) {
@@ -50,7 +50,7 @@ static void rd_write_row(const RiskfightState* s, const RiskfightState* pre) {
         const int swing = spec || s->visible[1 - i].last_attack_tick == tick;
         const int shown_meal = riskfight_meal_visible(s, i);
         const int left = s->escaped[i] && !pre->escaped[i];
-        const uint8_t hand = p->equipped[GEAR_SLOT_WEAPON];
+        const uint16_t hand = p->equipped[GEAR_SLOT_WEAPON];
         char anims[64] = "";
         int n = 0;
         if (swing) n += snprintf(anims + n, sizeof(anims) - n, "%s%d", n ? "|" : "", spec ? rd_spec_anim(hand) : hand == ITEM_DHAROKS_GREATAXE ? 2067 : 390);

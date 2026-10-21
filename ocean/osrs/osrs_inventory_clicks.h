@@ -327,14 +327,14 @@ static inline void osrs_write_inventory_cell_affordance_features_compact(
 }
 
 
-static inline OsrsClickAction osrs_item_click_action(uint8_t item_idx) {
+static inline OsrsClickAction osrs_item_click_action(uint16_t item_idx) {
     if (item_idx == ITEM_NONE) return OSRS_CLICK_NONE;
     const OsrsItemContentMetadata* metadata = osrs_item_content_metadata(
         osrs_inventory_content_code_from_item(item_idx));
     return (OsrsClickAction)metadata->click_action;
 }
 
-static inline OsrsConsumableKind osrs_item_click_consumable_kind(uint8_t item_idx) {
+static inline OsrsConsumableKind osrs_item_click_consumable_kind(uint16_t item_idx) {
     if (item_idx == ITEM_NONE) return OSRS_CONSUMABLE_NONE;
     const OsrsItemContentMetadata* metadata = osrs_item_content_metadata(
         osrs_inventory_content_code_from_item(item_idx));

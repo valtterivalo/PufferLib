@@ -143,7 +143,7 @@ static void test_player_hit_delay_by_distance(void) {
         ZulrahState* s = fresh_state(0x11110000u + (uint32_t)d);
         place_at_distance(s, d);
 
-        uint8_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
+        uint16_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
         int is_thrown = (weapon == ITEM_TOXIC_BLOWPIPE);
 
         int expected_ranged = is_thrown

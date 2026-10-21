@@ -63,7 +63,7 @@ static void test_double_click_needs_target_or_third_click(void) {
 }
 
 static void test_ornate_and_ordinary_energy_costs(void) {
-    const uint8_t weapons[] = {ITEM_GRANITE_MAUL_ORNATE, ITEM_GRANITE_MAUL};
+    const uint16_t weapons[] = {ITEM_GRANITE_MAUL_ORNATE, ITEM_GRANITE_MAUL};
     /* Quick Smash costs 60% on the plain granite maul and 50% only with the ornate handle (wiki Granite_maul): from 100% energy the ornate maul
      * double-specs (two hits, 0 left), the plain maul lands one hit and keeps 40. */
     const int expected_hits[] = {2, 1};
@@ -86,7 +86,7 @@ static void test_ornate_and_ordinary_energy_costs(void) {
 /* The RL special head asks for one spec's energy per click: the double-click (action 2) is open at 100% for the ornate maul and closed for the plain one. His bar is
  * at its lowest so the KO gate (riskfight_threat_gates: k x spec max + in flight >= his bar's lower bound) passes for any k and only the energy decides. */
 static void test_special_mask_follows_the_maul_item(void) {
-    const uint8_t weapons[] = {ITEM_GRANITE_MAUL_ORNATE, ITEM_GRANITE_MAUL};
+    const uint16_t weapons[] = {ITEM_GRANITE_MAUL_ORNATE, ITEM_GRANITE_MAUL};
     const int cost[] = {50, 60};
     for (int i = 0; i < 2; i++) {
         reset();

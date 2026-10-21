@@ -194,7 +194,7 @@ static int next_content_code(const GenConsumable* consumable) {
 
 static void build_row(
     float* row,
-    uint8_t item_idx,
+    uint16_t item_idx,
     uint16_t raw_osrs_id,
     OsrsConsumableKind consumable_kind,
     uint8_t dose_count
@@ -217,7 +217,7 @@ static void emit_content_row(
     FILE* out,
     int code,
     const char* item_pointer,
-    uint8_t item_idx,
+    uint16_t item_idx,
     uint16_t raw_osrs_id,
     int gear_slot,
     OsrsClickAction click_action,
@@ -228,8 +228,11 @@ static void emit_content_row(
     const float* observation_row,
     int final_row
 ) {
-    fprintf(out, "    X(%d, %s, %u, %u, %d, %d, %d, %u, %d, %d",
-        code, item_pointer, item_idx, raw_osrs_id, gear_slot,
+    char item_text[16];
+    if (item_idx == ITEM_NONE) snprintf(item_text, sizeof(item_text), "ITEM_NONE");
+    else snprintf(item_text, sizeof(item_text), "%u", item_idx);
+    fprintf(out, "    X(%d, %s, %s, %u, %d, %d, %d, %u, %d, %d",
+        code, item_pointer, item_text, raw_osrs_id, gear_slot,
         (int)click_action, (int)consumable_kind, dose_count, next_code,
         attack_style);
     for (int feature = 0;
@@ -246,9 +249,9 @@ static void emit_gear_row(FILE* out, int item_idx) {
     char item_pointer[64];
     snprintf(item_pointer, sizeof(item_pointer), "&ITEM_DATABASE[%d]", item_idx);
     const Item* item = &ITEM_DATABASE[item_idx];
-    build_row(row, (uint8_t)item_idx, item->item_id, OSRS_CONSUMABLE_NONE, 0);
+    build_row(row, (uint16_t)item_idx, item->item_id, OSRS_CONSUMABLE_NONE, 0);
     emit_content_row(out, gear_code(item_idx), item_pointer,
-        (uint8_t)item_idx, item->item_id, gear_slot_for_item_slot(item->slot),
+        (uint16_t)item_idx, item->item_id, gear_slot_for_item_slot(item->slot),
         OSRS_CLICK_EQUIP, OSRS_CONSUMABLE_NONE, 0, 0,
         get_item_attack_style(item_idx), row, 0);
 }
