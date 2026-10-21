@@ -106,9 +106,9 @@ static FightStyle tfa_default_fight_style(AttackStyle style) {
 static const EncounterLoadoutStats* tfa_player_stats(TfaPlayer* tp) {
     if (tp->stats_dirty) {
         AttackStyle style = tfa_player_weapon_style(tp);
-        assert(style != ATTACK_STYLE_MAGIC && "tfa loadouts carry no magic weapon until powered staff damage is shared");
-        encounter_compute_player_equipped_stats(
-            &tp->player, style, tfa_default_fight_style(style), 0, &tp->stats);
+        uint8_t weapon = tp->player.equipped[GEAR_SLOT_WEAPON];
+        int spell = style == ATTACK_STYLE_MAGIC ? osrs_powered_staff_base_damage(weapon, tp->player.current_magic) : 0;
+        encounter_compute_player_equipped_stats(&tp->player, style, tfa_default_fight_style(style), spell, &tp->stats);
         tp->stats_dirty = 0;
     }
     return &tp->stats;

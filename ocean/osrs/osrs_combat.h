@@ -2,6 +2,7 @@
 #define OSRS_COMBAT_H
 
 #include <math.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
@@ -17,6 +18,20 @@ static inline MeleeStyle osrs_item_melee_style(uint8_t weapon_item) {
     if (weapon->attack_slash > best) { best = weapon->attack_slash; style = MELEE_STYLE_SLASH; }
     if (weapon->attack_crush > best) { style = MELEE_STYLE_CRUSH; }
     return style;
+}
+
+/** Built-in spell max hit of a powered staff at the given Magic level, before magic damage bonuses
+    (osrs-dps-calc PlayerVsNPCCalc: trident of the swamp m/3-2, sanguinesti m/3-1, shadow m/3+1, eye of ayak m/3-6). */
+static inline int osrs_powered_staff_base_damage(uint8_t weapon_item, int magic_level) {
+    int third = magic_level / 3;
+    switch (weapon_item) {
+        case ITEM_TRIDENT_OF_SWAMP: return third - 2 > 1 ? third - 2 : 1;
+        case ITEM_SANGUINESTI_STAFF: return third - 1 > 1 ? third - 1 : 1;
+        case ITEM_TUMEKENS_SHADOW: return third + 1;
+        case ITEM_EYE_OF_AYAK: return third - 6 > 1 ? third - 6 : 1;
+    }
+    fprintf(stderr, "osrs_powered_staff_base_damage: item %u is not a powered staff\n", weapon_item);
+    abort();
 }
 
 /** Standard OSRS accuracy formula over pre-computed rolls

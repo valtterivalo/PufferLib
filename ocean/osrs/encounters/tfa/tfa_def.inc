@@ -10,10 +10,16 @@ static const uint8_t TFA_LOADOUT_MELEE_SWITCH[NUM_GEAR_SLOTS] = {
     ITEM_NONE, ITEM_NONE, ITEM_NONE,
 };
 
+static const uint8_t TFA_LOADOUT_MAGIC_SWITCH[NUM_GEAR_SLOTS] = {
+    ITEM_NONE, ITEM_NONE, ITEM_OCCULT_NECKLACE, ITEM_NONE,
+    ITEM_TUMEKENS_SHADOW, ITEM_NONE, ITEM_ANCESTRAL_TOP, ITEM_ANCESTRAL_BOTTOM,
+    ITEM_NONE, ITEM_NONE, ITEM_NONE,
+};
+
 static const struct { uint16_t raw_osrs_id; int count; } TFA_SUPPLIES[] = {
     { 6685, 8 },
     { 3024, 6 },
-    { 13441, 12 },
+    { 13441, 8 },
 };
 
 static void tfa_player_reset(TfaState* s, int p) {
@@ -27,8 +33,8 @@ static void tfa_player_reset(TfaState* s, int p) {
     osrs_item_effect_state_init(&pl->item_effect_state);
     osrs_interaction_init(&pl->interaction);
     encounter_apply_loadout(pl, TFA_LOADOUT_RANGED, GEAR_RANGED);
-    const uint8_t* switches[] = { TFA_LOADOUT_MELEE_SWITCH };
-    encounter_populate_inventory(pl, switches, 1, NULL);
+    const uint8_t* switches[] = { TFA_LOADOUT_MELEE_SWITCH, TFA_LOADOUT_MAGIC_SWITCH };
+    encounter_populate_inventory(pl, switches, 2, NULL);
     int cell = 0;
     while (cell < OSRS_INVENTORY_SIZE && !osrs_inventory_cell_is_empty(&pl->inventory_cells[cell])) cell++;
     for (size_t k = 0; k < sizeof(TFA_SUPPLIES) / sizeof(*TFA_SUPPLIES); k++) {

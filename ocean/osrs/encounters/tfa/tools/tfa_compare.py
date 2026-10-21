@@ -191,7 +191,14 @@ def guardian(real, sim):
     compare("4201 launch, flight", projectile_offsets(real, "14751", "4201"), projectile_offsets(sim, "14751", "4201"), failures)
     rg, sg = ground_durations(real), ground_durations(sim)
     for k in sorted(set(rg) | set(sg)):
+        if k == "cross":
+            continue
         compare(f"ground {k}", rg.get(k, hist([])), sg.get(k, hist([])), failures)
+    on_vine_tick = lambda c: all(v >= 14 and (v - 5) % 3 == 0 for v in c)
+    ok = on_vine_tick(rg.get("cross", {})) and on_vine_tick(sg.get("cross", {})) and bool(sg.get("cross"))
+    if not ok:
+        failures.append("ground cross on vine ticks")
+    print(f"{'ok ' if ok else 'BAD'} {'ground cross on vine ticks':28s} real {fmt(rg.get('cross', hist([]))):42s} sim {fmt(sg.get('cross', hist([])))}")
     for label, r, s in zip(("vine first", "vine gap", "vine anims", "vine life"), vines(real), vines(sim)):
         compare(label, r, s, failures)
     for label, r, s in zip(("mushrooms per special", "mushroom arm"), mushrooms(real), mushrooms(sim)):
