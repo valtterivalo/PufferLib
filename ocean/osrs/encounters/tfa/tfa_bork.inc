@@ -156,6 +156,10 @@ static int tfa_bork_shadowed(const TfaNpc* b, const TfaNpc* m, int x, int y) {
     return enter <= exit;
 }
 
+static int tfa_bork_covers(const TfaNpc* b, int x, int y) {
+    return x >= b->x && x < b->x + b->size && y >= b->y && y < b->y + b->size;
+}
+
 static int tfa_bork_in_arena(int x, int y) {
     return x >= TFA_BORK.arena_x0 && x <= TFA_BORK.arena_x1 && y >= TFA_BORK.arena_y0 && y <= TFA_BORK.arena_y1;
 }
@@ -182,7 +186,7 @@ static void tfa_bork_gong(TfaState* s, TfaNpc* b, TfaNpc* m) {
     for (int p = 0; p < s->team_size; p++) {
         if (!tfa_alive(s, p)) continue;
         int x = s->players[p].player.x, y = s->players[p].player.y;
-        if (!tfa_bork_in_arena(x, y) || tfa_player_under_npc(&s->players[p], b) || tfa_bork_shadowed(b, m, x, y)) continue;
+        if (!tfa_bork_in_arena(x, y) || tfa_bork_covers(b, x, y) || tfa_bork_shadowed(b, m, x, y)) continue;
         int ox2 = 2 * x + 1 - (2 * b->x + 4), oy2 = 2 * y + 1 - (2 * b->y + 4);
         if (abs(ox2) > reach2 || abs(oy2) > reach2) continue;
         tfa_bork_hit_player(s, p, TFA_BORK.wide_min_damage, TFA_BORK.wide_max_damage, TFA_BORK.protected_pct);
@@ -256,10 +260,6 @@ static void tfa_bork_blast(TfaState* s, int tx, int ty) {
         if (tfa_alive(s, p) && chebyshev_distance(pl->x, pl->y, tx, ty) <= 1)
             tfa_damage_player_now(s, p, tfa_rand_range(s, TFA_BORK.blast_min_damage, TFA_BORK.blast_max_damage), ATTACK_STYLE_NONE);
     }
-}
-
-static int tfa_bork_covers(const TfaNpc* b, int x, int y) {
-    return x >= b->x && x < b->x + b->size && y >= b->y && y < b->y + b->size;
 }
 
 static void tfa_bork_landing(TfaState* s, TfaNpc* b, int tx, int ty, int bork_damage, int scorch_kind) {
