@@ -1,3 +1,5 @@
+#define TFA_PI 3.14159265358979323846
+
 static int tfa_rand(TfaState* s, int n) {
     return encounter_rand_int(&s->rng_state, n);
 }
