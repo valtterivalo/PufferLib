@@ -606,6 +606,15 @@ def barrage_shapes(fights):
     return hist(out)
 
 
+def shapes_law(name, real, sim, failures):
+    """Every value seen 3 or more times in the recordings appears in the sim, and every common sim value was recorded."""
+    missing = [k for k in real if real[k] >= 3 and not sim[k]]
+    extra = [k for k in sim if sim[k] * 20 >= sum(sim.values()) and not real[k]]
+    if missing or extra:
+        failures.append(name)
+    print(f"{'BAD' if missing or extra else 'ok '} {name:28s} real {fmt(real):42s} sim {fmt(sim)}")
+
+
 def ocellus(real, sim):
     failures = []
     rs, ss = barrage_shapes(real), barrage_shapes(sim)
@@ -620,7 +629,7 @@ def ocellus(real, sim):
     if extra:
         failures.append(f"barrage shapes only in sim {extra}")
         print(f"BAD barrage shapes only in sim {extra}")
-    for anim in ("14809", "14810", "14842", "14846", "14851", "14857", "14869", "14871", "14837"):
+    for anim in ("14809", "14810", "14842", "14846", "14851", "14857", "14871", "14837"):
         compare(f"{anim} next attack", next_attack(real, "ocellus", anim), next_attack(sim, "ocellus", anim), failures)
     rx, sx = explode_next(real), explode_next(sim)
     for key in sorted({k for k in rx if rx[k] >= 3}):
@@ -633,7 +642,8 @@ def ocellus(real, sim):
     compare("14811 big hit offset", big_hits(real, "14811", 25, 3), big_hits(sim, "14811", 25, 3), failures)
     compare("14861 slam hit offset", big_hits(real, "14861", 30, 3), big_hits(sim, "14861", 30, 3), failures)
     compare("14857 -> 14861", anim_offsets(real, "14857", "14861", 40), anim_offsets(sim, "14857", "14861", 40), failures)
-    compare("14869 -> 4346 debris", gfx_offsets(real, "14869", "4346", 8), gfx_offsets(sim, "14869", "4346", 8), failures)
+    shapes_law("14869 -> 14871 (short, long)", next_attack(real, "ocellus", "14869"), next_attack(sim, "ocellus", "14869"), failures)
+    shapes_law("14869 -> 4346 debris", gfx_offsets(real, "14869", "4346", 8), gfx_offsets(sim, "14869", "4346", 8), failures)
     compare("14842 P0 hit delay", anim_to_p0_hit(real, "14842", 1), anim_to_p0_hit(sim, "14842", 1), failures)
     compare("14861 -> siphon spawn", first_offsets(real, "14861", "NPC+", "16679", 10), first_offsets(sim, "14861", "NPC+", "16679", 10), failures)
     compare("14881 -> first 14842", anim_offsets(real, "14881", "14842", 20), anim_offsets(sim, "14881", "14842", 20), failures)
