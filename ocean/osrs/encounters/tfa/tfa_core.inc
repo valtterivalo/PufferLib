@@ -263,7 +263,11 @@ static int tfa_npc_def_roll(const TfaNpc* n, AttackStyle style, int melee_style)
 static void tfa_hazard_add(TfaState* s, TfaHazard h) {
     for (int i = 0; i < TFA_MAX_HAZARDS; i++) {
         if (s->hazards[i].kind != TFA_HAZ_NONE) continue;
-        s->hazards[i] = h;
+        TfaHazard* d = &s->hazards[i];
+        memset(d, 0, sizeof(*d));
+        d->kind = h.kind; d->style = h.style; d->w = h.w; d->h = h.h; d->owner = h.owner; d->effect = h.effect;
+        d->x = h.x; d->y = h.y; d->start_tick = h.start_tick; d->end_tick = h.end_tick; d->arm_ticks = h.arm_ticks;
+        d->min_damage = h.min_damage; d->max_damage = h.max_damage; d->protected_pct = h.protected_pct; d->gfx_id = h.gfx_id; d->loc_id = h.loc_id;
         return;
     }
     fprintf(stderr, "tfa hazard capacity %d exceeded\n", TFA_MAX_HAZARDS);

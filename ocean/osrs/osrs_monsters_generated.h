@@ -38,7 +38,8 @@ typedef enum {
     MON_TFA_XARTH_CORPSE = 31,
     MON_TFA_JELLY = 32,
     MON_TFA_EZEKIEL_SWORD = 33,
-    NUM_MONSTERS = 34
+    MON_TFA_BINDER = 34,
+    NUM_MONSTERS = 35
 } MonsterIndex;
 
 typedef struct {
@@ -383,6 +384,18 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .hp = 62, .att_level = 1, .str_level = 1, .def_level = 1,
         .magic_level = 1, .range_level = 1,
         .attack_speed = 0, .size = 1, .max_hit = 0,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
+        .range_att_bonus = 0, .ranged_str_bonus = 0,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0,
+        .magic_def = 0, .ranged_def = 0
+    },
+    /* HP 135 fitted from four health-bar drops after hits of 32, 35, 55, 57 (tfa_moia_events.tsv, 1 fight, intersection 132..137).
+       The wiki has no Undead binder page: levels 1 and bonuses 0 stand in, provisional. */
+    [MON_TFA_BINDER] = {
+        .npc_id = 16670, .name = "Undead binder",
+        .hp = 135, .att_level = 1, .str_level = 1, .def_level = 1,
+        .magic_level = 1, .range_level = 1,
+        .attack_speed = 5, .size = 1, .max_hit = 0,
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,

@@ -27,6 +27,8 @@
 #include "tfa/tfa_obs_mask.inc"
 #include "tfa/tfa_guardian.inc"
 #include "tfa/tfa_xarth.inc"
+#include "tfa/tfa_bork.inc"
+#include "tfa/tfa_moia.inc"
 #include "tfa/tfa_dreadnoth.inc"
 #include "tfa/tfa_ezekiel.inc"
 #include "tfa/tfa_bosses.inc"
