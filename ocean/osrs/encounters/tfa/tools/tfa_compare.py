@@ -221,6 +221,9 @@ def damage_laws(real, sim, ids, failures, rate, floored=True, gate=True):
     for name, mine in (("boss miss P0", True), ("boss miss others", False)):
         r = [landed for _, _, _, p0, landed in boss_hits(real, ids) if p0 == mine]
         m = [landed for _, _, _, p0, landed in boss_hits(sim, ids) if p0 == mine]
+        if not r:
+            print(f"--  {name:28s} real n=0")
+            continue
         rm, sm = 1 - sum(r) / len(r), 1 - sum(m) / max(len(m), 1)
         ok = bool(m) and abs(rm - sm) <= 0.10
         if not ok and gate:
@@ -229,11 +232,14 @@ def damage_laws(real, sim, ids, failures, rate, floored=True, gate=True):
     if not rate:
         return
     r, m = damage_rates(real, ids), damage_rates(sim, ids)
+    if not r:
+        print(f"--  {'damage per tick':28s} real: no fight spans the rate window")
+        return
     rmed, smed = r[len(r) // 2], m[len(m) // 2] if m else 0
     ok = bool(m) and abs(smed - rmed) <= 0.25 * rmed
-    if not ok:
+    if not ok and gate:
         failures.append("damage per tick")
-    print(f"{'ok ' if ok else 'BAD'} {'damage per tick':28s} real median {rmed:.1f} (n={len(r)}){'':22s} sim median {smed:.1f} (n={len(m)})")
+    print(f"{('ok ' if ok else 'BAD') if gate else '-- '} {'damage per tick':28s} real median {rmed:.1f} (n={len(r)}){'':22s} sim median {smed:.1f} (n={len(m)})")
 
 
 def guardian_ground(fights):
@@ -532,23 +538,32 @@ def drained_misses(fights, boss_ids, sim):
     return out
 
 
-def drained_miss_law(name, boss_ids, real, sim, failures, tol=0.15):
+def drained_miss_law(name, boss_ids, real, sim, failures, tol=0.15, gate=True):
     """A defence floor moves the drained misses by about 0.25 (Xarth: 0.03 with the drain to 0, 0.30 at the floor of 102), so a gap over 0.15 means
-    one side has a floor the other lacks."""
+    one side has a floor the other lacks. With gate False the lines print with '--' and fail nothing."""
     r, s = drained_misses(real, boss_ids, False), drained_misses(sim, boss_ids, True)
     for who in ("P0", "others"):
         if r[who][0] < 20:
             continue
         rv, sv = r[who][1] / r[who][0], s[who][1] / max(s[who][0], 1)
         ok = abs(rv - sv) <= tol
-        if not ok:
+        if not ok and gate:
             failures.append(f"{name} {who}")
-        print(f"{'ok ' if ok else 'BAD'} {name + ' ' + who:28s} real {rv:.2f} (n={r[who][0]}){'':22s} sim {sv:.2f} (n={s[who][0]})")
+        print(f"{('ok ' if ok else 'BAD') if gate else '-- '} {name + ' ' + who:28s} real {rv:.2f} (n={r[who][0]}){'':22s} sim {sv:.2f} (n={s[who][0]})")
+
+
+def full_drain_fights(fights):
+    """Post-hotfix fights recorded whole (no mid-fight join or end) with a Tonalztics throw (projectile 2727) to start a drain window."""
+    return [fid for fid, ev in fights.items() if FIGHT_META[fid]["drain"] == "floored" and "mid_fight" not in FIGHT_META[fid]["notes"]
+            and any(e["kind"] == "PROJ" and e["id"] == "2727" for e in ev)]
 
 
 def xarth(real, sim):
     failures = []
-    drained_miss_law("miss after the drain", {"16684"}, real, sim, failures)
+    # The misses read every raider count (the team raids with 6) and gate once a whole post-hotfix fight has a drain window.
+    every = load(FIXTURES / "tfa_xarth_events.tsv")
+    gate = bool(full_drain_fights(every))
+    drained_miss_law("miss after the drain", {"16684"}, every, sim, failures, gate=gate)
     for phase, r, s in zip(("P1", "P2"), xarth_phase_split(real), xarth_phase_split(sim)):
         compare(f"14984 next attack {phase}", next_attack(r, "xarth", "14984"), next_attack(s, "xarth", "14984"), failures)
     for anim in ("14985", "14992", "14989"):
@@ -570,7 +585,7 @@ def xarth(real, sim):
     print(f"{'ok ' if ok else 'BAD'} {'corpse hp (max damage taken)':28s} real {max(v for v, n in rk.items() if n >= 3):<42} sim {max(sk)}")
     median_law("blast damage", blast_hits(real), blast_hits(sim), 3, failures)
     xarth_ground_laws(real, sim, failures)
-    damage_laws(real, sim, {"16684"}, failures, rate=True)
+    damage_laws(every, sim, {"16684"}, failures, rate=True, gate=gate)
     return failures
 
 
