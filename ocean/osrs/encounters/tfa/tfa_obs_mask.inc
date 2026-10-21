@@ -163,7 +163,7 @@ static void tfa_write_obs_for(TfaState* s, TfaContext* ctx, int p, float* obs) {
     int next[3] = { -1, -1, -1 };
     int sum = 0;
     for (int h = 0; h < tp->incoming.count; h++) {
-        const EncounterPendingHit* hit = &tp->incoming.hits[h];
+        const TfaIncomingHit* hit = &tp->incoming.hits[h];
         int style = hit->attack_style - ATTACK_STYLE_MELEE;
         if (style >= 0 && style < 3 && (next[style] < 0 || hit->ticks_remaining < next[style]))
             next[style] = hit->ticks_remaining;

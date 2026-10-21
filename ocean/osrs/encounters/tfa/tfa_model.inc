@@ -132,6 +132,22 @@ typedef enum {
     TFA_EFFECT_BURN = 2,
 } TfaHazardEffect;
 
+/* An NPC hit on its way to a player. Throw-checked hits carry their final damage;
+   land-checked hits apply the protection prayer active on the landing tick. */
+typedef struct {
+    int8_t ticks_remaining;
+    int8_t attack_style;
+    int8_t check_at_land;
+    int8_t protected_pct;
+    int8_t source_slot;
+    int16_t damage;
+} TfaIncomingHit;
+
+typedef struct {
+    TfaIncomingHit hits[ENCOUNTER_MAX_PENDING_HITS];
+    int count;
+} TfaIncomingQueue;
+
 typedef struct {
     Player player;
     uint8_t life;
@@ -139,7 +155,7 @@ typedef struct {
     int16_t death_tick;
     int dest_x, dest_y;
     int dest_explicit;
-    EncounterPendingHitQueue incoming;
+    TfaIncomingQueue incoming;
     EncounterLoadoutStats stats;
     OsrsInventoryUseState use;
     OsrsActorRouteCache route_cache;
