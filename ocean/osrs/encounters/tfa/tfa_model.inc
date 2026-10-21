@@ -127,6 +127,7 @@ typedef struct {
     int16_t protected_pct;
     int32_t gfx_id;
     int32_t loc_id;
+    int16_t orientation;
 } TfaHazard;
 
 typedef enum {

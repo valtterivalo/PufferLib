@@ -315,12 +315,19 @@ static int tfa_hazard_spotanim_anim(int gfx) {
     abort();
 }
 
+/* Yaw of an OSRS orientation (0, 512, 1024, 1536 for locs; spotanim rotation degrees * 2048 / 360), turned the same way as the
+   renderer turns spotanim rotation. */
+static float tfa_orientation_yaw(int orientation) {
+    return (float)(orientation * 2.0 * TFA_PI / 2048.0);
+}
+
 /* One model at the centre of a hazard's rect: the live game draws a few spotanims per area (4262 ~10 per explosion, 4320 one per slam), never one per tile. */
 static void tfa_emit_hazard_model(EncounterOverlay* ov, const TfaHazard* h, uint32_t model, int anim) {
     int ax = h->x + (h->w - 1) / 2, ay = h->y + (h->h - 1) / 2;
     encounter_emit_floating_model(ov, ENCOUNTER_PROJECTILE_TARGET_FIXED, -1, ax, ay, model, anim, 0.0f,
         (float)h->x + h->w * 0.5f - (ax + 0.5f), 1.0f);
     ov->floating_models[ov->floating_model_count - 1].depth_offset = (float)h->y + h->h * 0.5f - (ay + 0.5f);
+    ov->floating_models[ov->floating_model_count - 1].yaw = tfa_orientation_yaw(h->orientation);
 }
 
 /* Hazard spotanims and locs, Ocellus's safe portals, lit lane portals and lane fire, and this tick's NPC projectiles. Tile-only hazards draw nothing: their telegraph is an NPC (Guardian vines). Durations are client cycles. */
@@ -347,7 +354,7 @@ static void tfa_render_post_tick(EncounterState* state, EncounterContext* contex
             encounter_emit_floating_model(ov, ENCOUNTER_PROJECTILE_TARGET_FIXED, -1, px, py,
                 OSRS_LOC_MODEL_BASE | OC_LOC_LANE_PORTAL, -1, 0.0f, turned ? 0.0f : 0.5f, 1.0f);
             ov->floating_models[ov->floating_model_count - 1].depth_offset = turned ? 0.5f : 0.0f;
-            ov->floating_models[ov->floating_model_count - 1].yaw = turned ? (float)(-0.5 * TFA_PI) : 0.0f;
+            ov->floating_models[ov->floating_model_count - 1].yaw = tfa_orientation_yaw(turned ? 512 : 0);
             if (h->start_tick != s->tick + 1) continue;
             OsrsProjectileEventSpec shot = { .start_h = 40, .end_h = 40, .src_size = 1, .dst_size = 1, .start_delay = 30,
                 .model_id = SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_PORTAL_PROJECTILE, .anim_id = SPOTANIM_TFA_OCELLUS_VFX_OCELLUS_PORTAL_PROJECTILE_ANIM };

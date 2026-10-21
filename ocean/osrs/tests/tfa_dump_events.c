@@ -100,7 +100,7 @@ int main(int argc, char** argv) {
                 if (d->gfx > 0 && d->gfx != loc)
                     printf("%s\t%d\tOBJ-\t-\t%d\t%d\t%d\t1x1\t0\t-\n", fid, t, d->gfx, h->x, h->y);
                 if (loc > 0 && d->gfx != loc)
-                    printf("%s\t%d\tOBJ+\t-\t%d\t%d\t%d\t1x1\t0\t-\n", fid, t, loc, h->x, h->y);
+                    printf("%s\t%d\tOBJ+\t-\t%d\t%d\t%d\t1x1\t%d\t-\n", fid, t, loc, h->x, h->y, h->orientation);
                 if (gfx > 0 && d->kind != h->kind + 1000 * gfx)
                     printf("%s\t%d\tGFX\t-\t%d\t%d\t%d\t-\t-\t-\n", fid, t, gfx, h->x, h->y);
                 d->gfx = loc;
