@@ -14,6 +14,7 @@
 #define EZEKIEL_ANIM_RECOVER 14693
 #define EZEKIEL_ANIM_FINALE 14694
 #define EZEKIEL_ANIM_DEATH 14697
+#define EZEKIEL_PROJ_MAGIC 4167
 #define EZEKIEL_GFX_STAR 4172
 #define EZEKIEL_GFX_SWORD_LINE 4181
 #define EZEKIEL_GFX_FINALE_IMPACT 4197
@@ -41,6 +42,7 @@ typedef struct {
     int magic_max_hit;           /* unprotected 0..21 (n=23) */
     int magic_protected_pct;     /* provisional: no recorded hit with Protect from Magic active */
     int magic_hit;               /* 14686 -> P0 hit at +2: 23/23 */
+    int magic_launch;            /* provisional: no magic projectile row was recorded (only 10 unrelated 2727 rows) */
     int cleave_ring;             /* dust 4394 on the 5x5 ring minus 3 tiles opposite the tank: 13 tiles in 100% of 700 casts */
     int star_land;               /* star damage lands at special +3 on the tile occupied at +2: 34/34 */
     int star_min_damage, star_max_damage; /* 20..33 typeless (n=34) */
@@ -85,6 +87,7 @@ static const TfaEzekielTuning TFA_EZEKIEL = {
     .magic_max_hit = 21,
     .magic_protected_pct = 15,
     .magic_hit = 2,
+    .magic_launch = 1,
     .cleave_ring = 16,
     .star_land = 3,
     .star_min_damage = 20,
@@ -293,6 +296,8 @@ static void tfa_ezekiel_magic(TfaState* s, TfaNpc* x, int tank) {
     tfa_npc_anim(s, x, EZEKIEL_ANIM_MAGIC);
     tfa_queue_npc_hit_land(s, tank, tfa_npc_roll(s, x, tank, ATTACK_STYLE_MAGIC, TFA_EZEKIEL.magic_max_hit),
         ATTACK_STYLE_MAGIC, TFA_EZEKIEL.magic_hit, TFA_EZEKIEL.magic_protected_pct, x);
+    tfa_fx_projectile(s, x, tank, EZEKIEL_PROJ_MAGIC, SPOTANIM_TFA_EZEKIEL_EZEKIEL_MAGIC_ATTACK_VFX01,
+        SPOTANIM_TFA_EZEKIEL_EZEKIEL_MAGIC_ATTACK_VFX01_ANIM, TFA_EZEKIEL.magic_launch, TFA_EZEKIEL.magic_hit - TFA_EZEKIEL.magic_launch);
 }
 
 static void tfa_ezekiel_strike(TfaState* s, int x, int y, int w, int h, int land, int min_damage, int max_damage, int gfx) {

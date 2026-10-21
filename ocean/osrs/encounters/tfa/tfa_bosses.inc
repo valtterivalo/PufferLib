@@ -1,5 +1,5 @@
 /* Rooms with a boss implementation; start_room = -1 samples one per episode. */
-static const int TFA_IMPLEMENTED_ROOMS[] = { TFA_ROOM_GUARDIAN, TFA_ROOM_XARTH };
+static const int TFA_IMPLEMENTED_ROOMS[] = { TFA_ROOM_GUARDIAN, TFA_ROOM_XARTH, TFA_ROOM_EZEKIEL };
 #define TFA_NUM_IMPLEMENTED_ROOMS ((int)(sizeof(TFA_IMPLEMENTED_ROOMS) / sizeof(*TFA_IMPLEMENTED_ROOMS)))
 
 static void tfa_boss_enter(TfaState* s) {
