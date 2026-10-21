@@ -78,7 +78,9 @@ static void tfa_reset_typed(TfaState* s, TfaContext* ctx, uint32_t seed) {
     s->episode_mode = ctx->config.episode_mode;
     s->path = ctx->config.path;
     for (int p = 0; p < TFA_MAX_PLAYERS; p++) tfa_player_reset(s, p);
-    int room = ctx->config.start_room;
+    int room = ctx->config.start_room >= 0
+        ? ctx->config.start_room
+        : TFA_IMPLEMENTED_ROOMS[tfa_rand(s, TFA_NUM_IMPLEMENTED_ROOMS)];
     s->raid_index = 0;
     if (s->episode_mode == TFA_EPISODE_RAID) room = tfa_raid_room(0, s->path);
     tfa_room_enter(s, room);
@@ -241,7 +243,7 @@ static void tfa_put_int(EncounterState* state, EncounterContext* context, const 
     else if (strcmp(key, "episode_mode") == 0)
         ctx->config.episode_mode = encounter_require_binary_config("tfa", key, value);
     else if (strcmp(key, "start_room") == 0)
-        ctx->config.start_room = encounter_require_int_range_config("tfa", key, value, 0, TFA_ROOM_COUNT - 1);
+        ctx->config.start_room = encounter_require_int_range_config("tfa", key, value, -1, TFA_ROOM_COUNT - 1);
     else if (strcmp(key, "path") == 0)
         ctx->config.path = encounter_require_int_range_config("tfa", key, value, 0, 7);
     else if (strcmp(key, "room_max_ticks") == 0)
