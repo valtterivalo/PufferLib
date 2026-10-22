@@ -41,7 +41,7 @@ typedef struct {
     int ring_delay;              /* ring dust at gong +2 around the footprint, 49/52 (the others cancelled) */
     int ring_min_damage, ring_max_damage; /* unprayed at gong +2: 30, 30, 35 */
     int protected_pct;           /* Protect from Melee: 4-7 at the gong (n=30), 5-8 at +2 (n=30) */
-    int flat_armour;             /* [wiki edit 15:46] 12, 0 while stunned */
+    int flat_armour;             /* wiki rev 15379087: 8 (12 before), 0 while stunned */
     int arena_x0, arena_y0, arena_x1, arena_y1; /* union of the stomp dust over 8 pulses */
     int smork_first;             /* first Smorks attack 5 after the first gong, 2/2 */
     int smork_napalm_recover[2]; /* napalm -> next attack 13 (4/4), 11 fast (2/2); auto -> napalm 1 more than auto -> auto, auto -> bomb 2 more */
@@ -100,7 +100,7 @@ static const TfaBorkTuning TFA_BORK = {
     .ring_min_damage = 25,
     .ring_max_damage = 35,
     .protected_pct = 25,
-    .flat_armour = 12,
+    .flat_armour = 8,
     .arena_x0 = 24, .arena_y0 = 23, .arena_x1 = 38, .arena_y1 = 39,
     .smork_first = 5,
     .smork_napalm_recover = { 13, 11 },

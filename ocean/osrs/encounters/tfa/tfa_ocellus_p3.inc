@@ -53,6 +53,7 @@ typedef struct {
     int siphon_heal_min, siphon_heal_max, siphon_death_heal; /* heals Ocellus 12..14, the target 22 when it dies */
     int augmenter_blow;          /* detonates 30 after spawn: 37..39 on everyone */
     int augmenter_min, augmenter_max;
+    int augmenter_melee_boost, augmenter_ranged_boost;
     int tile_lo, tile_hi;        /* add tiles 4..10 from the cross */
 } TfaOcellusP3Tuning;
 
@@ -90,7 +91,7 @@ static const TfaOcellusP3Tuning TFA_OC3 = {
     .vine_every = 3, .vine_spawn = 3, .vine_root = 32, .vine_min = 34, .vine_max = 44,
     .add_first = 91, .add_gaps = { 48, 55, 57 },
     .siphon_pulse = 4, .siphon_heal_min = 12, .siphon_heal_max = 14, .siphon_death_heal = 22,
-    .augmenter_blow = 30, .augmenter_min = 37, .augmenter_max = 39,
+    .augmenter_blow = 30, .augmenter_min = 37, .augmenter_max = 39, .augmenter_melee_boost = 116, .augmenter_ranged_boost = 112,
     .tile_lo = 4, .tile_hi = 10,
 };
 
@@ -643,6 +644,8 @@ static void oc_p4_wind(TfaState* s, TfaNpc* n, int second) {
         tfa_fx_ground(s, x, y, second ? OC_GFX_ORB_SHORT : OC_GFX_ORB, 0);
     }
     for (int k = 0; k < TFA_OC4.drops; k++) oc_at(s, TFA_OC4.drop_first + TFA_OC4.drop_gap * k, OCE_P4_EXPLOSION, 0, 0);
+    os->drops_from = s->tick + TFA_OC4.drop_first;
+    os->drops_until = s->tick + TFA_OC4.drop_first + TFA_OC4.drop_gap * (TFA_OC4.drops - 1) + 1;
 }
 
 static void oc_p4_orbs(TfaState* s) {
@@ -835,6 +838,9 @@ static int tfa_ocellus_npc_damage(TfaState* s, TfaNpc* n, int damage, int attack
             return 0;
         }
         if (n->overhead != PRAYER_NONE && encounter_prayer_correct_for_style(n->overhead, style)) return 0;
+        /* He takes half damage while the void drops fall (wiki; landed hits on him average 8.3 inside the drop windows against 18.0 outside,
+           n 46 and 53, runs 6 and 11-13). */
+        if (os->phase == TFA_OCELLUS_P4 && s->tick >= os->drops_from && s->tick <= os->drops_until) damage /= 2;
         int floor_hp = os->phase == TFA_OCELLUS_P3 ? 1 : 0;
         int applied = damage < n->hp - floor_hp ? damage : n->hp - floor_hp;
         n->hp -= applied;
@@ -852,7 +858,6 @@ static void tfa_ocellus_npc_hit_player(TfaState* s, TfaNpc* src, int raw, int de
 }
 
 static void tfa_ocellus_npc_died(TfaState* s, TfaNpc* n, int attacker) {
-    (void)attacker;
     TfaOcellusState* os = oc_state(s);
     switch ((TfaNpcKind)n->kind) {
         case TFA_NPC_OCELLUS:
@@ -868,6 +873,16 @@ static void tfa_ocellus_npc_died(TfaState* s, TfaNpc* n, int attacker) {
         case TFA_NPC_VOID_AUGMENTER:
             tfa_npc_anim(s, n, OC_ANIM_AUGMENTER_DEATH);
             n->active = 0;
+            /* The killer is boosted to at least 116 Attack and Strength, 112 Ranged and Magic (wiki 05:57 UTC; run 11: P0's Ranged and Magic
+               99 -> 112 the tick after its kill). */
+            if (tfa_alive(s, attacker)) {
+                Player* pl = &s->players[attacker].player;
+                if (pl->current_attack < TFA_OC3.augmenter_melee_boost) pl->current_attack = TFA_OC3.augmenter_melee_boost;
+                if (pl->current_strength < TFA_OC3.augmenter_melee_boost) pl->current_strength = TFA_OC3.augmenter_melee_boost;
+                if (pl->current_ranged < TFA_OC3.augmenter_ranged_boost) pl->current_ranged = TFA_OC3.augmenter_ranged_boost;
+                if (pl->current_magic < TFA_OC3.augmenter_ranged_boost) pl->current_magic = TFA_OC3.augmenter_ranged_boost;
+                tfa_mark_stats_dirty(&s->players[attacker]);
+            }
             break;
         case TFA_NPC_VOID_VINE:
             if (tfa_alive(s, n->target)) s->players[n->target].rooted_ticks = 0;

@@ -1765,6 +1765,19 @@ def ocellus_split_heals(fights):
     return out
 
 
+def ocellus_drop_damage(fights):
+    """Mean landed raider hit on Ocellus inside the void drop windows (wind +5..+16, winds at rise +4 and +35) over the mean outside them, in P4."""
+    inside, outside = [], []
+    for ev in fights.values():
+        rises = sorted(e["t"] for e in ev if e["kind"] == "ANIM" and e["id"] == "14863")
+        winds = [c + 4 for c in rises] + [c + 35 for c in rises]
+        for e in ev:
+            if e["kind"] != "HIT" or base(e["actor"]) != "16677" or e["a"] not in ("16", "17", "18", "19") or not rises or e["t"] < rises[0]:
+                continue
+            (inside if any(5 <= e["t"] - w <= 16 for w in winds) else outside).append(int(e["id"]))
+    return (sum(inside) / len(inside)) / (sum(outside) / len(outside)) if inside and outside else None, len(inside), len(outside)
+
+
 def ocellus_void_drops(fights, horizon=40):
     """Void drop gfx 4339 as ticks since the latest rise; ocellus_11's P0 died 40 into the cycle."""
     out = collections.Counter()
@@ -1789,6 +1802,11 @@ def ocellus_p4_laws(real, sim):
     support("P4 overheads", ocellus_p4_overheads(real), ocellus_p4_overheads(sim), failures)
     support("P4 void drops", ocellus_void_drops(real), ocellus_void_drops(sim), failures)
     support("P4 soul split heals", ocellus_split_heals(real), ocellus_split_heals(sim), failures)
+    (rr, ri, ro), (sr, si, so) = ocellus_drop_damage(real), ocellus_drop_damage(sim)
+    ok = sr is not None and abs(rr - sr) <= 0.15
+    if not ok:
+        failures.append("P4 damage during void drops")
+    print(f"{'ok ' if ok else 'BAD'} {'P4 hit in drops / outside':28s} real {rr:.2f} (n={ri}+{ro}){'':24s} sim {sr if sr is None else round(sr, 2)} (n={si}+{so})")
     quads = max(len([e for e in ev if e["kind"] == "ANIM" and e["id"] == "14844"]) for ev in real.values())
     support("P4 quadrant tells", ocellus_quad_tells(real), ocellus_quad_tells(sim, quads), failures)
     return failures

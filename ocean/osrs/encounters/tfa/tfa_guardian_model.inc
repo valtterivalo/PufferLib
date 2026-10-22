@@ -186,6 +186,7 @@ typedef struct {
     int dead;
     int barrage;
     int guard, guard_from;
+    int drops_from, drops_until;
     int busy_until;
     int free_roam_until;
     int quad_first;
